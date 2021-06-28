@@ -1,6 +1,7 @@
 //! Definitions of secret integers
 
-pub mod opcodes;
+pub mod opcode;
+pub mod error;
 
 use std::str::FromStr;
 use std::str::ParseBoolError;
