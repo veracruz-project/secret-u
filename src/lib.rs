@@ -15,6 +15,30 @@ use std::ops::BitXor;
 use std::ops::BitXorAssign;
 
 
+/// A general secret wrapper for types who's value can
+/// not be accessed without an explicit, unsafe declassify
+/// call. Note by itself this is fairly useless except for
+/// marking data that should be limited to this crate's
+/// internals
+pub struct Secret<T>(T);
+
+impl<T> Secret<T> {
+    pub const fn new(t: T) -> Self {
+        Self(t)
+    }
+
+    pub unsafe fn declassify(self) -> T {
+        self.0
+    }
+}
+
+impl<T: Clone> Clone for Secret<T> {
+    fn clone(&self) -> Secret<T> {
+        Secret::new(self.0.clone())
+    }
+}
+
+
 // TODO move these? the are copied from Rust's stdlib
 
 // implements the unary operator "op &T"
@@ -272,7 +296,7 @@ macro_rules! secret_integers {
                 ///
                 /// Note this effectively "leaks" the secret value, so
                 /// is only allowed in unsafe code
-                pub const unsafe fn declassify(self) -> $u {
+                pub unsafe fn declassify(self) -> $u {
                     self.0
                 }
             }

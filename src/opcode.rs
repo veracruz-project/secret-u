@@ -6,6 +6,8 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::mem;
 use crate::error::Error;
+use std::cell::Cell;
+use crate::Secret;
 
 
 /// OpCodes emitted as a part of bytecode
@@ -19,12 +21,12 @@ pub enum OpCode {
     Unreachable = 0x0000,
     Nop         = 0x1000,
 
-    Dup         = 0x2000,
-    Truncate    = 0x3000,
-    Extends     = 0x4000,
-    Extendu     = 0x5000,
-    Align       = 0x6000,
-    Unalign     = 0x7000,
+    Get         = 0x2000,
+    Set         = 0x3000,
+    Truncate    = 0x4000,
+    Extends     = 0x5000,
+    Extendu     = 0x6000,
+    Align       = 0x7000,
 
     Select      = 0xf000,
 
@@ -71,12 +73,12 @@ impl fmt::Display for OpCode {
         let name = match self {
             OpCode::Unreachable => "unreachable",
             OpCode::Nop         => "nop",
-            OpCode::Dup         => "dup",
+            OpCode::Get         => "get",
+            OpCode::Set         => "set",
             OpCode::Truncate    => "truncate",
             OpCode::Extends     => "extends",
             OpCode::Extendu     => "extendu",
             OpCode::Align       => "align",
-            OpCode::Unalign     => "unalign",
             OpCode::Select      => "select",
             OpCode::Eqz         => "eqz",
             OpCode::Eq          => "eq",
@@ -180,12 +182,12 @@ impl TryFrom<u16> for Op {
         let opcode = match op & 0xf000 {
             0x0000 => OpCode::Unreachable,
             0x1000 => OpCode::Nop,
-            0x2000 => OpCode::Dup,
-            0x3000 => OpCode::Truncate,
-            0x4000 => OpCode::Extends,
-            0x5000 => OpCode::Extendu,
-            0x6000 => OpCode::Align,
-            0x7000 => OpCode::Unalign,
+            0x2000 => OpCode::Get,
+            0x3000 => OpCode::Set,
+            0x4000 => OpCode::Truncate,
+            0x5000 => OpCode::Extends,
+            0x6000 => OpCode::Extendu,
+            0x7000 => OpCode::Align,
             0xf000 => match op & 0x00ff {
                 0x00 => OpCode::Select,
                 0x01 => OpCode::Eqz,
@@ -259,7 +261,7 @@ pub fn disas(
 /// Trait for types that can be compiled
 pub trait OpType: Debug + Copy + Clone + From<bool> {
     /// width in bytes, emitted as part of bytecode
-    const WIDTH: u8;
+    const WIDTH: usize;
 
     /// npw2(width), used in instruction encoding
     const NPW2: u8;
@@ -271,7 +273,7 @@ pub trait OpType: Debug + Copy + Clone + From<bool> {
 macro_rules! optype_impl {
     ($t:ty, $s:ty, $w:expr, $p:expr) => {
         impl OpType for $t {
-            const WIDTH: u8 = $w;
+            const WIDTH: usize = $w;
             const NPW2: u8 = $p;
 
             fn encode(
@@ -290,30 +292,9 @@ optype_impl! { u32,  i32,   4,  2 }
 optype_impl! { u64,  i64,   8,  3 }
 optype_impl! { u128, i128,  16, 4 }
 
-/// Any OpTree, captures ops where type does not matter
-pub trait AnyOpTree: Debug {
-    /// width in bytes, needed for determining cast sizes
-    fn width(&self) -> u8;
-
-    /// primitive type, npw2(width)
-    fn npw2(&self) -> u8;
-
-    /// low-level compile, note this has multiple outputs, all
-    /// outputs can be computed in one pass, or a NullWrite can be
-    /// use to ignore unneeded output
-    fn encode(
-        &self,
-        bytecode: &mut dyn io::Write,
-        stack: &mut dyn io::Write,
-        imms: &mut usize,
-        sp: &mut usize,
-        max_sp: &mut usize,
-    ) -> Result<(), io::Error>;
-}
-
-/// Tree of operations
+/// Kinds of operations in tree
 #[derive(Debug, Clone)]
-pub enum OpTree<T: OpType> {
+pub enum OpKind<T: OpType> {
     Imm(T),
     Truncate(Rc<dyn AnyOpTree>),
     Extends(Rc<dyn AnyOpTree>),
@@ -352,57 +333,315 @@ pub enum OpTree<T: OpType> {
     Rotr(Rc<OpTree<T>>, Rc<OpTree<T>>),
 }
 
+/// Tree of operations, including metadata to deduplicate
+/// common branches
+#[derive(Debug, Clone)]
+pub struct OpTree<T: OpType> {
+    kind: OpKind<T>,
+    refs: Cell<u32>,
+    slot: Cell<Option<u8>>,
+}
+
 impl<T: OpType> OpTree<T> {
-    /// high-level compile
-    pub fn compile(&self) -> (Vec<u8>, Vec<u8>, usize) {
-        let mut bytecode = vec![];
-        let mut stack = vec![];
+    pub fn new(kind: OpKind<T>) -> OpTree<T> {
+        OpTree {
+            kind: kind,
+            refs: Cell::new(0),
+            slot: Cell::new(None),
+        }
+    }
+
+    /// high-level compile into bytecode, stack, and initial stack pointer
+    pub fn compile(&self) -> (Vec<u8>, Secret<Vec<u8>>) {
+        // NOTE! We make sure to zero all refs from pass1 to pass2, this is
+        // rather fragile and requires all passes to always be run as a pair,
+        // we can't interrupt between passes without needing to reset all
+        // internal reference counts
+
+        // first pass to find number of immediates and deduplicate branches
+        let mut stack = Vec::new();
         let mut imms = 0usize;
+        self.compile_pass1(
+            &mut stack,
+            &mut imms
+        ).expect("vector write resulted in io::error?");
+
+        // second pass now to compile the bytecode and stack, note sp now points
+        // to end of immediates
+        let mut bytecode = Vec::new();
         let mut sp = 0usize;
         let mut max_sp = 0usize;
-
-        self.encode(&mut bytecode, &mut stack, &mut imms, &mut sp, &mut max_sp)
-            .expect("vector write resulted in io::error?");
+        self.compile_pass2(
+            &mut bytecode,
+            &mut imms,
+            &mut sp,
+            &mut max_sp
+        ).expect("vector write resulted in io::error?");
 
         // at this point stack contains imms, but we also need space for
         // the working stack
         stack.resize(imms + max_sp, 0);
 
-        // emit bytecode to cleanup immediates at the end
-        // TODO what if immediates are unaligned?
-        assert!(imms % (T::WIDTH as usize) == 0, "unaligned imms?");
-        let cleanup = u8::try_from(imms / (T::WIDTH as usize)).expect("overflow in cleanup");
-        Op::new(OpCode::Unalign, T::NPW2, cleanup).encode(&mut bytecode)
-            .expect("vector write resulted in io::error?");
-
         // imms is now the initial stack pointer
-        (bytecode, stack, imms)
+        (bytecode, Secret::new(stack))
     }
 }
 
+// TODO what the heck should this visibility be? we don't want compile
+// passes exposed, but rustc sure does like to complain otherwise
+pub trait AnyOpTree: Debug + fmt::Display {
+    /// type's width in bytes, needed for determining cast sizes
+    fn width(&self) -> usize;
+
+    /// npw2(width), used as a part of instruction encoding
+    fn npw2(&self) -> u8;
+
+    /// First compile pass, used to find the number of immediates
+    /// for offset calculation, and local reference counting to
+    /// deduplicate branches.
+    fn compile_pass1(
+        &self,
+        stack: &mut dyn io::Write,
+        imms: &mut usize,
+    ) -> Result<(), io::Error>;
+
+    /// Second compile pass, used to actually compile both the
+    /// immediates and bytecode. Since both bytecode and stack are
+    /// generic writers, a null writer could be used if either are
+    /// not needed.
+    fn compile_pass2(
+        &self,
+        bytecode: &mut dyn io::Write,
+        imms: &mut usize,
+        sp: &mut usize,
+        max_sp: &mut usize,
+    ) -> Result<(), io::Error>;
+}
+
 impl<T: OpType> AnyOpTree for OpTree<T> {
-    /// width in bytes, emitted as part of bytecode
-    fn width(&self) -> u8 {
+    fn width(&self) -> usize {
         T::WIDTH
     }
 
-    /// primitive type, npw2(width)
     fn npw2(&self) -> u8 {
         T::NPW2
     }
 
-    /// compile down to bytecode
-    fn encode(
+    fn compile_pass1(
+        &self,
+        stack: &mut dyn io::Write,
+        imms: &mut usize,
+    ) -> Result<(), io::Error> {
+        // mark node as seen
+        let prefs = self.refs.get();
+        self.refs.set(prefs + 1);
+        if prefs > 0 {
+            // already visited?
+            return Ok(());
+        }
+
+        // make sure slots left over from previous calculation are reset
+        self.slot.set(None);
+
+        match &self.kind {
+            OpKind::Imm(v) => {
+                // align imms?
+                while *imms % T::WIDTH != 0 {
+                    stack.write_all(&[0])?;
+                    *imms += 1;
+                }
+
+                // save slot
+                assert!(*imms % T::WIDTH == 0, "unaligned slot");
+                let slot = *imms / T::WIDTH;
+                let slot = u8::try_from(slot).expect("slot overflow");
+                self.slot.set(Some(slot));
+
+                // write imm to stack
+                v.encode(stack)?;
+
+                // update imms
+                *imms += T::WIDTH;
+            }
+
+            OpKind::Truncate(a) => {
+                a.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Extends(a) => {
+                a.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Extendu(a) => {
+                a.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Select(p, a, b) => {
+                p.compile_pass1(stack, imms)?;
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Eqz(a) => {
+                a.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Eq(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Ne(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Lts(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Ltu(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Gts(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Gtu(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Les(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Leu(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Ges(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Geu(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Clz(a) => {
+                a.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Ctz(a) => {
+                a.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Popcnt(a) => {
+                a.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Add(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Sub(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Mul(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Divs(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Divu(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Rems(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Remu(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::And(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Or(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Xor(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Shl(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Shrs(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Shru(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Rotl(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+
+            OpKind::Rotr(a, b) => {
+                a.compile_pass1(stack, imms)?;
+                b.compile_pass1(stack, imms)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn compile_pass2(
         &self,
         bytecode: &mut dyn io::Write,
-        stack: &mut dyn io::Write,
         imms: &mut usize,
         sp: &mut usize,
         max_sp: &mut usize,
     ) -> Result<(), io::Error> {
-        // helper functions for compile
-        fn adjust_sp<T: OpType>(sp: &mut usize, max_sp: &mut usize, delta: isize) {
-            let delta = delta * (T::WIDTH as isize);
+        // helper functions
+        fn adjust_sp(
+            sp: &mut usize,
+            max_sp: &mut usize,
+            delta: isize,
+            width: usize,
+        ) {
+            let delta = delta * width as isize;
 
             *sp = (*sp as isize + delta) as usize;
             if *sp > *max_sp {
@@ -410,302 +649,350 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
             }
         }
 
-        match self {
-            OpTree::Imm(v) => {
-                // align imms as necessary
-                while *imms % (T::WIDTH as usize) != 0 {
-                    stack.write_all(&[0])?;
-                    *imms += 1;
-                }
+        // is node shared?
+        let prefs = self.refs.get();
+        self.refs.set(prefs - 1);
 
-                // write imms to the bottom of the stack
-                v.encode(stack)?;
-                *imms += T::WIDTH as usize;
-
-                // align top of stack as necessary
-                if *sp % (T::WIDTH as usize) != 0 {
-                    let align = T::WIDTH as usize - (*sp % (T::WIDTH as usize));
-                    let align = u8::try_from(align).expect("immediate overflow in unalign");
-                    Op::new(OpCode::Extendu, 0, align).encode(bytecode)?;
-                    adjust_sp::<u8>(sp, max_sp, align as isize);
-                }
-
-                // dup imm to top of stack
-                assert!(*imms % (T::WIDTH as usize) == 0, "imms not aligned?");
-                let imm = *imms/(T::WIDTH as usize) - 1;
-                let imm = u8::try_from(imm).expect("immedate overflow in dup");
-                Op::new(OpCode::Dup, T::NPW2, imm).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, 1);
+        // already computed?
+        let slot = self.slot.get();
+        if let Some(slot) = slot {
+            // align stack?
+            if *sp % T::WIDTH != 0 {
+                let align = T::WIDTH - (*sp % T::WIDTH);
+                let align = u8::try_from(align).expect("align overflow");
+                Op::new(OpCode::Align, 0, align).encode(bytecode)?;
+                adjust_sp(sp, max_sp, align as isize, 1);
             }
 
-            OpTree::Truncate(a) => {
+            // get slot
+            Op::new(OpCode::Get, T::NPW2, slot).encode(bytecode)?;
+            adjust_sp(sp, max_sp, 1, T::WIDTH);
+            return Ok(());
+        }
+
+        match &self.kind {
+            OpKind::Imm(_) => {
+                // should be entirely handled in first pass
+                unreachable!()
+            }
+
+            OpKind::Truncate(a) => {
                 // keep track of original sp to unalign if needed
-                let expected_sp = *sp + T::WIDTH as usize;
+                let expected_sp = *sp + T::WIDTH;
 
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                let delta = a.width() - T::WIDTH;
-                assert!(delta % T::WIDTH == 0, "unaligned truncate?");
-                let delta = delta / T::WIDTH;
-                Op::new(OpCode::Truncate, T::NPW2, delta).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -(delta as isize));
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
 
-                // unalign?
-                if *sp > expected_sp {
-                    let align = *sp - expected_sp;
-                    assert!(align % (T::WIDTH as usize) == 0, "unaligned unalign?");
-                    let align = align / (T::WIDTH as usize);
-                    let align = u8::try_from(align).expect("immediate overflow in unalign");
-                    Op::new(OpCode::Unalign, T::NPW2, align).encode(bytecode)?;
-                    adjust_sp::<T>(sp, max_sp, -(align as isize));
-                }
+                // truncate, including unalignment
+                let truncate = (a.width() - T::WIDTH) + (*sp - expected_sp);
+                assert!(truncate % T::WIDTH == 0, "unaligned truncate");
+                let truncate = truncate / T::WIDTH;
+                let truncate = u8::try_from(truncate).expect("truncate overflow");
+                Op::new(OpCode::Truncate, T::NPW2, truncate).encode(bytecode)?;
+                adjust_sp(sp, max_sp, -(truncate as isize), T::WIDTH);
             }
 
-            OpTree::Extends(a) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Extends(a) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
 
                 // align as necessary
-                if (*sp - a.width() as usize) % (T::WIDTH as usize) != 0 {
-                    let align = T::WIDTH as usize - ((*sp - a.width() as usize) % (T::WIDTH as usize));
-                    assert!(align % (a.width() as usize) == 0, "unaligned align?");
-                    let align = align / a.width() as usize;
-                    let align = u8::try_from(align).expect("immediate overflow in align");
-                    Op::new(OpCode::Align, a.npw2(), align).encode(bytecode)?;
-                    adjust_sp::<u8>(sp, max_sp, align as isize * a.width() as isize);
-                }
+                let align = if (*sp - a.width()) % T::WIDTH != 0 {
+                    T::WIDTH - ((*sp - a.width()) % T::WIDTH)
+                } else {
+                    0
+                };
 
-                let delta = T::WIDTH - a.width();
-                assert!(delta % a.width() == 0, "unaligned extends?");
-                Op::new(OpCode::Extends, a.npw2(), delta / a.width()).encode(bytecode)?;
-                adjust_sp::<u8>(sp, max_sp, delta as isize * a.width() as isize);
+                let extends = (T::WIDTH - a.width()) + align;
+                assert!(extends % a.width() == 0, "unaligned extends");
+                let extends = extends / a.width();
+                let extends = u8::try_from(extends).expect("extends overflow");
+                Op::new(OpCode::Extends, a.npw2(), extends).encode(bytecode)?;
+                adjust_sp(sp, max_sp, extends as isize, a.width());
             }
 
-            OpTree::Extendu(a) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Extendu(a) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
 
                 // align as necessary
-                if (*sp - a.width() as usize) % (T::WIDTH as usize) != 0 {
-                    let align = T::WIDTH as usize - ((*sp - a.width() as usize) % (T::WIDTH as usize));
-                    assert!(align % (a.width() as usize) == 0, "unaligned align?");
-                    let align = align / a.width() as usize;
-                    let align = u8::try_from(align).expect("immediate overflow in align");
-                    Op::new(OpCode::Align, a.npw2(), align).encode(bytecode)?;
-                    adjust_sp::<u8>(sp, max_sp, align as isize * a.width() as isize);
-                }
+                let align = if (*sp - a.width()) % T::WIDTH != 0 {
+                    T::WIDTH - ((*sp - a.width()) % T::WIDTH)
+                } else {
+                    0
+                };
 
-                let delta = T::WIDTH - a.width();
-                assert!(delta % a.width() == 0, "unaligned extendu?");
-                Op::new(OpCode::Extendu, a.npw2(), delta / a.width()).encode(bytecode)?;
-                adjust_sp::<u8>(sp, max_sp, delta as isize * a.width() as isize);
+                let extendu = (T::WIDTH - a.width()) + align;
+                assert!(extendu % a.width() == 0, "unaligned extendu");
+                let extendu = extendu / a.width();
+                let extendu = u8::try_from(extendu).expect("extendu overflow");
+                Op::new(OpCode::Extendu, a.npw2(), extendu).encode(bytecode)?;
+                adjust_sp(sp, max_sp, extendu as isize, a.width());
             }
 
-            OpTree::Select(p, a, b) => {
-                p.encode(bytecode, stack, imms, sp, max_sp)?;
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Select(p, a, b) => {
+                p.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Select, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -2);
+                adjust_sp(sp, max_sp, -2, T::WIDTH);
             }
 
-            OpTree::Eqz(a) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Eqz(a) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Eqz, T::NPW2, 0).encode(bytecode)?;
             }
 
-            OpTree::Eq(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Eq(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Eq, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Ne(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Ne(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Ne, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Lts(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Lts(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Lts, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Ltu(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Ltu(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Ltu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Gts(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Gts(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Gts, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Gtu(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Gtu(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Gtu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Les(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Les(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Les, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Leu(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Leu(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Leu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Ges(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Ges(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Ges, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Geu(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Geu(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Geu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Clz(a) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Clz(a) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Clz, T::NPW2, 0).encode(bytecode)?;
             }
 
-            OpTree::Ctz(a) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Ctz(a) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Clz, T::NPW2, 0).encode(bytecode)?;
             }
 
-            OpTree::Popcnt(a) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Popcnt(a) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Clz, T::NPW2, 0).encode(bytecode)?;
             }
 
-            OpTree::Add(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Add(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Add, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Sub(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Sub(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Sub, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Mul(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Mul(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Mul, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Divs(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Divs(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Divs, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Divu(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Divu(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Divu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Rems(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Rems(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Rems, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Remu(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Remu(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Remu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::And(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::And(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::And, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Or(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Or(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Or, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Xor(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Xor(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Xor, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Shl(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Shl(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Shl, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Shrs(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Shrs(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Shrs, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Shru(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Shru(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Shru, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Rotl(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Rotl(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Rotl, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
 
-            OpTree::Rotr(a, b) => {
-                a.encode(bytecode, stack, imms, sp, max_sp)?;
-                b.encode(bytecode, stack, imms, sp, max_sp)?;
+            OpKind::Rotr(a, b) => {
+                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp)?;
                 Op::new(OpCode::Rotr, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp::<T>(sp, max_sp, -1);
+                adjust_sp(sp, max_sp, -1, T::WIDTH);
             }
+        }
+
+        // save for later computations?
+        if prefs > 1 {
+            // align imms?
+            if *imms % T::WIDTH != 0 {
+                *imms += T::WIDTH - (*imms % T::WIDTH);
+            }
+
+            // set slot and save for later
+            assert!(*imms % T::WIDTH == 0, "unaligned slot");
+            let slot = *imms / T::WIDTH;
+            let slot = u8::try_from(slot).expect("slot overflow");
+            Op::new(OpCode::Set, T::NPW2, slot).encode(bytecode)?;
+            self.slot.set(Some(slot));
+
+            // update imms
+            *imms += T::WIDTH;
         }
 
         Ok(())
     }
 }
 
+impl<T: OpType> fmt::Display for OpTree<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match &self.kind {
+            OpKind::Imm(v)          => write!(fmt, "(imm {:?})", v),
+            OpKind::Truncate(a)     => write!(fmt, "(truncate {})", a),
+            OpKind::Extends(a)      => write!(fmt, "(extends {})", a),
+            OpKind::Extendu(a)      => write!(fmt, "(extendu {})", a),
+            OpKind::Select(p, a, b) => write!(fmt, "(select {} {} {})", p, a, b),
+            OpKind::Eqz(a)          => write!(fmt, "(eqz {})", a),
+            OpKind::Eq(a, b)        => write!(fmt, "(eq {} {})", a, b),
+            OpKind::Ne(a, b)        => write!(fmt, "(ne {} {})", a, b),
+            OpKind::Lts(a, b)       => write!(fmt, "(lts {} {})", a, b),
+            OpKind::Ltu(a, b)       => write!(fmt, "(ltu {} {})", a, b),
+            OpKind::Gts(a, b)       => write!(fmt, "(gts {} {})", a, b),
+            OpKind::Gtu(a, b)       => write!(fmt, "(gtu {} {})", a, b),
+            OpKind::Les(a, b)       => write!(fmt, "(les {} {})", a, b),
+            OpKind::Leu(a, b)       => write!(fmt, "(leu {} {})", a, b),
+            OpKind::Ges(a, b)       => write!(fmt, "(ges {} {})", a, b),
+            OpKind::Geu(a, b)       => write!(fmt, "(geu {} {})", a, b),
+            OpKind::Clz(a)          => write!(fmt, "(clz {})", a),
+            OpKind::Ctz(a)          => write!(fmt, "(ctz {})", a),
+            OpKind::Popcnt(a)       => write!(fmt, "(popcnt {})", a),
+            OpKind::Add(a, b)       => write!(fmt, "(add {} {})", a, b),
+            OpKind::Sub(a, b)       => write!(fmt, "(sub {} {})", a, b),
+            OpKind::Mul(a, b)       => write!(fmt, "(mul {} {})", a, b),
+            OpKind::Divs(a, b)      => write!(fmt, "(divs {} {})", a, b),
+            OpKind::Divu(a, b)      => write!(fmt, "(divu {} {})", a, b),
+            OpKind::Rems(a, b)      => write!(fmt, "(rems {} {})", a, b),
+            OpKind::Remu(a, b)      => write!(fmt, "(remu {} {})", a, b),
+            OpKind::And(a, b)       => write!(fmt, "(and {} {})", a, b),
+            OpKind::Or(a, b)        => write!(fmt, "(or {} {})", a, b),
+            OpKind::Xor(a, b)       => write!(fmt, "(xor {} {})", a, b),
+            OpKind::Shl(a, b)       => write!(fmt, "(shl {} {})", a, b),
+            OpKind::Shrs(a, b)      => write!(fmt, "(shrs {} {})", a, b),
+            OpKind::Shru(a, b)      => write!(fmt, "(shru {} {})", a, b),
+            OpKind::Rotl(a, b)      => write!(fmt, "(rotl {} {})", a, b),
+            OpKind::Rotr(a, b)      => write!(fmt, "(rotr {} {})", a, b),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -713,14 +1000,15 @@ mod tests {
 
     #[test]
     fn compile_add() {
-        let example = OpTree::<u32>::Add(
-            Rc::new(OpTree::<u32>::Imm(1)),
-            Rc::new(OpTree::<u32>::Imm(2))
-        );
+        let example = OpTree::new(OpKind::<u32>::Add(
+            Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
+            Rc::new(OpTree::new(OpKind::<u32>::Imm(2)))
+        ));
 
         println!();
-        println!("input: {:?}", example);
-        let (bytecode, stack, sp) = example.compile();
+        println!("input: {}", example);
+        let (bytecode, stack) = example.compile();
+        let stack = unsafe { stack.declassify() };
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -734,27 +1022,26 @@ mod tests {
             print!(" {:02x}", stack[i]);
         }
         println!();
-        println!("  sp: {}", sp);
 
-        assert_eq!(bytecode.len(), 4*2);
+        assert_eq!(bytecode.len(), 3*2);
         assert_eq!(stack.len(), 4*4);
-        assert_eq!(sp, 2*4);
     }
 
     #[test]
     fn compile_alignment() {
-        let example = OpTree::<u16>::Add(
-            Rc::new(OpTree::<u16>::Extends(
-                Rc::new(OpTree::<u8>::Imm(2))
-            )),
-            Rc::new(OpTree::<u16>::Truncate(
-                Rc::new(OpTree::<u32>::Imm(1)),
-            )),
-        );
+        let example = OpTree::new(OpKind::<u16>::Add(
+            Rc::new(OpTree::new(OpKind::<u16>::Extends(
+                Rc::new(OpTree::new(OpKind::<u8>::Imm(2)))
+            ))),
+            Rc::new(OpTree::new(OpKind::<u16>::Truncate(
+                Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
+            ))),
+        ));
 
         println!();
-        println!("input: {:?}", example);
-        let (bytecode, stack, sp) = example.compile();
+        println!("input: {}", example);
+        let (bytecode, stack) = example.compile();
+        let stack = unsafe { stack.declassify() };
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -768,29 +1055,71 @@ mod tests {
             print!(" {:02x}", stack[i]);
         }
         println!();
-        println!("  sp: {}", sp);
 
-        assert_eq!(bytecode.len(), 8*2);
+        assert_eq!(bytecode.len(), 6*2);
         assert_eq!(stack.len(), 4*4);
-        assert_eq!(sp, 2*4);
+    }
+
+    #[test]
+    fn compile_dag() {
+        let two = Rc::new(OpTree::new(OpKind::<u32>::Imm(2)));
+        let a = Rc::new(OpTree::new(OpKind::<u32>::Add(
+            Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
+            Rc::new(OpTree::new(OpKind::<u32>::Imm(2)))
+        )));
+        let b = Rc::new(OpTree::new(OpKind::<u32>::Divu(
+            a.clone(), two.clone()
+        )));
+        let c = Rc::new(OpTree::new(OpKind::<u32>::Remu(
+            a.clone(), two.clone()
+        )));
+        let example = OpTree::new(OpKind::<u32>::Eq(
+            Rc::new(OpTree::new(OpKind::<u32>::Add(
+                Rc::new(OpTree::new(OpKind::<u32>::Mul(b, two))),
+                c,
+            ))),
+            a,
+        ));
+
+        println!();
+        println!("input: {}", example);
+        let (bytecode, stack) = example.compile();
+        let stack = unsafe { stack.declassify() };
+        print!("  bytecode:");
+        for i in (0..bytecode.len()).step_by(2) {
+            print!(" {:04x}", u16::from_le_bytes(
+                <[u8; 2]>::try_from(&bytecode[i..i+2]).unwrap()
+            ));
+        }
+        println!();
+        disas(&bytecode, &mut io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..stack.len() {
+            print!(" {:02x}", stack[i]);
+        }
+        println!();
+
+        assert_eq!(bytecode.len(), 14*2);
+        assert_eq!(stack.len(), 7*4);
     }
 
     #[test]
     fn compile_pythag() {
-        let a = Rc::new(OpTree::<u32>::Imm(3));
-        let b = Rc::new(OpTree::<u32>::Imm(4));
-        let c = Rc::new(OpTree::<u32>::Imm(5));
-        let example = OpTree::<u32>::Eq(
-            Rc::new(OpTree::<u32>::Add(
-                Rc::new(OpTree::<u32>::Mul(a.clone(), a)),
-                Rc::new(OpTree::<u32>::Mul(b.clone(), b))
-            )),
-            Rc::new(OpTree::<u32>::Mul(c.clone(), c))
-        );
+        let a = Rc::new(OpTree::new(OpKind::<u32>::Imm(3)));
+        let b = Rc::new(OpTree::new(OpKind::<u32>::Imm(4)));
+        let c = Rc::new(OpTree::new(OpKind::<u32>::Imm(5)));
+        let example = OpTree::new(OpKind::<u32>::Eq(
+            Rc::new(OpTree::new(OpKind::<u32>::Add(
+                Rc::new(OpTree::new(OpKind::<u32>::Mul(a.clone(), a))),
+                Rc::new(OpTree::new(OpKind::<u32>::Mul(b.clone(), b)))
+            ))),
+            Rc::new(OpTree::new(OpKind::<u32>::Mul(c.clone(), c)))
+        ));
 
         println!();
-        println!("input: {:?}", example);
-        let (bytecode, stack, sp) = example.compile();
+        println!("input: {}", example);
+        let (bytecode, stack) = example.compile();
+        let stack = unsafe { stack.declassify() };
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -804,10 +1133,8 @@ mod tests {
             print!(" {:02x}", stack[i]);
         }
         println!();
-        println!("  sp: {}", sp);
 
-        assert_eq!(bytecode.len(), 12*2);
-        assert_eq!(stack.len(), 9*4);
-        assert_eq!(sp, 6*4);
+        assert_eq!(bytecode.len(), 11*2);
+        assert_eq!(stack.len(), 6*4);
     }
 }
