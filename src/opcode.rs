@@ -252,6 +252,9 @@ pub fn disas(
             Err(Error::InvalidOpcode(op)) => {
                 writeln!(stdout, "    unknown {:#04x}", op)?;
             }
+            Err(_) => {
+                panic!("unexpected error in disas?");
+            }
         }
     }
 

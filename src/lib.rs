@@ -2,6 +2,7 @@
 
 pub mod opcode;
 pub mod error;
+pub mod vm;
 
 use std::str::FromStr;
 use std::str::ParseBoolError;
@@ -29,6 +30,14 @@ impl<T> Secret<T> {
 
     pub unsafe fn declassify(self) -> T {
         self.0
+    }
+
+    pub fn as_ref(&self) -> Secret<&T> {
+        Secret(&self.0)
+    }
+
+    pub fn as_mut(&mut self) -> Secret<&mut T> {
+        Secret(&mut self.0)
     }
 }
 
