@@ -686,7 +686,7 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
                 a.compile_pass2(bytecode, imms, sp, max_sp)?;
 
                 // truncate, including unalignment
-                let truncate = (a.width() - T::WIDTH) + (*sp - expected_sp);
+                let truncate = *sp - expected_sp;
                 assert!(truncate % T::WIDTH == 0, "unaligned truncate");
                 let truncate = truncate / T::WIDTH;
                 let truncate = u8::try_from(truncate).expect("truncate overflow");
@@ -820,12 +820,12 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
 
             OpKind::Ctz(a) => {
                 a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                Op::new(OpCode::Clz, T::NPW2, 0).encode(bytecode)?;
+                Op::new(OpCode::Ctz, T::NPW2, 0).encode(bytecode)?;
             }
 
             OpKind::Popcnt(a) => {
                 a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                Op::new(OpCode::Clz, T::NPW2, 0).encode(bytecode)?;
+                Op::new(OpCode::Popcnt, T::NPW2, 0).encode(bytecode)?;
             }
 
             OpKind::Add(a, b) => {

@@ -4,12 +4,16 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Invalid opcode {0}")]
+    #[error("Invalid opcode {0:#04x}")]
     InvalidOpcode(u16),
+    #[error("Result is invalid size")]
+    InvalidResult,
     #[error("Unreachable")]
     Unreachable,
     #[error("Unaligned access")]
     Unaligned,
     #[error("Out of bounds access")]
     OutOfBounds,
+    #[error("Divide by zero")]
+    DivideByZero,
 }

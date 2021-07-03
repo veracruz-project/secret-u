@@ -4,5 +4,9 @@ version = "0.1.0"
 authors = ["Christopher Haster <christopher.haster@arm.com>"]
 edition = "2018"
 
+[features]
+# show VM execution
+trace = []
+
 [dependencies]
 thiserror = "1.0.25"
