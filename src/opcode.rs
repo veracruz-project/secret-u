@@ -15,51 +15,49 @@ use crate::Secret;
 /// Based on opcodes defined for Wasm, limited to numeric operations
 /// with a few extra stack manipulated opcodes since we don't have a
 /// system of locals.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u16)]
 pub enum OpCode {
-    Unreachable = 0x0000,
-    Nop         = 0x1000,
+    Get         = 0x1000,
+    Set         = 0x2000,
+    Truncate    = 0x3000,
+    Extends     = 0x4000,
+    Extendu     = 0x5000,
+    Unalign     = 0x6000,
 
-    Get         = 0x2000,
-    Set         = 0x3000,
-    Truncate    = 0x4000,
-    Extends     = 0x5000,
-    Extendu     = 0x6000,
-    Align       = 0x7000,
+    Return      = 0xf000,
+    Select      = 0xf001,
 
-    Select      = 0xf000,
+    Eqz         = 0xf002,
+    Eq          = 0xf003,
+    Ne          = 0xf004,
+    Lts         = 0xf005,
+    Ltu         = 0xf006,
+    Gts         = 0xf007,
+    Gtu         = 0xf008,
+    Les         = 0xf009,
+    Leu         = 0xf00a,
+    Ges         = 0xf00b,
+    Geu         = 0xf00c,
 
-    Eqz         = 0xf001,
-    Eq          = 0xf002,
-    Ne          = 0xf003,
-    Lts         = 0xf004,
-    Ltu         = 0xf005,
-    Gts         = 0xf006,
-    Gtu         = 0xf007,
-    Les         = 0xf008,
-    Leu         = 0xf009,
-    Ges         = 0xf00a,
-    Geu         = 0xf00b,
-
-    Clz         = 0xf00c,
-    Ctz         = 0xf00d,
-    Popcnt      = 0xf00e,
-    Add         = 0xf00f,
-    Sub         = 0xf010,
-    Mul         = 0xf011,
-    Divs        = 0xf012,
-    Divu        = 0xf013,
-    Rems        = 0xf014,
-    Remu        = 0xf015,
-    And         = 0xf016,
-    Or          = 0xf017,
-    Xor         = 0xf018,
-    Shl         = 0xf019,
-    Shrs        = 0xf01a,
-    Shru        = 0xf01b,
-    Rotl        = 0xf01c,
-    Rotr        = 0xf01d,
+    Clz         = 0xf00d,
+    Ctz         = 0xf00e,
+    Popcnt      = 0xf00f,
+    Add         = 0xf010,
+    Sub         = 0xf011,
+    Mul         = 0xf012,
+    Divs        = 0xf013,
+    Divu        = 0xf014,
+    Rems        = 0xf015,
+    Remu        = 0xf016,
+    And         = 0xf017,
+    Or          = 0xf018,
+    Xor         = 0xf019,
+    Shl         = 0xf01a,
+    Shrs        = 0xf01b,
+    Shru        = 0xf01c,
+    Rotl        = 0xf01d,
+    Rotr        = 0xf01e,
 }
 
 impl OpCode {
@@ -71,14 +69,13 @@ impl OpCode {
 impl fmt::Display for OpCode {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let name = match self {
-            OpCode::Unreachable => "unreachable",
-            OpCode::Nop         => "nop",
             OpCode::Get         => "get",
             OpCode::Set         => "set",
             OpCode::Truncate    => "truncate",
             OpCode::Extends     => "extends",
             OpCode::Extendu     => "extendu",
-            OpCode::Align       => "align",
+            OpCode::Unalign     => "unalign",
+            OpCode::Return      => "return",
             OpCode::Select      => "select",
             OpCode::Eqz         => "eqz",
             OpCode::Eq          => "eq",
@@ -113,6 +110,7 @@ impl fmt::Display for OpCode {
         write!(fmt, "{}", name)
     }
 }
+
 
 /// An encoded instruction
 #[derive(Debug, Copy, Clone)]
@@ -180,45 +178,44 @@ impl TryFrom<u16> for Op {
         let imm = (op & 0x00ff) as u8;
 
         let opcode = match op & 0xf000 {
-            0x0000 => OpCode::Unreachable,
-            0x1000 => OpCode::Nop,
-            0x2000 => OpCode::Get,
-            0x3000 => OpCode::Set,
-            0x4000 => OpCode::Truncate,
-            0x5000 => OpCode::Extends,
-            0x6000 => OpCode::Extendu,
-            0x7000 => OpCode::Align,
+            0x1000 => OpCode::Get,
+            0x2000 => OpCode::Set,
+            0x3000 => OpCode::Truncate,
+            0x4000 => OpCode::Extends,
+            0x5000 => OpCode::Extendu,
+            0x6000 => OpCode::Unalign,
             0xf000 => match op & 0x00ff {
-                0x00 => OpCode::Select,
-                0x01 => OpCode::Eqz,
-                0x02 => OpCode::Eq,
-                0x03 => OpCode::Ne,
-                0x04 => OpCode::Lts,
-                0x05 => OpCode::Ltu,
-                0x06 => OpCode::Gts,
-                0x07 => OpCode::Gtu,
-                0x08 => OpCode::Les,
-                0x09 => OpCode::Leu,
-                0x0a => OpCode::Ges,
-                0x0b => OpCode::Geu,
-                0x0c => OpCode::Clz,
-                0x0d => OpCode::Ctz,
-                0x0e => OpCode::Popcnt,
-                0x0f => OpCode::Add,
-                0x10 => OpCode::Sub,
-                0x11 => OpCode::Mul,
-                0x12 => OpCode::Divs,
-                0x13 => OpCode::Divu,
-                0x14 => OpCode::Rems,
-                0x15 => OpCode::Remu,
-                0x16 => OpCode::And,
-                0x17 => OpCode::Or,
-                0x18 => OpCode::Xor,
-                0x19 => OpCode::Shl,
-                0x1a => OpCode::Shrs,
-                0x1b => OpCode::Shru,
-                0x1c => OpCode::Rotl,
-                0x1d => OpCode::Rotr,
+                0x00 => OpCode::Return,
+                0x01 => OpCode::Select,
+                0x02 => OpCode::Eqz,
+                0x03 => OpCode::Eq,
+                0x04 => OpCode::Ne,
+                0x05 => OpCode::Lts,
+                0x06 => OpCode::Ltu,
+                0x07 => OpCode::Gts,
+                0x08 => OpCode::Gtu,
+                0x09 => OpCode::Les,
+                0x0a => OpCode::Leu,
+                0x0b => OpCode::Ges,
+                0x0c => OpCode::Geu,
+                0x0d => OpCode::Clz,
+                0x0e => OpCode::Ctz,
+                0x0f => OpCode::Popcnt,
+                0x10 => OpCode::Add,
+                0x11 => OpCode::Sub,
+                0x12 => OpCode::Mul,
+                0x13 => OpCode::Divs,
+                0x14 => OpCode::Divu,
+                0x15 => OpCode::Rems,
+                0x16 => OpCode::Remu,
+                0x17 => OpCode::And,
+                0x18 => OpCode::Or,
+                0x19 => OpCode::Xor,
+                0x1a => OpCode::Shl,
+                0x1b => OpCode::Shrs,
+                0x1c => OpCode::Shru,
+                0x1d => OpCode::Rotl,
+                0x1e => OpCode::Rotr,
                 _ => Err(Error::InvalidOpcode(op))?,
             },
             _ => Err(Error::InvalidOpcode(op))?,
@@ -230,10 +227,27 @@ impl TryFrom<u16> for Op {
 
 impl fmt::Display for Op {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        if self.has_imm() {
-            write!(fmt, "{} u{} {}", self.opcode(), 8*self.width(), self.imm())
-        } else {
-            write!(fmt, "{} u{}", self.opcode(), 8*self.width())
+        match self.opcode() {
+            OpCode::Truncate | OpCode::Extends | OpCode::Extendu => {
+                write!(fmt, "{} u{} u{}",
+                    self.opcode(),
+                    8*self.width(),
+                    8*(1 << self.imm())
+                )
+            }
+            _ if self.has_imm() => {
+                write!(fmt, "{} u{} {}",
+                    self.opcode(),
+                    8*self.width(),
+                    self.imm()
+                )
+            }
+            _ => {
+                write!(fmt, "{} u{}",
+                    self.opcode(),
+                    8*self.width()
+                )
+            }
         }
     }
 }
@@ -260,6 +274,7 @@ pub fn disas(
 
     Ok(())
 }
+
 
 /// Trait for types that can be compiled
 pub trait OpType: Debug + Copy + Clone + From<bool> {
@@ -374,15 +389,23 @@ impl<T: OpType> OpTree<T> {
         let mut bytecode = Vec::new();
         let mut sp = 0usize;
         let mut max_sp = 0usize;
+        let mut max_align = 0usize;
         self.compile_pass2(
             &mut bytecode,
             &mut imms,
             &mut sp,
-            &mut max_sp
+            &mut max_sp,
+            &mut max_align
         ).expect("vector write resulted in io::error?");
+
+        // add return instruction to type-check the result
+        Op::new(OpCode::Return, T::NPW2, 0).encode(&mut bytecode)
+            .expect("vector write resulted in io::error?");
 
         // at this point stack contains imms, but we also need space for
         // the working stack
+        let imms = imms + max_align-1;
+        let imms = imms - (imms % max_align);
         stack.resize(imms + max_sp, 0);
 
         // imms is now the initial stack pointer
@@ -418,6 +441,7 @@ pub trait AnyOpTree: Debug + fmt::Display {
         imms: &mut usize,
         sp: &mut usize,
         max_sp: &mut usize,
+        max_align: &mut usize,
     ) -> Result<(), io::Error>;
 }
 
@@ -636,19 +660,48 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
         imms: &mut usize,
         sp: &mut usize,
         max_sp: &mut usize,
+        max_align: &mut usize,
     ) -> Result<(), io::Error> {
         // helper functions
-        fn adjust_sp(
+        fn sp_push(
             sp: &mut usize,
             max_sp: &mut usize,
-            delta: isize,
+            delta: usize,
             width: usize,
         ) {
-            let delta = delta * width as isize;
+            let x = *sp + (delta * width);
+            *sp = x;
+            if x > *max_sp {
+                *max_sp = x;
+            }
+        }
 
-            *sp = (*sp as isize + delta) as usize;
-            if *sp > *max_sp {
-                *max_sp = *sp;
+        fn sp_pop(
+            sp: &mut usize,
+            _max_sp: &mut usize,
+            delta: usize,
+            width: usize,
+        ) {
+            let x = *sp - (delta * width);
+            *sp = x;
+        }
+
+        fn sp_align(
+            sp: &mut usize,
+            max_align: &mut usize,
+            width: usize,
+        ) {
+            // align up, we assume sp_align is followed by sp_push,
+            // so we leave it to sp_push to check max_sp
+            let x = *sp;
+            let x = x + width-1;
+            let x = x - (x % width);
+            *sp = x;
+
+            // all pushes onto the stack go through a sp_align, so
+            // this is where we can also find the max_align
+            if width > *max_align {
+                *max_align = width;
             }
         }
 
@@ -659,17 +712,10 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
         // already computed?
         let slot = self.slot.get();
         if let Some(slot) = slot {
-            // align stack?
-            if *sp % T::WIDTH != 0 {
-                let align = T::WIDTH - (*sp % T::WIDTH);
-                let align = u8::try_from(align).expect("align overflow");
-                Op::new(OpCode::Align, 0, align).encode(bytecode)?;
-                adjust_sp(sp, max_sp, align as isize, 1);
-            }
-
-            // get slot
+            // get slot and align
             Op::new(OpCode::Get, T::NPW2, slot).encode(bytecode)?;
-            adjust_sp(sp, max_sp, 1, T::WIDTH);
+            sp_align(sp, max_align, T::WIDTH);
+            sp_push(sp, max_sp, 1, T::WIDTH);
             return Ok(());
         }
 
@@ -683,254 +729,245 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
                 // keep track of original sp to unalign if needed
                 let expected_sp = *sp + T::WIDTH;
 
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
 
-                // truncate, including unalignment
-                let truncate = *sp - expected_sp;
-                assert!(truncate % T::WIDTH == 0, "unaligned truncate");
-                let truncate = truncate / T::WIDTH;
-                let truncate = u8::try_from(truncate).expect("truncate overflow");
-                Op::new(OpCode::Truncate, T::NPW2, truncate).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -(truncate as isize), T::WIDTH);
+                // truncate
+                Op::new(OpCode::Truncate, T::NPW2, a.npw2()).encode(bytecode)?;
+                sp_pop(sp, max_sp, 1, a.width());
+                sp_push(sp, max_sp, 1, T::WIDTH);
+
+                // manually unalign?
+                if *sp > expected_sp {
+                    let diff = *sp - expected_sp;
+                    assert!(diff % T::WIDTH == 0, "unaligned truncate");
+                    let diff = diff / T::WIDTH;
+                    let diff = u8::try_from(diff).expect("unalign overflow");
+                    Op::new(OpCode::Unalign, T::NPW2, diff).encode(bytecode)?;
+                    sp_pop(sp, max_sp, diff as usize, T::WIDTH);
+                }
             }
 
             OpKind::Extends(a) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
 
-                // align as necessary
-                let align = if (*sp - a.width()) % T::WIDTH != 0 {
-                    T::WIDTH - ((*sp - a.width()) % T::WIDTH)
-                } else {
-                    0
-                };
-
-                let extends = (T::WIDTH - a.width()) + align;
-                assert!(extends % a.width() == 0, "unaligned extends");
-                let extends = extends / a.width();
-                let extends = u8::try_from(extends).expect("extends overflow");
-                Op::new(OpCode::Extends, a.npw2(), extends).encode(bytecode)?;
-                adjust_sp(sp, max_sp, extends as isize, a.width());
+                // extends and align
+                Op::new(OpCode::Extends, a.npw2(), T::NPW2).encode(bytecode)?;
+                sp_pop(sp, max_sp, 1, a.width());
+                sp_align(sp, max_align, T::WIDTH);
+                sp_push(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Extendu(a) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
 
-                // align as necessary
-                let align = if (*sp - a.width()) % T::WIDTH != 0 {
-                    T::WIDTH - ((*sp - a.width()) % T::WIDTH)
-                } else {
-                    0
-                };
-
-                let extendu = (T::WIDTH - a.width()) + align;
-                assert!(extendu % a.width() == 0, "unaligned extendu");
-                let extendu = extendu / a.width();
-                let extendu = u8::try_from(extendu).expect("extendu overflow");
-                Op::new(OpCode::Extendu, a.npw2(), extendu).encode(bytecode)?;
-                adjust_sp(sp, max_sp, extendu as isize, a.width());
+                // extendu and align
+                Op::new(OpCode::Extendu, a.npw2(), T::NPW2).encode(bytecode)?;
+                sp_pop(sp, max_sp, 1, a.width());
+                sp_align(sp, max_align, T::WIDTH);
+                sp_push(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Select(p, a, b) => {
-                p.compile_pass2(bytecode, imms, sp, max_sp)?;
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                p.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Select, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -2, T::WIDTH);
+                sp_pop(sp, max_sp, 2, T::WIDTH);
             }
 
             OpKind::Eqz(a) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Eqz, T::NPW2, 0).encode(bytecode)?;
             }
 
             OpKind::Eq(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Eq, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Ne(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Ne, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Lts(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Lts, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Ltu(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Ltu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Gts(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Gts, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Gtu(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Gtu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Les(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Les, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Leu(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Leu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Ges(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Ges, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Geu(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Geu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Clz(a) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Clz, T::NPW2, 0).encode(bytecode)?;
             }
 
             OpKind::Ctz(a) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Ctz, T::NPW2, 0).encode(bytecode)?;
             }
 
             OpKind::Popcnt(a) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Popcnt, T::NPW2, 0).encode(bytecode)?;
             }
 
             OpKind::Add(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Add, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Sub(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Sub, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Mul(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Mul, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Divs(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Divs, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Divu(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Divu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Rems(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Rems, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Remu(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Remu, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::And(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::And, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Or(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Or, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Xor(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Xor, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Shl(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Shl, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Shrs(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Shrs, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Shru(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Shru, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Rotl(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Rotl, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
 
             OpKind::Rotr(a, b) => {
-                a.compile_pass2(bytecode, imms, sp, max_sp)?;
-                b.compile_pass2(bytecode, imms, sp, max_sp)?;
+                a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
+                b.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
                 Op::new(OpCode::Rotr, T::NPW2, 0).encode(bytecode)?;
-                adjust_sp(sp, max_sp, -1, T::WIDTH);
+                sp_pop(sp, max_sp, 1, T::WIDTH);
             }
         }
 
@@ -1026,7 +1063,7 @@ mod tests {
         }
         println!();
 
-        assert_eq!(bytecode.len(), 3*2);
+        assert_eq!(bytecode.len(), 4*2);
         assert_eq!(stack.len(), 4*4);
     }
 
@@ -1059,7 +1096,7 @@ mod tests {
         }
         println!();
 
-        assert_eq!(bytecode.len(), 6*2);
+        assert_eq!(bytecode.len(), 7*2);
         assert_eq!(stack.len(), 4*4);
     }
 
@@ -1102,7 +1139,7 @@ mod tests {
         }
         println!();
 
-        assert_eq!(bytecode.len(), 14*2);
+        assert_eq!(bytecode.len(), 15*2);
         assert_eq!(stack.len(), 7*4);
     }
 
@@ -1137,7 +1174,7 @@ mod tests {
         }
         println!();
 
-        assert_eq!(bytecode.len(), 11*2);
+        assert_eq!(bytecode.len(), 12*2);
         assert_eq!(stack.len(), 6*4);
     }
 }

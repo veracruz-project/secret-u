@@ -6,10 +6,8 @@ use thiserror::Error;
 pub enum Error {
     #[error("Invalid opcode {0:#04x}")]
     InvalidOpcode(u16),
-    #[error("Result is invalid size")]
-    InvalidResult,
-    #[error("Unreachable")]
-    Unreachable,
+    #[error("Invalid return")]
+    InvalidReturn,
     #[error("Unaligned access")]
     Unaligned,
     #[error("Out of bounds access")]
