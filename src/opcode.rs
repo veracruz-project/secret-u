@@ -1,13 +1,14 @@
+//! opcode/bytecode definitions
 
 use std::rc::Rc;
 use std::fmt::Debug;
 use std::io;
 use std::convert::TryFrom;
 use std::fmt;
-use std::mem;
+use std::mem::transmute;
 use crate::error::Error;
 use std::cell::Cell;
-use crate::Secret;
+use crate::vm::exec;
 
 
 /// OpCodes emitted as a part of bytecode
@@ -135,7 +136,7 @@ impl Op {
 
         // we check for OpCode validity on every function that can build
         // an Op, so this should only result in valid OpCodes
-        unsafe { mem::transmute(opcode) }
+        unsafe { transmute(opcode) }
     }
 
     pub fn npw2(&self) -> u8 {
@@ -277,7 +278,7 @@ pub fn disas(
 
 
 /// Trait for types that can be compiled
-pub trait OpType: Debug + Copy + Clone + From<bool> {
+pub trait OpType: Copy + Clone + Default + Debug {
     /// width in bytes, emitted as part of bytecode
     const WIDTH: usize;
 
@@ -286,6 +287,9 @@ pub trait OpType: Debug + Copy + Clone + From<bool> {
 
     /// write into stack as bytes
     fn encode(&self, stack: &mut dyn io::Write) -> Result<(), io::Error>;
+
+    /// read from stack
+    fn decode(stack: &mut dyn io::Read) -> Result<Self, io::Error>;
 }
 
 macro_rules! optype_impl {
@@ -299,6 +303,14 @@ macro_rules! optype_impl {
                 stack: &mut dyn io::Write
             ) -> Result<(), io::Error> {
                 stack.write_all(&self.to_le_bytes())
+            }
+
+            fn decode(
+                stack: &mut dyn io::Read
+            ) -> Result<Self, io::Error> {
+                let mut buf = [0; $w];
+                stack.read_exact(&mut buf)?;
+                Ok(<$t>::from_le_bytes(buf))
             }
         }
     }
@@ -370,7 +382,7 @@ impl<T: OpType> OpTree<T> {
     }
 
     /// high-level compile into bytecode, stack, and initial stack pointer
-    pub fn compile(&self) -> (Vec<u8>, Secret<Vec<u8>>) {
+    pub fn compile(&self) -> (Vec<u8>, Vec<u8>) {
         // NOTE! We make sure to zero all refs from pass1 to pass2, this is
         // rather fragile and requires all passes to always be run as a pair,
         // we can't interrupt between passes without needing to reset all
@@ -409,9 +421,84 @@ impl<T: OpType> OpTree<T> {
         stack.resize(imms + max_sp, 0);
 
         // imms is now the initial stack pointer
-        (bytecode, Secret::new(stack))
+        (bytecode, stack)
+    }
+
+    /// try to get immediate value if we are a flat value
+    pub fn imm(&self) -> Option<T> {
+        match self.kind {
+            OpKind::Imm(v) => Some(v),
+            _              => None,
+        }
+    }
+
+    /// compile and execute if value is not an immediate already
+    pub fn eval(&self) -> Result<T, Error> {
+        match self.imm() {
+            Some(v) => Ok(v),
+            None => {
+                let (bytecode, mut stack) = self.compile();
+                let mut res = exec(&bytecode, &mut stack)?;
+                let v = T::decode(&mut res).map_err(|_| Error::InvalidReturn)?;
+                Ok(v)
+            }
+        }
     }
 }
+
+impl<T: OpType> From<T> for OpTree<T> {
+    fn from(t: T) -> OpTree<T> {
+        OpTree::new(OpKind::Imm(t))
+    }
+}
+
+impl<T: OpType> Default for OpTree<T> {
+    fn default() -> OpTree<T> {
+        OpTree::new(OpKind::Imm(T::default()))
+    }
+}
+
+impl<T: OpType> fmt::Display for OpTree<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match &self.kind {
+            OpKind::Imm(v)          => write!(fmt, "(imm {:?})", v),
+            OpKind::Truncate(a)     => write!(fmt, "(truncate {})", a),
+            OpKind::Extends(a)      => write!(fmt, "(extends {})", a),
+            OpKind::Extendu(a)      => write!(fmt, "(extendu {})", a),
+            OpKind::Select(p, a, b) => write!(fmt, "(select {} {} {})", p, a, b),
+            OpKind::Eqz(a)          => write!(fmt, "(eqz {})", a),
+            OpKind::Eq(a, b)        => write!(fmt, "(eq {} {})", a, b),
+            OpKind::Ne(a, b)        => write!(fmt, "(ne {} {})", a, b),
+            OpKind::Lts(a, b)       => write!(fmt, "(lts {} {})", a, b),
+            OpKind::Ltu(a, b)       => write!(fmt, "(ltu {} {})", a, b),
+            OpKind::Gts(a, b)       => write!(fmt, "(gts {} {})", a, b),
+            OpKind::Gtu(a, b)       => write!(fmt, "(gtu {} {})", a, b),
+            OpKind::Les(a, b)       => write!(fmt, "(les {} {})", a, b),
+            OpKind::Leu(a, b)       => write!(fmt, "(leu {} {})", a, b),
+            OpKind::Ges(a, b)       => write!(fmt, "(ges {} {})", a, b),
+            OpKind::Geu(a, b)       => write!(fmt, "(geu {} {})", a, b),
+            OpKind::Clz(a)          => write!(fmt, "(clz {})", a),
+            OpKind::Ctz(a)          => write!(fmt, "(ctz {})", a),
+            OpKind::Popcnt(a)       => write!(fmt, "(popcnt {})", a),
+            OpKind::Add(a, b)       => write!(fmt, "(add {} {})", a, b),
+            OpKind::Sub(a, b)       => write!(fmt, "(sub {} {})", a, b),
+            OpKind::Mul(a, b)       => write!(fmt, "(mul {} {})", a, b),
+            OpKind::Divs(a, b)      => write!(fmt, "(divs {} {})", a, b),
+            OpKind::Divu(a, b)      => write!(fmt, "(divu {} {})", a, b),
+            OpKind::Rems(a, b)      => write!(fmt, "(rems {} {})", a, b),
+            OpKind::Remu(a, b)      => write!(fmt, "(remu {} {})", a, b),
+            OpKind::And(a, b)       => write!(fmt, "(and {} {})", a, b),
+            OpKind::Or(a, b)        => write!(fmt, "(or {} {})", a, b),
+            OpKind::Xor(a, b)       => write!(fmt, "(xor {} {})", a, b),
+            OpKind::Shl(a, b)       => write!(fmt, "(shl {} {})", a, b),
+            OpKind::Shrs(a, b)      => write!(fmt, "(shrs {} {})", a, b),
+            OpKind::Shru(a, b)      => write!(fmt, "(shru {} {})", a, b),
+            OpKind::Rotl(a, b)      => write!(fmt, "(rotl {} {})", a, b),
+            OpKind::Rotr(a, b)      => write!(fmt, "(rotr {} {})", a, b),
+        }
+    }
+}
+
 
 // TODO what the heck should this visibility be? we don't want compile
 // passes exposed, but rustc sure does like to complain otherwise
@@ -993,46 +1080,6 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
     }
 }
 
-impl<T: OpType> fmt::Display for OpTree<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        match &self.kind {
-            OpKind::Imm(v)          => write!(fmt, "(imm {:?})", v),
-            OpKind::Truncate(a)     => write!(fmt, "(truncate {})", a),
-            OpKind::Extends(a)      => write!(fmt, "(extends {})", a),
-            OpKind::Extendu(a)      => write!(fmt, "(extendu {})", a),
-            OpKind::Select(p, a, b) => write!(fmt, "(select {} {} {})", p, a, b),
-            OpKind::Eqz(a)          => write!(fmt, "(eqz {})", a),
-            OpKind::Eq(a, b)        => write!(fmt, "(eq {} {})", a, b),
-            OpKind::Ne(a, b)        => write!(fmt, "(ne {} {})", a, b),
-            OpKind::Lts(a, b)       => write!(fmt, "(lts {} {})", a, b),
-            OpKind::Ltu(a, b)       => write!(fmt, "(ltu {} {})", a, b),
-            OpKind::Gts(a, b)       => write!(fmt, "(gts {} {})", a, b),
-            OpKind::Gtu(a, b)       => write!(fmt, "(gtu {} {})", a, b),
-            OpKind::Les(a, b)       => write!(fmt, "(les {} {})", a, b),
-            OpKind::Leu(a, b)       => write!(fmt, "(leu {} {})", a, b),
-            OpKind::Ges(a, b)       => write!(fmt, "(ges {} {})", a, b),
-            OpKind::Geu(a, b)       => write!(fmt, "(geu {} {})", a, b),
-            OpKind::Clz(a)          => write!(fmt, "(clz {})", a),
-            OpKind::Ctz(a)          => write!(fmt, "(ctz {})", a),
-            OpKind::Popcnt(a)       => write!(fmt, "(popcnt {})", a),
-            OpKind::Add(a, b)       => write!(fmt, "(add {} {})", a, b),
-            OpKind::Sub(a, b)       => write!(fmt, "(sub {} {})", a, b),
-            OpKind::Mul(a, b)       => write!(fmt, "(mul {} {})", a, b),
-            OpKind::Divs(a, b)      => write!(fmt, "(divs {} {})", a, b),
-            OpKind::Divu(a, b)      => write!(fmt, "(divu {} {})", a, b),
-            OpKind::Rems(a, b)      => write!(fmt, "(rems {} {})", a, b),
-            OpKind::Remu(a, b)      => write!(fmt, "(remu {} {})", a, b),
-            OpKind::And(a, b)       => write!(fmt, "(and {} {})", a, b),
-            OpKind::Or(a, b)        => write!(fmt, "(or {} {})", a, b),
-            OpKind::Xor(a, b)       => write!(fmt, "(xor {} {})", a, b),
-            OpKind::Shl(a, b)       => write!(fmt, "(shl {} {})", a, b),
-            OpKind::Shrs(a, b)      => write!(fmt, "(shrs {} {})", a, b),
-            OpKind::Shru(a, b)      => write!(fmt, "(shru {} {})", a, b),
-            OpKind::Rotl(a, b)      => write!(fmt, "(rotl {} {})", a, b),
-            OpKind::Rotr(a, b)      => write!(fmt, "(rotr {} {})", a, b),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -1048,7 +1095,6 @@ mod tests {
         println!();
         println!("input: {}", example);
         let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1081,7 +1127,6 @@ mod tests {
         println!();
         println!("input: {}", example);
         let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1124,7 +1169,6 @@ mod tests {
         println!();
         println!("input: {}", example);
         let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1159,7 +1203,6 @@ mod tests {
         println!();
         println!("input: {}", example);
         let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(

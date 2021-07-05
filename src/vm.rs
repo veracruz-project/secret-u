@@ -1,5 +1,5 @@
+//! local vm for executing bytecode
 
-use crate::Secret;
 use crate::error::Error;
 use std::mem::size_of;
 
@@ -690,10 +690,10 @@ macro_rules! ins_rotr {
 ///
 /// NOTE! This is a quick simulated VM for testing and proof-of-concept!
 /// Not constant time!
-pub unsafe fn exec<'a>(
+pub fn exec<'a>(
     bytecode: &[u8],
-    stack: &'a mut Secret<Vec<u8>>
-) -> Result<Secret<&'a [u8]>, Error> {
+    stack: &'a mut [u8]
+) -> Result<&'a [u8], Error> {
     // Setup VM
     if bytecode.as_ptr() as usize % 2 != 0 || bytecode.len() % 2 != 0{
         // bytecode alignment
@@ -706,13 +706,12 @@ pub unsafe fn exec<'a>(
         Err(Error::InvalidReturn)?;
     }
 
-    let stack = stack.as_mut().declassify();
     let mut sp = stack.len();
 
     // exec loop
     let mut pc = 0;
     loop {
-        let op = u16::load_unchecked(bytecode, pc);
+        let op = unsafe { u16::load_unchecked(bytecode, pc) };
         pc += 2;
     
         let opcode = ((op & 0xf000) >> 8) as u8;
@@ -964,26 +963,7 @@ pub unsafe fn exec<'a>(
         .fill(0x00);
 
     // return the rest as our result
-    Ok(Secret::new(&stack[sp..]))
-}
-
-/// Execute the simple crypto-VM, expecting the resulting type
-///
-/// NOTE! This is a quick simulated VM for testing and proof-of-concept!
-/// Not constant time!
-// TODO can we avoid exposing LoadStore publically?
-pub unsafe fn eval<T: LoadStore>(
-    bytecode: &[u8],
-    stack: &mut Secret<Vec<u8>>
-) -> Result<T, Error> {
-    let result = exec(bytecode, stack)?;
-    let result = result.declassify();
-
-    if result.len() != size_of::<T>() {
-        Err(Error::InvalidReturn)?;
-    }
-
-    T::load(&result, 0)
+    Ok(&stack[sp..])
 }
 
 
@@ -1004,8 +984,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
+        let (bytecode, mut stack) = example.compile();
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1020,10 +999,7 @@ mod tests {
         }
         println!();
 
-        let mut stack = Secret::new(stack);
-        let result = unsafe { exec(&bytecode, &mut stack) };
-        let result = result.unwrap();
-        let result = unsafe { result.declassify() };
+        let result = exec(&bytecode, &mut stack).unwrap();
         print!("  stack:");
         for i in 0..result.len() {
             print!(" {:02x}", result[i]);
@@ -1046,8 +1022,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
+        let (bytecode, mut stack) = example.compile();
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1062,10 +1037,7 @@ mod tests {
         }
         println!();
 
-        let mut stack = Secret::new(stack);
-        let result = unsafe { exec(&bytecode, &mut stack) };
-        let result = result.unwrap();
-        let result = unsafe { result.declassify() };
+        let result = exec(&bytecode, &mut stack).unwrap();
         print!("  stack:");
         for i in 0..result.len() {
             print!(" {:02x}", result[i]);
@@ -1098,8 +1070,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
+        let (bytecode, mut stack) = example.compile();
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1114,10 +1085,7 @@ mod tests {
         }
         println!();
 
-        let mut stack = Secret::new(stack);
-        let result = unsafe { exec(&bytecode, &mut stack) };
-        let result = result.unwrap();
-        let result = unsafe { result.declassify() };
+        let result = exec(&bytecode, &mut stack).unwrap();
         print!("  stack:");
         for i in 0..result.len() {
             print!(" {:02x}", result[i]);
@@ -1142,8 +1110,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, stack) = example.compile();
-        let stack = unsafe { stack.declassify() };
+        let (bytecode, mut stack) = example.compile();
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1158,10 +1125,7 @@ mod tests {
         }
         println!();
 
-        let mut stack = Secret::new(stack);
-        let result = unsafe { exec(&bytecode, &mut stack) };
-        let result = result.unwrap();
-        let result = unsafe { result.declassify() };
+        let result = exec(&bytecode, &mut stack).unwrap();
         print!("  stack:");
         for i in 0..result.len() {
             print!(" {:02x}", result[i]);
@@ -1184,8 +1148,7 @@ mod tests {
                 ));
 
                 println!();
-                let (bytecode, stack) = input.compile();
-                let stack = unsafe { stack.declassify() };
+                let (bytecode, mut stack) = input.compile();
                 print!("  bytecode:");
                 for i in (0..bytecode.len()).step_by(2) {
                     print!(" {:04x}", u16::from_le_bytes(
@@ -1199,9 +1162,8 @@ mod tests {
                 }
                 println!();
 
-                let mut stack = Secret::new(stack);
-                let result = unsafe { eval::<$t>(&bytecode, &mut stack) };
-                let result = result.unwrap();
+                let result = exec(&bytecode, &mut stack).unwrap();
+                let result = <$t>::load(&result, 0).unwrap();
                 println!("{} -> {}", input, result);
 
                 assert_eq!(result, $expected);
