@@ -28,8 +28,6 @@ use std::ops::ShlAssign;
 use std::ops::Shr;
 use std::ops::ShrAssign;
 
-use std::thread_local;
-
 
 /// A trait to facilitate type-unaware movement between OpTrees
 pub trait SecretType
@@ -186,7 +184,7 @@ impl Clone for SecretBool {
 impl Default for SecretBool {
     fn default() -> Self {
         // we use SecretU8 here for the shared constant
-        Self(SecretU8::zero().0)
+        Self(OpTree::zero())
     }
 }
 
@@ -395,36 +393,11 @@ macro_rules! secret_impl {
                 Ok(self.0.eval()? as $v)
             }
 
-            // Common constants, note that because these are reference counted
-            // they can be reused in the immediate pool, unlike arbitrary
-            // immediates
-            fn zero() -> Self {
-                thread_local! {
-                    static ZERO: $t = <$t>::new(0);
-                }
-                ZERO.with(|v| v.clone())
-            }
-
-            #[allow(dead_code)]
-            fn one() -> Self {
-                thread_local! {
-                    static ONE: $t = <$t>::new(1);
-                }
-                ONE.with(|v| v.clone())
-            }
-
-            fn ones() -> Self {
-                thread_local! {
-                    static ONES: $t = <$t>::new(<$u>::MAX as $v);
-                }
-                ONES.with(|v| v.clone())
-            }
-
             // abs only available on signed types
             match_sig! { $s {
                 s => {
                     pub fn abs(self) -> Self {
-                        self.clone().lt(Self::zero()).select(
+                        self.clone().lt(Self(OpTree::zero())).select(
                             self.clone().neg(),
                             self
                         )
@@ -463,17 +436,18 @@ macro_rules! secret_impl {
                 s => {}
                 u => {
                     pub fn is_power_of_two(self) -> SecretBool {
-                        self.count_ones().eq(Self::one())
+                        self.count_ones().eq(Self(OpTree::one()))
                     }
 
                     pub fn next_power_of_two(self) -> $t {
                         // based on implementation in rust core
-                        self.clone().le(Self::one().clone()).select(
+                        self.clone().le(Self(OpTree::one()).clone()).select(
                             // special case if <= 1
-                            Self::zero(),
+                            Self(OpTree::zero()),
                             // next_power_of_two_minus_1
-                            Self::ones() >> (self - Self::one().clone()).leading_zeros()
-                        ) + Self::one()
+                            Self(OpTree::ones())
+                                >> (self - Self(OpTree::one()).clone()).leading_zeros()
+                        ) + Self(OpTree::one())
                     }
                 }
             }}
@@ -516,7 +490,7 @@ macro_rules! secret_impl {
 
         impl Default for $t {
             fn default() -> Self {
-                Self::zero()
+                Self(OpTree::zero())
             }
         }
 
@@ -524,7 +498,7 @@ macro_rules! secret_impl {
             type Output = $t;
             fn not(self) -> $t {
                 // note, this is how it's done in wasm
-                self ^ Self::ones()
+                self ^ Self(OpTree::ones())
             }
         }
 
@@ -574,7 +548,7 @@ macro_rules! secret_impl {
                     type Output = $t;
                     fn neg(self) -> $t {
                         // note, this is how it's done in wasm
-                        Self::zero() - self
+                        Self(OpTree::zero()) - self
                     }
                 }
             }

@@ -290,6 +290,11 @@ pub trait OpType: Copy + Clone + Default + Debug {
 
     /// read from stack
     fn decode(stack: &mut dyn io::Read) -> Result<Self, io::Error>;
+
+    // constant OpTree pool
+    fn zero() -> Rc<OpTree<Self>>;
+    fn one()  -> Rc<OpTree<Self>>;
+    fn ones() -> Rc<OpTree<Self>>;
 }
 
 macro_rules! optype_impl {
@@ -311,6 +316,34 @@ macro_rules! optype_impl {
                 let mut buf = [0; $w];
                 stack.read_exact(&mut buf)?;
                 Ok(<$t>::from_le_bytes(buf))
+            }
+
+            // Common constants, since these are reference counted and deduplicated,
+            // having a pool of constants can help reduce duplicate immediates, though
+            // note these should only be used if they are not a secret
+
+            // These must be declared here since thread-local storage can't depend on
+            // generic types
+
+            fn zero() -> Rc<OpTree<Self>> {
+                thread_local! {
+                    static ZERO: Rc<OpTree<$t>> = Rc::new(OpTree::new(OpKind::Imm(0)));
+                }
+                ZERO.with(|v| v.clone())
+            }
+
+            fn one() -> Rc<OpTree<Self>> {
+                thread_local! {
+                    static ONE: Rc<OpTree<$t>> = Rc::new(OpTree::new(OpKind::Imm(1)));
+                }
+                ONE.with(|v| v.clone())
+            }
+
+            fn ones() -> Rc<OpTree<Self>> {
+                thread_local! {
+                    static ONES: Rc<OpTree<$t>> = Rc::new(OpTree::new(OpKind::Imm(<$t>::MAX)));
+                }
+                ONES.with(|v| v.clone())
             }
         }
     }
@@ -363,6 +396,7 @@ pub enum OpKind<T: OpType> {
     Rotr(Rc<OpTree<T>>, Rc<OpTree<T>>),
 }
 
+
 /// Tree of operations, including metadata to deduplicate
 /// common branches
 #[derive(Debug, Clone)]
@@ -379,6 +413,21 @@ impl<T: OpType> OpTree<T> {
             refs: Cell::new(0),
             slot: Cell::new(None),
         }
+    }
+
+    // Common constants, since these are reference counted and deduplicated,
+    // having a pool of constants can help reduce duplicate immediates, though
+    // note these should only be used if they are not a secret
+    pub fn zero() -> Rc<Self> {
+        T::zero()
+    }
+
+    pub fn one() -> Rc<Self> {
+        T::one()
+    }
+
+    pub fn ones() -> Rc<Self> {
+        T::ones()
     }
 
     /// high-level compile into bytecode, stack, and initial stack pointer
