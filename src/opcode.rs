@@ -230,23 +230,23 @@ impl fmt::Display for Op {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self.opcode() {
             OpCode::Truncate | OpCode::Extends | OpCode::Extendu => {
-                write!(fmt, "{} u{} u{}",
-                    self.opcode(),
+                write!(fmt, "u{}.{} u{}",
                     8*self.width(),
+                    self.opcode(),
                     8*(1 << self.imm())
                 )
             }
             _ if self.has_imm() => {
-                write!(fmt, "{} u{} {}",
-                    self.opcode(),
+                write!(fmt, "u{}.{} {}",
                     8*self.width(),
+                    self.opcode(),
                     self.imm()
                 )
             }
             _ => {
-                write!(fmt, "{} u{}",
-                    self.opcode(),
-                    8*self.width()
+                write!(fmt, "u{}.{}",
+                    8*self.width(),
+                    self.opcode()
                 )
             }
         }
@@ -520,48 +520,49 @@ impl<T: OpType> Default for OpTree<T> {
 impl<T: OpType> fmt::Display for OpTree<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match &self.kind {
-            OpKind::Imm(v)          => write!(fmt, "(imm {:?})", v),
-            OpKind::Truncate(a)     => {
-                // don't bother showing truncate if it's used as a nop,
-                // it won't be emitted
-                if a.width() == T::WIDTH {
-                    write!(fmt, "{}", a)
-                } else {
-                    write!(fmt, "(truncate {})", a)
-                }
-            },
-            OpKind::Extends(a)      => write!(fmt, "(extends {})", a),
-            OpKind::Extendu(a)      => write!(fmt, "(extendu {})", a),
-            OpKind::Select(p, a, b) => write!(fmt, "(select {} {} {})", p, a, b),
-            OpKind::Eqz(a)          => write!(fmt, "(eqz {})", a),
-            OpKind::Eq(a, b)        => write!(fmt, "(eq {} {})", a, b),
-            OpKind::Ne(a, b)        => write!(fmt, "(ne {} {})", a, b),
-            OpKind::Lts(a, b)       => write!(fmt, "(lts {} {})", a, b),
-            OpKind::Ltu(a, b)       => write!(fmt, "(ltu {} {})", a, b),
-            OpKind::Gts(a, b)       => write!(fmt, "(gts {} {})", a, b),
-            OpKind::Gtu(a, b)       => write!(fmt, "(gtu {} {})", a, b),
-            OpKind::Les(a, b)       => write!(fmt, "(les {} {})", a, b),
-            OpKind::Leu(a, b)       => write!(fmt, "(leu {} {})", a, b),
-            OpKind::Ges(a, b)       => write!(fmt, "(ges {} {})", a, b),
-            OpKind::Geu(a, b)       => write!(fmt, "(geu {} {})", a, b),
-            OpKind::Clz(a)          => write!(fmt, "(clz {})", a),
-            OpKind::Ctz(a)          => write!(fmt, "(ctz {})", a),
-            OpKind::Popcnt(a)       => write!(fmt, "(popcnt {})", a),
-            OpKind::Add(a, b)       => write!(fmt, "(add {} {})", a, b),
-            OpKind::Sub(a, b)       => write!(fmt, "(sub {} {})", a, b),
-            OpKind::Mul(a, b)       => write!(fmt, "(mul {} {})", a, b),
-            OpKind::Divs(a, b)      => write!(fmt, "(divs {} {})", a, b),
-            OpKind::Divu(a, b)      => write!(fmt, "(divu {} {})", a, b),
-            OpKind::Rems(a, b)      => write!(fmt, "(rems {} {})", a, b),
-            OpKind::Remu(a, b)      => write!(fmt, "(remu {} {})", a, b),
-            OpKind::And(a, b)       => write!(fmt, "(and {} {})", a, b),
-            OpKind::Or(a, b)        => write!(fmt, "(or {} {})", a, b),
-            OpKind::Xor(a, b)       => write!(fmt, "(xor {} {})", a, b),
-            OpKind::Shl(a, b)       => write!(fmt, "(shl {} {})", a, b),
-            OpKind::Shrs(a, b)      => write!(fmt, "(shrs {} {})", a, b),
-            OpKind::Shru(a, b)      => write!(fmt, "(shru {} {})", a, b),
-            OpKind::Rotl(a, b)      => write!(fmt, "(rotl {} {})", a, b),
-            OpKind::Rotr(a, b)      => write!(fmt, "(rotr {} {})", a, b),
+            // don't bother showing truncate if it's used as a nop,
+            // it won't be emitted
+            OpKind::Truncate(a) if a.width() == T::WIDTH => {
+                return write!(fmt, "{}", a)
+            }
+            _ => {}
+        }
+
+        match &self.kind {
+            OpKind::Imm(v)          => write!(fmt, "(u{}.imm {:?})", 8*T::WIDTH, v),
+            OpKind::Truncate(a)     => write!(fmt, "(u{}.truncate {})", 8*T::WIDTH, a),
+            OpKind::Extends(a)      => write!(fmt, "(u{}.extends {})", 8*T::WIDTH, a),
+            OpKind::Extendu(a)      => write!(fmt, "(u{}.extendu {})", 8*T::WIDTH, a),
+            OpKind::Select(p, a, b) => write!(fmt, "(u{}.select {} {} {})", 8*T::WIDTH, p, a, b),
+            OpKind::Eqz(a)          => write!(fmt, "(u{}.eqz {})", 8*T::WIDTH, a),
+            OpKind::Eq(a, b)        => write!(fmt, "(u{}.eq {} {})", 8*T::WIDTH, a, b),
+            OpKind::Ne(a, b)        => write!(fmt, "(u{}.ne {} {})", 8*T::WIDTH, a, b),
+            OpKind::Lts(a, b)       => write!(fmt, "(u{}.lts {} {})", 8*T::WIDTH, a, b),
+            OpKind::Ltu(a, b)       => write!(fmt, "(u{}.ltu {} {})", 8*T::WIDTH, a, b),
+            OpKind::Gts(a, b)       => write!(fmt, "(u{}.gts {} {})", 8*T::WIDTH, a, b),
+            OpKind::Gtu(a, b)       => write!(fmt, "(u{}.gtu {} {})", 8*T::WIDTH, a, b),
+            OpKind::Les(a, b)       => write!(fmt, "(u{}.les {} {})", 8*T::WIDTH, a, b),
+            OpKind::Leu(a, b)       => write!(fmt, "(u{}.leu {} {})", 8*T::WIDTH, a, b),
+            OpKind::Ges(a, b)       => write!(fmt, "(u{}.ges {} {})", 8*T::WIDTH, a, b),
+            OpKind::Geu(a, b)       => write!(fmt, "(u{}.geu {} {})", 8*T::WIDTH, a, b),
+            OpKind::Clz(a)          => write!(fmt, "(u{}.clz {})", 8*T::WIDTH, a),
+            OpKind::Ctz(a)          => write!(fmt, "(u{}.ctz {})", 8*T::WIDTH, a),
+            OpKind::Popcnt(a)       => write!(fmt, "(u{}.popcnt {})", 8*T::WIDTH, a),
+            OpKind::Add(a, b)       => write!(fmt, "(u{}.add {} {})", 8*T::WIDTH, a, b),
+            OpKind::Sub(a, b)       => write!(fmt, "(u{}.sub {} {})", 8*T::WIDTH, a, b),
+            OpKind::Mul(a, b)       => write!(fmt, "(u{}.mul {} {})", 8*T::WIDTH, a, b),
+            OpKind::Divs(a, b)      => write!(fmt, "(u{}.divs {} {})", 8*T::WIDTH, a, b),
+            OpKind::Divu(a, b)      => write!(fmt, "(u{}.divu {} {})", 8*T::WIDTH, a, b),
+            OpKind::Rems(a, b)      => write!(fmt, "(u{}.rems {} {})", 8*T::WIDTH, a, b),
+            OpKind::Remu(a, b)      => write!(fmt, "(u{}.remu {} {})", 8*T::WIDTH, a, b),
+            OpKind::And(a, b)       => write!(fmt, "(u{}.and {} {})", 8*T::WIDTH, a, b),
+            OpKind::Or(a, b)        => write!(fmt, "(u{}.or {} {})", 8*T::WIDTH, a, b),
+            OpKind::Xor(a, b)       => write!(fmt, "(u{}.xor {} {})", 8*T::WIDTH, a, b),
+            OpKind::Shl(a, b)       => write!(fmt, "(u{}.shl {} {})", 8*T::WIDTH, a, b),
+            OpKind::Shrs(a, b)      => write!(fmt, "(u{}.shrs {} {})", 8*T::WIDTH, a, b),
+            OpKind::Shru(a, b)      => write!(fmt, "(u{}.shru {} {})", 8*T::WIDTH, a, b),
+            OpKind::Rotl(a, b)      => write!(fmt, "(u{}.rotl {} {})", 8*T::WIDTH, a, b),
+            OpKind::Rotr(a, b)      => write!(fmt, "(u{}.rotr {} {})", 8*T::WIDTH, a, b),
         }
     }
 }
