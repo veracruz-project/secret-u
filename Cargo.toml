@@ -10,3 +10,4 @@ trace = []
 
 [dependencies]
 thiserror = "1.0.25"
+paste = "1.0.5"

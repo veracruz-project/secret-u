@@ -358,6 +358,8 @@ optype_impl! { u128, i128,  16, 4 }
 #[derive(Debug, Clone)]
 pub enum OpKind<T: OpType> {
     Imm(T),
+    Sym(&'static str),
+
     Truncate(Rc<dyn DynOpTree>),
     Extends(Rc<dyn DynOpTree>),
     Extendu(Rc<dyn DynOpTree>),
@@ -497,6 +499,24 @@ impl<T: OpType> OpTree<T> {
             }
         }
     }
+
+    /// Assuming we are Sym, patch the stack during a call
+    pub fn patch(&self, v: T, stack: &mut [u8]) {
+        assert!(
+            match self.kind {
+                OpKind::Sym(_) => true,
+                _              => false,
+            },
+            "patching non-sym?"
+        );
+
+        let slot = self.slot.get().expect("patching with no slot?");
+        let mut slice = &mut stack[
+            slot as usize * T::WIDTH
+                .. slot as usize * T::WIDTH + T::WIDTH
+        ];
+        v.encode(&mut slice).expect("slice write resulted in io::error?");
+    }
 }
 
 impl<T: OpType> From<T> for OpTree<T> {
@@ -525,6 +545,7 @@ impl<T: OpType> fmt::Display for OpTree<T> {
         let w = 8*T::WIDTH;
         match &self.kind {
             OpKind::Imm(v)          => write!(fmt, "(u{}.imm {:?})", w, v),
+            OpKind::Sym(s)          => write!(fmt, "(u{}.sym {:?})", w, s),
             OpKind::Truncate(a)     => write!(fmt, "(u{}.truncate {})", w, a),
             OpKind::Extends(a)      => write!(fmt, "(u{}.extends {})", w, a),
             OpKind::Extendu(a)      => write!(fmt, "(u{}.extendu {})", w, a),
@@ -650,6 +671,29 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
                 // write imm to stack
                 v.encode(stack)?;
+
+                // update imms
+                *imms += T::WIDTH;
+            }
+
+            OpKind::Sym(_) => {
+                // align imms?
+                while *imms % T::WIDTH != 0 {
+                    stack.write_all(&[0])?;
+                    *imms += 1;
+                }
+
+                // save slot
+                assert!(*imms % T::WIDTH == 0, "unaligned slot");
+                let slot = *imms / T::WIDTH;
+                let slot = u8::try_from(slot).expect("slot overflow");
+                self.slot.set(Some(slot));
+
+                // we'll fill this in later, use an arbitrary constant
+                // to hopefully help debugging
+                for _ in 0..T::WIDTH {
+                    stack.write_all(&[0xcc])?;
+                }
 
                 // update imms
                 *imms += T::WIDTH;
@@ -885,6 +929,11 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
         match &self.kind {
             OpKind::Imm(_) => {
+                // should be entirely handled in first pass
+                unreachable!()
+            }
+
+            OpKind::Sym(_) => {
                 // should be entirely handled in first pass
                 unreachable!()
             }
