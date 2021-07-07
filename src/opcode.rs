@@ -19,52 +19,46 @@ use crate::vm::exec;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u16)]
 pub enum OpCode {
-    Get         = 0x1000,
-    Set         = 0x2000,
-    Truncate    = 0x3000,
-    Extends     = 0x4000,
-    Extendu     = 0x5000,
-    Unalign     = 0x6000,
+    Get         = 0x100,
+    Set         = 0x200,
+    Truncate    = 0x300,
+    Extends     = 0x400,
+    Extendu     = 0x500,
+    Unalign     = 0x600,
 
-    Return      = 0xf000,
-    Select      = 0xf001,
+    Return      = 0xf00,
+    Select      = 0xf01,
 
-    Eqz         = 0xf002,
-    Eq          = 0xf003,
-    Ne          = 0xf004,
-    Lts         = 0xf005,
-    Ltu         = 0xf006,
-    Gts         = 0xf007,
-    Gtu         = 0xf008,
-    Les         = 0xf009,
-    Leu         = 0xf00a,
-    Ges         = 0xf00b,
-    Geu         = 0xf00c,
+    Eqz         = 0xf02,
+    Eq          = 0xf03,
+    Ne          = 0xf04,
+    Lts         = 0xf05,
+    Ltu         = 0xf06,
+    Gts         = 0xf07,
+    Gtu         = 0xf08,
+    Les         = 0xf09,
+    Leu         = 0xf0a,
+    Ges         = 0xf0b,
+    Geu         = 0xf0c,
 
-    Clz         = 0xf00d,
-    Ctz         = 0xf00e,
-    Popcnt      = 0xf00f,
-    Add         = 0xf010,
-    Sub         = 0xf011,
-    Mul         = 0xf012,
-    Divs        = 0xf013,
-    Divu        = 0xf014,
-    Rems        = 0xf015,
-    Remu        = 0xf016,
-    And         = 0xf017,
-    Or          = 0xf018,
-    Xor         = 0xf019,
-    Shl         = 0xf01a,
-    Shrs        = 0xf01b,
-    Shru        = 0xf01c,
-    Rotl        = 0xf01d,
-    Rotr        = 0xf01e,
-}
-
-impl OpCode {
-    pub fn has_imm(&self) -> bool {
-        (*self as u16) < 0x8000
-    }
+    Clz         = 0xf0d,
+    Ctz         = 0xf0e,
+    Popcnt      = 0xf0f,
+    Add         = 0xf10,
+    Sub         = 0xf11,
+    Mul         = 0xf12,
+    Divs        = 0xf13,
+    Divu        = 0xf14,
+    Rems        = 0xf15,
+    Remu        = 0xf16,
+    And         = 0xf17,
+    Or          = 0xf18,
+    Xor         = 0xf19,
+    Shl         = 0xf1a,
+    Shrs        = 0xf1b,
+    Shru        = 0xf1c,
+    Rotl        = 0xf1d,
+    Rotr        = 0xf1e,
 }
 
 impl fmt::Display for OpCode {
@@ -120,18 +114,18 @@ pub struct Op(u16);
 impl Op {
     /// Create a new op from its components
     pub const fn new(opcode: OpCode, npw2: u8, imm: u8) -> Op {
-        Op((opcode as u16) | ((npw2 as u16) << 8) | (imm as u16))
+        Op(((npw2 as u16) << 12) | (opcode as u16) | (imm as u16))
     }
 
     pub fn has_imm(&self) -> bool {
-        self.0 < 0x8000
+        self.0 & 0x800 == 0x000
     }
 
     pub fn opcode(&self) -> OpCode {
         let opcode = if self.has_imm() {
-            self.0 & 0xf000
+            self.0 & 0xf00
         } else {
-            self.0 & 0xf0ff
+            self.0 & 0xfff
         };
 
         // we check for OpCode validity on every function that can build
@@ -140,7 +134,7 @@ impl Op {
     }
 
     pub fn npw2(&self) -> u8 {
-        ((self.0 & 0x0f00) >> 8) as u8
+        (self.0 >> 12) as u8
     }
 
     pub fn width(&self) -> usize {
@@ -175,17 +169,17 @@ impl TryFrom<u16> for Op {
     type Error = Error;
 
     fn try_from(op: u16) -> Result<Self, Self::Error> {
-        let npw2 = ((op & 0x0f00) >> 8) as u8;
+        let npw2 = (op >> 12) as u8;
         let imm = (op & 0x00ff) as u8;
 
-        let opcode = match op & 0xf000 {
-            0x1000 => OpCode::Get,
-            0x2000 => OpCode::Set,
-            0x3000 => OpCode::Truncate,
-            0x4000 => OpCode::Extends,
-            0x5000 => OpCode::Extendu,
-            0x6000 => OpCode::Unalign,
-            0xf000 => match op & 0x00ff {
+        let opcode = match op & 0x0f00 {
+            0x100 => OpCode::Get,
+            0x200 => OpCode::Set,
+            0x300 => OpCode::Truncate,
+            0x400 => OpCode::Extends,
+            0x500 => OpCode::Extendu,
+            0x600 => OpCode::Unalign,
+            0xf00 => match op & 0x00ff {
                 0x00 => OpCode::Return,
                 0x01 => OpCode::Select,
                 0x02 => OpCode::Eqz,
@@ -528,41 +522,42 @@ impl<T: OpType> fmt::Display for OpTree<T> {
             _ => {}
         }
 
+        let w = 8*T::WIDTH;
         match &self.kind {
-            OpKind::Imm(v)          => write!(fmt, "(u{}.imm {:?})", 8*T::WIDTH, v),
-            OpKind::Truncate(a)     => write!(fmt, "(u{}.truncate {})", 8*T::WIDTH, a),
-            OpKind::Extends(a)      => write!(fmt, "(u{}.extends {})", 8*T::WIDTH, a),
-            OpKind::Extendu(a)      => write!(fmt, "(u{}.extendu {})", 8*T::WIDTH, a),
-            OpKind::Select(p, a, b) => write!(fmt, "(u{}.select {} {} {})", 8*T::WIDTH, p, a, b),
-            OpKind::Eqz(a)          => write!(fmt, "(u{}.eqz {})", 8*T::WIDTH, a),
-            OpKind::Eq(a, b)        => write!(fmt, "(u{}.eq {} {})", 8*T::WIDTH, a, b),
-            OpKind::Ne(a, b)        => write!(fmt, "(u{}.ne {} {})", 8*T::WIDTH, a, b),
-            OpKind::Lts(a, b)       => write!(fmt, "(u{}.lts {} {})", 8*T::WIDTH, a, b),
-            OpKind::Ltu(a, b)       => write!(fmt, "(u{}.ltu {} {})", 8*T::WIDTH, a, b),
-            OpKind::Gts(a, b)       => write!(fmt, "(u{}.gts {} {})", 8*T::WIDTH, a, b),
-            OpKind::Gtu(a, b)       => write!(fmt, "(u{}.gtu {} {})", 8*T::WIDTH, a, b),
-            OpKind::Les(a, b)       => write!(fmt, "(u{}.les {} {})", 8*T::WIDTH, a, b),
-            OpKind::Leu(a, b)       => write!(fmt, "(u{}.leu {} {})", 8*T::WIDTH, a, b),
-            OpKind::Ges(a, b)       => write!(fmt, "(u{}.ges {} {})", 8*T::WIDTH, a, b),
-            OpKind::Geu(a, b)       => write!(fmt, "(u{}.geu {} {})", 8*T::WIDTH, a, b),
-            OpKind::Clz(a)          => write!(fmt, "(u{}.clz {})", 8*T::WIDTH, a),
-            OpKind::Ctz(a)          => write!(fmt, "(u{}.ctz {})", 8*T::WIDTH, a),
-            OpKind::Popcnt(a)       => write!(fmt, "(u{}.popcnt {})", 8*T::WIDTH, a),
-            OpKind::Add(a, b)       => write!(fmt, "(u{}.add {} {})", 8*T::WIDTH, a, b),
-            OpKind::Sub(a, b)       => write!(fmt, "(u{}.sub {} {})", 8*T::WIDTH, a, b),
-            OpKind::Mul(a, b)       => write!(fmt, "(u{}.mul {} {})", 8*T::WIDTH, a, b),
-            OpKind::Divs(a, b)      => write!(fmt, "(u{}.divs {} {})", 8*T::WIDTH, a, b),
-            OpKind::Divu(a, b)      => write!(fmt, "(u{}.divu {} {})", 8*T::WIDTH, a, b),
-            OpKind::Rems(a, b)      => write!(fmt, "(u{}.rems {} {})", 8*T::WIDTH, a, b),
-            OpKind::Remu(a, b)      => write!(fmt, "(u{}.remu {} {})", 8*T::WIDTH, a, b),
-            OpKind::And(a, b)       => write!(fmt, "(u{}.and {} {})", 8*T::WIDTH, a, b),
-            OpKind::Or(a, b)        => write!(fmt, "(u{}.or {} {})", 8*T::WIDTH, a, b),
-            OpKind::Xor(a, b)       => write!(fmt, "(u{}.xor {} {})", 8*T::WIDTH, a, b),
-            OpKind::Shl(a, b)       => write!(fmt, "(u{}.shl {} {})", 8*T::WIDTH, a, b),
-            OpKind::Shrs(a, b)      => write!(fmt, "(u{}.shrs {} {})", 8*T::WIDTH, a, b),
-            OpKind::Shru(a, b)      => write!(fmt, "(u{}.shru {} {})", 8*T::WIDTH, a, b),
-            OpKind::Rotl(a, b)      => write!(fmt, "(u{}.rotl {} {})", 8*T::WIDTH, a, b),
-            OpKind::Rotr(a, b)      => write!(fmt, "(u{}.rotr {} {})", 8*T::WIDTH, a, b),
+            OpKind::Imm(v)          => write!(fmt, "(u{}.imm {:?})", w, v),
+            OpKind::Truncate(a)     => write!(fmt, "(u{}.truncate {})", w, a),
+            OpKind::Extends(a)      => write!(fmt, "(u{}.extends {})", w, a),
+            OpKind::Extendu(a)      => write!(fmt, "(u{}.extendu {})", w, a),
+            OpKind::Select(p, a, b) => write!(fmt, "(u{}.select {} {} {})", w, p, a, b),
+            OpKind::Eqz(a)          => write!(fmt, "(u{}.eqz {})", w, a),
+            OpKind::Eq(a, b)        => write!(fmt, "(u{}.eq {} {})", w, a, b),
+            OpKind::Ne(a, b)        => write!(fmt, "(u{}.ne {} {})", w, a, b),
+            OpKind::Lts(a, b)       => write!(fmt, "(u{}.lts {} {})", w, a, b),
+            OpKind::Ltu(a, b)       => write!(fmt, "(u{}.ltu {} {})", w, a, b),
+            OpKind::Gts(a, b)       => write!(fmt, "(u{}.gts {} {})", w, a, b),
+            OpKind::Gtu(a, b)       => write!(fmt, "(u{}.gtu {} {})", w, a, b),
+            OpKind::Les(a, b)       => write!(fmt, "(u{}.les {} {})", w, a, b),
+            OpKind::Leu(a, b)       => write!(fmt, "(u{}.leu {} {})", w, a, b),
+            OpKind::Ges(a, b)       => write!(fmt, "(u{}.ges {} {})", w, a, b),
+            OpKind::Geu(a, b)       => write!(fmt, "(u{}.geu {} {})", w, a, b),
+            OpKind::Clz(a)          => write!(fmt, "(u{}.clz {})", w, a),
+            OpKind::Ctz(a)          => write!(fmt, "(u{}.ctz {})", w, a),
+            OpKind::Popcnt(a)       => write!(fmt, "(u{}.popcnt {})", w, a),
+            OpKind::Add(a, b)       => write!(fmt, "(u{}.add {} {})", w, a, b),
+            OpKind::Sub(a, b)       => write!(fmt, "(u{}.sub {} {})", w, a, b),
+            OpKind::Mul(a, b)       => write!(fmt, "(u{}.mul {} {})", w, a, b),
+            OpKind::Divs(a, b)      => write!(fmt, "(u{}.divs {} {})", w, a, b),
+            OpKind::Divu(a, b)      => write!(fmt, "(u{}.divu {} {})", w, a, b),
+            OpKind::Rems(a, b)      => write!(fmt, "(u{}.rems {} {})", w, a, b),
+            OpKind::Remu(a, b)      => write!(fmt, "(u{}.remu {} {})", w, a, b),
+            OpKind::And(a, b)       => write!(fmt, "(u{}.and {} {})", w, a, b),
+            OpKind::Or(a, b)        => write!(fmt, "(u{}.or {} {})", w, a, b),
+            OpKind::Xor(a, b)       => write!(fmt, "(u{}.xor {} {})", w, a, b),
+            OpKind::Shl(a, b)       => write!(fmt, "(u{}.shl {} {})", w, a, b),
+            OpKind::Shrs(a, b)      => write!(fmt, "(u{}.shrs {} {})", w, a, b),
+            OpKind::Shru(a, b)      => write!(fmt, "(u{}.shru {} {})", w, a, b),
+            OpKind::Rotl(a, b)      => write!(fmt, "(u{}.rotl {} {})", w, a, b),
+            OpKind::Rotr(a, b)      => write!(fmt, "(u{}.rotr {} {})", w, a, b),
         }
     }
 }
