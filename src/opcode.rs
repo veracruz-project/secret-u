@@ -278,7 +278,7 @@ pub fn disas(
 
 
 /// Trait for types that can be compiled
-pub trait OpType: Copy + Clone + Default + Debug {
+pub trait OpType: Copy + Clone + Default + Debug + 'static {
     /// width in bytes, emitted as part of bytecode
     const WIDTH: usize;
 
@@ -567,8 +567,7 @@ impl<T: OpType> fmt::Display for OpTree<T> {
 }
 
 
-// TODO what the heck should this visibility be? we don't want compile
-// passes exposed, but rustc sure does like to complain otherwise
+// dyn-compatible wrapping trait
 pub trait DynOpTree: Debug + fmt::Display {
     /// type's width in bytes, needed for determining cast sizes
     fn width(&self) -> usize;
@@ -577,7 +576,7 @@ pub trait DynOpTree: Debug + fmt::Display {
     fn npw2(&self) -> u8;
 
     /// hook to enable eqz without known type
-//    fn eqz<'a>(&self, tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree + 'a>;
+    fn eqz(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree>;
 
     /// First compile pass, used to find the number of immediates
     /// for offset calculation, and local reference counting to
@@ -611,11 +610,17 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         T::NPW2
     }
 
-//    fn eqz<'a>(&self, tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree + 'a> {
-//        Rc::new(OpTree::<T>::new(OpKind::<T>::Eqz(
-//            Rc::new(OpTree::<T>::new(OpKind::<T>::Truncate(tree)))
-//        )))
-//    }
+    fn eqz(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
+        // bit messy but this works
+        // unfortunately this only works when there is a single argument
+        fn eqz<T: OpType>(tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
+            Rc::new(OpTree::<T>::new(OpKind::<T>::Eqz(
+                // truncate here is a nop
+                Rc::new(OpTree::<T>::new(OpKind::<T>::Truncate(tree)))
+            )))
+        }
+        &eqz::<T>
+    }
 
     fn compile_pass1(
         &self,
