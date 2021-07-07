@@ -3,6 +3,7 @@
 use crate::opcode::OpTree;
 use crate::opcode::OpKind;
 use crate::opcode::OpType;
+use crate::opcode::DynOpTree;
 use crate::error::Error;
 use std::rc::Rc;
 use std::ops::Not;
@@ -118,9 +119,23 @@ where
 //// SecretBool ////
 
 /// A secret bool who's value is ensured to not be leaked by Rust's type-system
-pub struct SecretBool(Rc<OpTree<u8>>);
+///
+/// Secret bool is a bit different than other SecretTypes, dynamically
+/// preserving the original type until needed as this reduces unnecessary
+/// casting
+pub struct SecretBool(Rc<dyn DynOpTree>);
 
 impl SecretBool {
+    /// Helper to convert to any type, we can do this without worry
+    /// since we internally ensure the value is only ever zero or one
+    fn truncated_tree<T: OpType>(self) -> Rc<OpTree<T>> {
+        if T::WIDTH > self.0.width() {
+            Rc::new(OpTree::new(OpKind::Extendu(self.0)))
+        } else {
+            Rc::new(OpTree::new(OpKind::Truncate(self.0)))
+        }
+    }
+
     /// Wraps a non-secret value as a secret value
     pub fn new(n: bool) -> Self {
         Self(Rc::new(OpTree::new(OpKind::Imm(n as u8))))
@@ -138,7 +153,7 @@ impl SecretBool {
     ///
     /// Useful for catching things like divide-by-zero
     pub unsafe fn try_declassify(self) -> Result<bool, Error> {
-        Ok(self.0.eval()? != 0)
+        Ok(self.truncated_tree::<u8>().eval()? != 0)
     }
 
     /// Select operation for secrecy-preserving conditionals
@@ -162,7 +177,7 @@ impl SecretType for SecretBool {
     }
 
     fn tree(self) -> Rc<OpTree<Self::TreeType>> {
-        self.0
+        self.truncated_tree()
     }
 }
 
@@ -183,22 +198,26 @@ impl Clone for SecretBool {
 
 impl Default for SecretBool {
     fn default() -> Self {
-        // we use SecretU8 here for the shared constant
-        Self(OpTree::zero())
+        Self(OpTree::<u8>::zero())
     }
 }
 
 impl Not for SecretBool {
     type Output = SecretBool;
     fn not(self) -> SecretBool {
-        Self(Rc::new(OpTree::new(OpKind::Eqz(self.0))))
+        // TODO improve this?
+        Self(Rc::new(OpTree::new(OpKind::Eqz(self.truncated_tree::<u8>()))))
     }
 }
 
 impl BitAnd for SecretBool {
     type Output = SecretBool;
     fn bitand(self, other: SecretBool) -> SecretBool {
-        Self(Rc::new(OpTree::new(OpKind::And(self.0, other.0))))
+        // TODO improve this?
+        Self(Rc::new(OpTree::new(OpKind::And(
+            self.truncated_tree::<u8>(),
+            other.truncated_tree::<u8>()
+        ))))
     }
 }
 
@@ -211,7 +230,11 @@ impl BitAndAssign for SecretBool {
 impl BitOr for SecretBool {
     type Output = SecretBool;
     fn bitor(self, other: SecretBool) -> SecretBool {
-        Self(Rc::new(OpTree::new(OpKind::Or(self.0, other.0))))
+        // TODO improve this?
+        Self(Rc::new(OpTree::new(OpKind::Or(
+            self.truncated_tree::<u8>(),
+            other.truncated_tree::<u8>()
+        ))))
     }
 }
 
@@ -224,7 +247,11 @@ impl BitOrAssign for SecretBool {
 impl BitXor for SecretBool {
     type Output = SecretBool;
     fn bitxor(self, other: SecretBool) -> SecretBool {
-        Self(Rc::new(OpTree::new(OpKind::Xor(self.0, other.0))))
+        // TODO improve this?
+        Self(Rc::new(OpTree::new(OpKind::Xor(
+            self.truncated_tree::<u8>(),
+            other.truncated_tree::<u8>()
+        ))))
     }
 }
 
@@ -236,11 +263,17 @@ impl BitXorAssign for SecretBool {
 
 impl SecretEq for SecretBool {
     fn eq(self, other: Self) -> SecretBool {
-        SecretBool(Rc::new(OpTree::new(OpKind::Eq(self.0, other.0))))
+        SecretBool(Rc::new(OpTree::new(OpKind::Eq(
+            self.truncated_tree::<u8>(),
+            other.truncated_tree::<u8>()
+        ))))
     }
 
     fn ne(self, other: Self) -> SecretBool {
-        SecretBool(Rc::new(OpTree::new(OpKind::Ne(self.0, other.0))))
+        SecretBool(Rc::new(OpTree::new(OpKind::Ne(
+            self.truncated_tree::<u8>(),
+            other.truncated_tree::<u8>()
+        ))))
     }
 }
 
@@ -257,10 +290,8 @@ macro_rules! match_sig {
 }
 
 macro_rules! secret_eq_impl {
-    // special case for u8, no truncate necessary
-    // TODO should we try to avoid downcasting to u8 when not needed?
-    ($t:ident, u8) => {
-        impl SecretEq for u8 {
+    ($t:ident, $u:ty) => {
+        impl SecretEq for $t {
             fn eq(self, other: Self) -> SecretBool {
                 SecretBool(Rc::new(OpTree::new(OpKind::Eq(self.0, other.0))))
             }
@@ -270,96 +301,44 @@ macro_rules! secret_eq_impl {
             }
         }
     };
-    ($t:ident, $u:ty) => {
-        impl SecretEq for $t {
-            fn eq(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                    Rc::new(OpTree::new(OpKind::Eq(self.0, other.0)))
-                ))))
-            }
-
-            fn ne(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                    Rc::new(OpTree::new(OpKind::Eq(self.0, other.0)))
-                ))))
-            }
-        }
-    };
 }
 
 macro_rules! secret_ord_impl {
-    // special case for u8, no truncate necessary
-    // TODO should we try to avoid downcasting to u8 when not needed?
-    ($t:ident, u8, $s:ident) => {
-        impl SecretOrd for u8 {
-            fn lt(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Lt(self.0, other.0))))
-            }
-
-            fn le(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Le(self.0, other.0))))
-            }
-
-            fn gt(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Gt(self.0, other.0))))
-            }
-
-            fn ge(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Ge(self.0, other.0))))
-            }
-        }
-    };
     ($t:ident, $u:ty, $s:ident) => {
         impl SecretOrd for $t {
             match_sig! { $s {
                 s => {
                     fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Lts(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Lts(self.0, other.0))))
                     }
 
                     fn le(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Les(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Les(self.0, other.0))))
                     }
 
                     fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Gts(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Gts(self.0, other.0))))
                     }
 
                     fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Ges(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Ges(self.0, other.0))))
                     }
                 }
                 u => {
                     fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Ltu(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Ltu(self.0, other.0))))
                     }
 
                     fn le(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Leu(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Leu(self.0, other.0))))
                     }
 
                     fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Gtu(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Gtu(self.0, other.0))))
                     }
 
                     fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Truncate(
-                            Rc::new(OpTree::new(OpKind::Geu(self.0, other.0)))
-                        ))))
+                        SecretBool(Rc::new(OpTree::new(OpKind::Geu(self.0, other.0))))
                     }
                 }
             }}
@@ -690,37 +669,37 @@ secret_impl! { SecretI32, u32, i32, s }
 
 impl From<SecretBool> for SecretU8 {
     fn from(v: SecretBool) -> SecretU8 {
-        Self(v.0)
+        Self(v.truncated_tree())
     }
 }
 
 impl From<SecretBool> for SecretU16 {
     fn from(v: SecretBool) -> SecretU16 {
-        Self::from(SecretU8::from(v))
+        Self(v.truncated_tree())
     }
 }
 
 impl From<SecretBool> for SecretU32 {
     fn from(v: SecretBool) -> SecretU32 {
-        Self::from(SecretU8::from(v))
+        Self(v.truncated_tree())
     }
 }
 
 impl From<SecretBool> for SecretI8 {
     fn from(v: SecretBool) -> SecretI8 {
-        Self(v.0)
+        Self(v.truncated_tree())
     }
 }
 
 impl From<SecretBool> for SecretI16 {
     fn from(v: SecretBool) -> SecretI16 {
-        Self::from(SecretI8::from(v))
+        Self(v.truncated_tree())
     }
 }
 
 impl From<SecretBool> for SecretI32 {
     fn from(v: SecretBool) -> SecretI32 {
-        Self::from(SecretI8::from(v))
+        Self(v.truncated_tree())
     }
 }
 

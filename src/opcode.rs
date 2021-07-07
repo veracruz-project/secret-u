@@ -291,9 +291,21 @@ pub trait OpType: Copy + Clone + Default + Debug {
     /// read from stack
     fn decode(stack: &mut dyn io::Read) -> Result<Self, io::Error>;
 
-    // constant OpTree pool
+    // Pool of common constants
+    // 
+    // Note, these must be declared here since thread-local storage
+    // can't depend on generic types
+    //
+    /// Constant zero that can be shared, allows this constant to be
+    /// deduplicated during compilation
     fn zero() -> Rc<OpTree<Self>>;
+
+    /// Constant zero that can be shared, allows this constant to be
+    /// deduplicated during compilation
     fn one()  -> Rc<OpTree<Self>>;
+
+    /// Constant zero that can be shared, allows this constant to be
+    /// deduplicated during compilation
     fn ones() -> Rc<OpTree<Self>>;
 }
 
@@ -317,13 +329,6 @@ macro_rules! optype_impl {
                 stack.read_exact(&mut buf)?;
                 Ok(<$t>::from_le_bytes(buf))
             }
-
-            // Common constants, since these are reference counted and deduplicated,
-            // having a pool of constants can help reduce duplicate immediates, though
-            // note these should only be used if they are not a secret
-
-            // These must be declared here since thread-local storage can't depend on
-            // generic types
 
             fn zero() -> Rc<OpTree<Self>> {
                 thread_local! {
@@ -359,9 +364,9 @@ optype_impl! { u128, i128,  16, 4 }
 #[derive(Debug, Clone)]
 pub enum OpKind<T: OpType> {
     Imm(T),
-    Truncate(Rc<dyn AnyOpTree>),
-    Extends(Rc<dyn AnyOpTree>),
-    Extendu(Rc<dyn AnyOpTree>),
+    Truncate(Rc<dyn DynOpTree>),
+    Extends(Rc<dyn DynOpTree>),
+    Extendu(Rc<dyn DynOpTree>),
     Select(Rc<OpTree<T>>, Rc<OpTree<T>>, Rc<OpTree<T>>),
 
     Eqz(Rc<OpTree<T>>),
@@ -415,17 +420,22 @@ impl<T: OpType> OpTree<T> {
         }
     }
 
-    // Common constants, since these are reference counted and deduplicated,
-    // having a pool of constants can help reduce duplicate immediates, though
-    // note these should only be used if they are not a secret
+    // Pool of common constants
+    //
+    /// Constant zero that can be shared, allows this constant to be
+    /// deduplicated during compilation
     pub fn zero() -> Rc<Self> {
         T::zero()
     }
 
+    /// Constant one that can be shared, allows this constant to be
+    /// deduplicated during compilation
     pub fn one() -> Rc<Self> {
         T::one()
     }
 
+    /// Constant 0xffs that can be shared, allows this constant to be
+    /// deduplicated during compilation
     pub fn ones() -> Rc<Self> {
         T::ones()
     }
@@ -511,7 +521,15 @@ impl<T: OpType> fmt::Display for OpTree<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match &self.kind {
             OpKind::Imm(v)          => write!(fmt, "(imm {:?})", v),
-            OpKind::Truncate(a)     => write!(fmt, "(truncate {})", a),
+            OpKind::Truncate(a)     => {
+                // don't bother showing truncate if it's used as a nop,
+                // it won't be emitted
+                if a.width() == T::WIDTH {
+                    write!(fmt, "{}", a)
+                } else {
+                    write!(fmt, "(truncate {})", a)
+                }
+            },
             OpKind::Extends(a)      => write!(fmt, "(extends {})", a),
             OpKind::Extendu(a)      => write!(fmt, "(extendu {})", a),
             OpKind::Select(p, a, b) => write!(fmt, "(select {} {} {})", p, a, b),
@@ -551,12 +569,15 @@ impl<T: OpType> fmt::Display for OpTree<T> {
 
 // TODO what the heck should this visibility be? we don't want compile
 // passes exposed, but rustc sure does like to complain otherwise
-pub trait AnyOpTree: Debug + fmt::Display {
+pub trait DynOpTree: Debug + fmt::Display {
     /// type's width in bytes, needed for determining cast sizes
     fn width(&self) -> usize;
 
     /// npw2(width), used as a part of instruction encoding
     fn npw2(&self) -> u8;
+
+    /// hook to enable eqz without known type
+//    fn eqz<'a>(&self, tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree + 'a>;
 
     /// First compile pass, used to find the number of immediates
     /// for offset calculation, and local reference counting to
@@ -581,7 +602,7 @@ pub trait AnyOpTree: Debug + fmt::Display {
     ) -> Result<(), io::Error>;
 }
 
-impl<T: OpType> AnyOpTree for OpTree<T> {
+impl<T: OpType> DynOpTree for OpTree<T> {
     fn width(&self) -> usize {
         T::WIDTH
     }
@@ -589,6 +610,12 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
     fn npw2(&self) -> u8 {
         T::NPW2
     }
+
+//    fn eqz<'a>(&self, tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree + 'a> {
+//        Rc::new(OpTree::<T>::new(OpKind::<T>::Eqz(
+//            Rc::new(OpTree::<T>::new(OpKind::<T>::Truncate(tree)))
+//        )))
+//    }
 
     fn compile_pass1(
         &self,
@@ -867,10 +894,13 @@ impl<T: OpType> AnyOpTree for OpTree<T> {
 
                 a.compile_pass2(bytecode, imms, sp, max_sp, max_align)?;
 
-                // truncate
-                Op::new(OpCode::Truncate, T::NPW2, a.npw2()).encode(bytecode)?;
-                sp_pop(sp, max_sp, 1, a.width());
-                sp_push(sp, max_sp, 1, T::WIDTH);
+                // nop if size does not change
+                if a.width() != T::WIDTH {
+                    // truncate
+                    Op::new(OpCode::Truncate, T::NPW2, a.npw2()).encode(bytecode)?;
+                    sp_pop(sp, max_sp, 1, a.width());
+                    sp_push(sp, max_sp, 1, T::WIDTH);
+                }
 
                 // manually unalign?
                 if *sp > expected_sp {
