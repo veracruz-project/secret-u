@@ -716,7 +716,7 @@ pub fn exec<'a>(
 
         #[cfg(feature="trace")]
         {
-            print!("    exec {:#04x} ::", op);
+            print!("    exec {:#06x} ::", op);
             for i in 0..stack.len() {
                 print!(" {:02x}", stack[i]);
             }

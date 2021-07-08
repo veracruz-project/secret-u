@@ -4,8 +4,6 @@
 use paste::paste;
 
 
-// TODO test bool
-
 /// A macro for compiling parameterized, secret expressions into 
 /// bytecode for fast repeated execution, resulting in a SecretFn
 /// instead of callable Fn.
@@ -30,7 +28,6 @@ macro_rules! lambda_compile {
             use $crate::int::SecretType;
             use $crate::opcode::OpTree;
             use $crate::opcode::OpKind;
-            use std::convert::TryInto;
             use std::rc::Rc;
             use std::io;
 
@@ -115,14 +112,7 @@ macro_rules! lambda_compile {
                     )*
 
                     // execute
-                    let ret = $crate::vm::exec(&self.__bytecode, &mut stack)?;
-
-                    // extract result
-                    Ok(<lambda_compile!(@prim $r)>::from_le_bytes(
-                        ret.try_into().map_err(|_| {
-                            $crate::error::Error::InvalidReturn
-                        })?
-                    ))
+                    <$r>::try_eval_lambda(&self.__bytecode, &mut stack)
                 }
 
                 /// Call underlying lambda
@@ -193,14 +183,61 @@ mod tests {
         }
         println!();
         println!("  call:");
-        let v = l.try_call(1, 2);
+        let v = l.call(1, 2);
         println!("{:?}", v);
+        assert_eq!(v, 3);
 
         let l = lambda!(|x: SecretU32, y: SecretU32| -> SecretU32 {
             x + y
         });
-        println!("  call:");
+
         let v = l(1, 2);
         println!("{}", v);
+        assert_eq!(v, 3);
+
+        let v = l(3, 4);
+        println!("{}", v);
+        assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn lambda_pythag() {
+        println!();
+
+        let l = lambda_compile!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
+            let a = x.clone()*x + y.clone()*y;
+            let b = z.clone()*z;
+            a.eq(b)
+        });
+        print!("  bytecode:");
+        for i in (0..l.bytecode().len()).step_by(2) {
+            print!(" {:04x}", u16::from_le_bytes(
+                <[u8; 2]>::try_from(&l.bytecode()[i..i+2]).unwrap()
+            ));
+        }
+        println!();
+        l.disas(io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..unsafe { l.stack() }.len() {
+            print!(" {:02x}", unsafe { l.stack()[i] });
+        }
+        println!();
+        println!("  call:");
+        let v = l.try_call(3, 4, 5);
+        println!("{:?}", v);
+
+        let l = lambda!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
+            let a = x.clone()*x + y.clone()*y;
+            let b = z.clone()*z;
+            a.eq(b)
+        });
+
+        let v = l(3, 4, 5);
+        println!("{}", v);
+        assert_eq!(v, true);
+
+        let v = l(6, 7, 8);
+        println!("{}", v);
+        assert_eq!(v, false);
     }
 }

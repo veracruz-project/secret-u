@@ -4,8 +4,11 @@ use crate::opcode::OpTree;
 use crate::opcode::OpKind;
 use crate::opcode::OpType;
 use crate::opcode::DynOpTree;
+use crate::vm::exec;
 use crate::error::Error;
 use std::rc::Rc;
+use std::convert::TryInto;
+
 use std::ops::Not;
 use std::ops::BitAnd;
 use std::ops::BitAndAssign;
@@ -58,7 +61,7 @@ where
     /// Useful for catching things like divide-by-zero
     unsafe fn try_declassify(self) -> Result<Self::PrimType, Error>;
 
-    /// Evaluates to immediate form
+    /// Evaluate to immediate form
     ///
     /// Normally eval is internally called by declassify,
     /// but this can be useful for flattening the internal
@@ -74,6 +77,16 @@ where
     fn try_eval(self) -> Result<Self, Error> {
         Ok(Self::from_tree(Rc::new(OpTree::new(OpKind::Imm(self.tree().eval()?)))))
     }
+
+    /// Evaluate precompiled-bytecode to immediate form
+    fn eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Self::PrimType {
+        Self::try_eval_lambda(bytecode, stack).unwrap()
+    }
+
+    /// Same as eval_lambda but propagating internal VM errors
+    ///
+    /// Useful for catching things like divide-by-zero
+    fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<Self::PrimType, Error>;
 
     /// Build from tree
     fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self;
@@ -157,12 +170,14 @@ impl SecretType for SecretBool {
         SecretBool(Rc::new(OpTree::new(OpKind::Imm(v as u8))))
     }
 
-    unsafe fn declassify(self) -> bool {
-        self.try_declassify().unwrap()
-    }
-
     unsafe fn try_declassify(self) -> Result<bool, Error> {
         Ok(self.truncated_tree::<u8>().eval()? != 0)
+    }
+
+    fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<bool, Error> {
+        let res = exec(bytecode, stack)?;
+        let v = <u8>::from_le_bytes(res.try_into().map_err(|_| Error::InvalidReturn)?);
+        Ok(v != 0)
     }
 
     fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {
@@ -378,6 +393,14 @@ macro_rules! secret_impl {
 
             unsafe fn try_declassify(self) -> Result<$p, Error> {
                 Ok(self.0.eval()? as $p)
+            }
+
+            fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<$p, Error> {
+                let res = exec(bytecode, stack)?;
+                let v = <$u>::from_le_bytes(
+                    res.try_into().map_err(|_| Error::InvalidReturn)?
+                );
+                Ok(v as $p)
             }
 
             fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {

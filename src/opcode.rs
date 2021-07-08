@@ -259,7 +259,7 @@ pub fn disas<W: io::Write>(
                 writeln!(out, "    {}", opcode)?;
             }
             Err(Error::InvalidOpcode(op)) => {
-                writeln!(out, "    unknown {:#04x}", op)?;
+                writeln!(out, "    unknown {:#06x}", op)?;
             }
             Err(_) => {
                 panic!("unexpected error in disas?");
