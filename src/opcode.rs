@@ -248,18 +248,18 @@ impl fmt::Display for Op {
 }
 
 /// helper function for debugging
-pub fn disas(
+pub fn disas<W: io::Write>(
     bytecode: &[u8],
-    stdout: &mut dyn io::Write
+    mut out: W
 ) -> Result<(), io::Error> {
     let mut bytecode = bytecode;
     while bytecode.len() > 0 {
         match Op::decode(&mut bytecode)? {
             Ok(opcode) => {
-                writeln!(stdout, "    {}", opcode)?;
+                writeln!(out, "    {}", opcode)?;
             }
             Err(Error::InvalidOpcode(op)) => {
-                writeln!(stdout, "    unknown {:#04x}", op)?;
+                writeln!(out, "    unknown {:#04x}", op)?;
             }
             Err(_) => {
                 panic!("unexpected error in disas?");

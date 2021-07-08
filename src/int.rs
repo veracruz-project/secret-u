@@ -36,13 +36,27 @@ where
     Self: Sized,
     Self::TreeType: OpType
 {
+    /// Declassified representation
+    type PrimType;
+
+    /// In-tree representation
     type TreeType;
 
-    /// Build from tree
-    fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self;
+    /// Wraps a non-secret value as a secret value
+    fn classify(n: Self::PrimType) -> Self;
 
-    /// Get underlying tree
-    fn tree(self) -> Rc<OpTree<Self::TreeType>>;
+    /// Extracts the secret value into a non-secret value
+    ///
+    /// Note this effectively "leaks" the secret value, so
+    /// is only allowed in unsafe code
+    unsafe fn declassify(self) -> Self::PrimType {
+        self.try_declassify().unwrap()
+    }
+
+    /// Same as declassify but propagating internal VM errors
+    ///
+    /// Useful for catching things like divide-by-zero
+    unsafe fn try_declassify(self) -> Result<Self::PrimType, Error>;
 
     /// Evaluates to immediate form
     ///
@@ -60,6 +74,12 @@ where
     fn try_eval(self) -> Result<Self, Error> {
         Ok(Self::from_tree(Rc::new(OpTree::new(OpKind::Imm(self.tree().eval()?)))))
     }
+
+    /// Build from tree
+    fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self;
+
+    /// Get underlying tree
+    fn tree(self) -> Rc<OpTree<Self::TreeType>>;
 }
 
 /// A trait for types that can eq as long as the result remains secret
@@ -123,54 +143,27 @@ where
 /// Secret bool is a bit different than other SecretTypes, dynamically
 /// preserving the original type until needed as this reduces unnecessary
 /// casting
+///
+/// Note, like the underlying Rc type, clone is relatively cheap, but
+/// not a bytewise copy, which means we can't implement the Copy trait
+#[derive(Clone)]
 pub struct SecretBool(Rc<dyn DynOpTree>);
 
-impl SecretBool {
-    /// Helper to convert to any type, we can do this without worry
-    /// since we internally ensure the value is only ever zero or one
-    fn truncated_tree<T: OpType>(self) -> Rc<OpTree<T>> {
-        if T::WIDTH > self.0.width() {
-            Rc::new(OpTree::new(OpKind::Extendu(self.0)))
-        } else {
-            Rc::new(OpTree::new(OpKind::Truncate(self.0)))
-        }
+impl SecretType for SecretBool {
+    type PrimType = bool;
+    type TreeType = u8;
+
+    fn classify(v: bool) -> SecretBool {
+        SecretBool(Rc::new(OpTree::new(OpKind::Imm(v as u8))))
     }
 
-    /// Wraps a non-secret value as a secret value
-    pub fn new(n: bool) -> Self {
-        Self(Rc::new(OpTree::new(OpKind::Imm(n as u8))))
-    }
-
-    /// Extracts the secret value into a non-secret value
-    ///
-    /// Note this effectively "leaks" the secret value, so
-    /// is only allowed in unsafe code
-    pub unsafe fn declassify(self) -> bool {
+    unsafe fn declassify(self) -> bool {
         self.try_declassify().unwrap()
     }
 
-    /// Same as declassify but propagating internal VM errors
-    ///
-    /// Useful for catching things like divide-by-zero
-    pub unsafe fn try_declassify(self) -> Result<bool, Error> {
+    unsafe fn try_declassify(self) -> Result<bool, Error> {
         Ok(self.truncated_tree::<u8>().eval()? != 0)
     }
-
-    /// Select operation for secrecy-preserving conditionals
-    pub fn select<T>(self, a: T, b: T) -> T
-    where
-        T: SecretType + From<SecretBool>
-    {
-        T::from_tree(Rc::new(OpTree::new(OpKind::Select(
-            T::from(self).tree(),
-            a.tree(),
-            b.tree()
-        ))))
-    }
-}
-
-impl SecretType for SecretBool {
-    type TreeType = u8;
 
     fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {
         Self(tree)
@@ -183,22 +176,42 @@ impl SecretType for SecretBool {
 
 impl From<bool> for SecretBool {
     fn from(v: bool) -> SecretBool {
-        Self::new(v)
-    }
-}
-
-impl Clone for SecretBool {
-    /// Much like the underlying Rc type, clone is relatively cheap,
-    /// but not a bytewise copy, which means we can't implement the
-    /// Copy trait
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self::classify(v)
     }
 }
 
 impl Default for SecretBool {
     fn default() -> Self {
         Self(OpTree::<u8>::zero())
+    }
+}
+
+impl SecretBool {
+    /// Wraps a non-secret value as a secret value
+    pub fn new(v: bool) -> SecretBool {
+        Self::classify(v)
+    }
+
+    /// Helper to convert to any type, we can do this without worry
+    /// since we internally ensure the value is only ever zero or one
+    fn truncated_tree<T: OpType>(self) -> Rc<OpTree<T>> {
+        if T::WIDTH > self.0.width() {
+            Rc::new(OpTree::new(OpKind::Extendu(self.0)))
+        } else {
+            Rc::new(OpTree::new(OpKind::Truncate(self.0)))
+        }
+    }
+
+    /// Select operation for secrecy-preserving conditionals
+    pub fn select<T>(self, a: T, b: T) -> T
+    where
+        T: SecretType + From<SecretBool>
+    {
+        T::from_tree(Rc::new(OpTree::new(OpKind::Select(
+            T::from(self).tree(),
+            a.tree(),
+            b.tree()
+        ))))
     }
 }
 
@@ -343,29 +356,55 @@ macro_rules! secret_ord_impl {
 }
 
 macro_rules! secret_impl {
-    ($t:ident, $u:ty, $v:ty, $s:ident) => {
+    ($t:ident, $u:ty, $p:ty, $s:ident) => {
         /// A secret integer who's value is ensured to not be leaked by Rust's type-system
+        ///
+        /// Note, like the underlying Rc type, clone is relatively cheap, but
+        /// not a bytewise copy, which means we can't implement the Copy trait
+        #[derive(Clone)]
         pub struct $t(Rc<OpTree<$u>>);
 
-        impl $t {
-            /// Wraps a non-secret value as a secret value
-            pub fn new(n: $v) -> Self {
+        impl SecretType for $t {
+            type TreeType = $u;
+            type PrimType = $p;
+
+            fn classify(n: $p) -> Self {
                 Self(Rc::new(OpTree::new(OpKind::Imm(n as $u))))
             }
 
-            /// Extracts the secret value into a non-secret value
-            ///
-            /// Note this effectively "leaks" the secret value, so
-            /// is only allowed in unsafe code
-            pub unsafe fn declassify(self) -> $v {
-                self.try_declassify().unwrap() as $v
+            unsafe fn declassify(self) -> $p {
+                self.try_declassify().unwrap() as $p
             }
 
-            /// Same as declassify but propagating internal VM errors
-            ///
-            /// Useful for catching things like divide-by-zero
-            pub unsafe fn try_declassify(self) -> Result<$v, Error> {
-                Ok(self.0.eval()? as $v)
+            unsafe fn try_declassify(self) -> Result<$p, Error> {
+                Ok(self.0.eval()? as $p)
+            }
+
+            fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {
+                Self(tree)
+            }
+
+            fn tree(self) -> Rc<OpTree<Self::TreeType>> {
+                self.0
+            }
+        }
+
+        impl From<$p> for $t {
+            fn from(v: $p) -> $t {
+                Self::classify(v)
+            }
+        }
+
+        impl Default for $t {
+            fn default() -> Self {
+                Self(OpTree::zero())
+            }
+        }
+
+        impl $t {
+            /// Wraps a non-secret value as a secret value
+            pub fn new(v: $p) -> Self {
+                Self::classify(v)
             }
 
             // abs only available on signed types
@@ -433,39 +472,6 @@ macro_rules! secret_impl {
 
             pub fn rotate_right(self, other: $t) -> $t {
                 Self(Rc::new(OpTree::new(OpKind::Rotr(self.0, other.0))))
-            }
-        }
-
-        impl SecretType for $t {
-            type TreeType = $u;
-
-            fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {
-                Self(tree)
-            }
-
-            fn tree(self) -> Rc<OpTree<Self::TreeType>> {
-                self.0
-            }
-        }
-
-        impl From<$v> for $t {
-            fn from(v: $v) -> $t {
-                Self::new(v)
-            }
-        }
-
-        impl Clone for $t {
-            /// Much like the underlying Rc type, clone is relatively cheap,
-            /// but not a bytewise copy, which means we can't implement the
-            /// Copy trait
-            fn clone(&self) -> Self {
-                Self(self.0.clone())
-            }
-        }
-
-        impl Default for $t {
-            fn default() -> Self {
-                Self(OpTree::zero())
             }
         }
 
