@@ -7,7 +7,7 @@ use crate::opcode::DynOpTree;
 use crate::vm::exec;
 use crate::error::Error;
 use std::rc::Rc;
-use std::convert::TryInto;
+use std::convert::TryFrom;
 
 use std::ops::Not;
 use std::ops::BitAnd;
@@ -164,19 +164,21 @@ pub struct SecretBool(Rc<dyn DynOpTree>);
 
 impl SecretType for SecretBool {
     type PrimType = bool;
-    type TreeType = u8;
+    type TreeType = [u8;1];
 
     fn classify(v: bool) -> SecretBool {
-        SecretBool(Rc::new(OpTree::new(OpKind::Imm(v as u8))))
+        SecretBool(Rc::new(OpTree::new(OpKind::Imm([v as u8]))))
     }
 
     unsafe fn try_declassify(self) -> Result<bool, Error> {
-        Ok(self.truncated_tree::<u8>().eval()? != 0)
+        Ok(self.truncated_tree::<[u8;1]>().eval()?[0] != 0)
     }
 
     fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<bool, Error> {
         let res = exec(bytecode, stack)?;
-        let v = <u8>::from_le_bytes(res.try_into().map_err(|_| Error::InvalidReturn)?);
+        let v = <u8>::from_le_bytes(
+            <[u8;1]>::try_from(res).map_err(|_| Error::InvalidReturn)?
+        );
         Ok(v != 0)
     }
 
@@ -210,13 +212,13 @@ impl SecretBool {
     /// Create a non-secret constant value, these are available for
     /// more optimizations than secret values
     pub fn constant(v: bool) -> SecretBool {
-        Self(OpTree::<u8>::constant(v as u8))
+        Self(OpTree::<[u8;1]>::constant([v as u8]))
     }
 
     /// Helper to convert to any type, we can do this without worry
     /// since we internally ensure the value is only ever zero or one
     fn truncated_tree<T: OpType>(self) -> Rc<OpTree<T>> {
-        if T::WIDTH > self.0.width() {
+        if T::SIZE > self.0.size() {
             Rc::new(OpTree::new(OpKind::Extendu(self.0)))
         } else {
             Rc::new(OpTree::new(OpKind::Truncate(self.0)))
@@ -247,8 +249,8 @@ impl BitAnd for SecretBool {
     type Output = SecretBool;
     fn bitand(self, other: SecretBool) -> SecretBool {
         Self(Rc::new(OpTree::new(OpKind::And(
-            self.truncated_tree::<u8>(),
-            other.truncated_tree::<u8>()
+            self.truncated_tree::<[u8;1]>(),
+            other.truncated_tree::<[u8;1]>()
         ))))
     }
 }
@@ -263,8 +265,8 @@ impl BitOr for SecretBool {
     type Output = SecretBool;
     fn bitor(self, other: SecretBool) -> SecretBool {
         Self(Rc::new(OpTree::new(OpKind::Or(
-            self.truncated_tree::<u8>(),
-            other.truncated_tree::<u8>()
+            self.truncated_tree::<[u8;1]>(),
+            other.truncated_tree::<[u8;1]>()
         ))))
     }
 }
@@ -279,8 +281,8 @@ impl BitXor for SecretBool {
     type Output = SecretBool;
     fn bitxor(self, other: SecretBool) -> SecretBool {
         Self(Rc::new(OpTree::new(OpKind::Xor(
-            self.truncated_tree::<u8>(),
-            other.truncated_tree::<u8>()
+            self.truncated_tree::<[u8;1]>(),
+            other.truncated_tree::<[u8;1]>()
         ))))
     }
 }
@@ -294,15 +296,15 @@ impl BitXorAssign for SecretBool {
 impl SecretEq for SecretBool {
     fn eq(self, other: Self) -> SecretBool {
         SecretBool(Rc::new(OpTree::new(OpKind::Eq(
-            self.truncated_tree::<u8>(),
-            other.truncated_tree::<u8>()
+            self.truncated_tree::<[u8;1]>(),
+            other.truncated_tree::<[u8;1]>()
         ))))
     }
 
     fn ne(self, other: Self) -> SecretBool {
         SecretBool(Rc::new(OpTree::new(OpKind::Ne(
-            self.truncated_tree::<u8>(),
-            other.truncated_tree::<u8>()
+            self.truncated_tree::<[u8;1]>(),
+            other.truncated_tree::<[u8;1]>()
         ))))
     }
 }
@@ -317,96 +319,82 @@ macro_rules! match_sig {
     (u { s => {$($a:tt)*} u => {$($b:tt)*} }) => {
         $($b)*
     };
-}
-
-macro_rules! secret_eq_impl {
-    ($t:ident, $u:ty) => {
-        impl SecretEq for $t {
-            fn eq(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Eq(self.0, other.0))))
-            }
-
-            fn ne(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Ne(self.0, other.0))))
-            }
-        }
+    (sa { s => {$($a:tt)*} u => {$($b:tt)*} }) => {
+        $($a)*
+    };
+    (ua { s => {$($a:tt)*} u => {$($b:tt)*} }) => {
+        $($b)*
     };
 }
 
-macro_rules! secret_ord_impl {
-    ($t:ident, $u:ty, $s:ident) => {
-        impl SecretOrd for $t {
-            match_sig! { $s {
-                s => {
-                    fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Lts(self.0, other.0))))
-                    }
-
-                    fn le(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Les(self.0, other.0))))
-                    }
-
-                    fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Gts(self.0, other.0))))
-                    }
-
-                    fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Ges(self.0, other.0))))
-                    }
-                }
-                u => {
-                    fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Ltu(self.0, other.0))))
-                    }
-
-                    fn le(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Leu(self.0, other.0))))
-                    }
-
-                    fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Gtu(self.0, other.0))))
-                    }
-
-                    fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Geu(self.0, other.0))))
-                    }
-                }
-            }}
-        }
+macro_rules! match_arr {
+    (s { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
+        $($a)*
+    };
+    (u { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
+        $($a)*
+    };
+    (sa { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
+        $($b)*
+    };
+    (ua { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
+        $($b)*
     };
 }
 
 macro_rules! secret_impl {
-    ($t:ident, $u:ty, $p:ty, $s:ident) => {
+    ($t:ident, $u:ty, $n:literal, $s:ident, $zero:expr, $one:expr, $ones:expr) => {
         /// A secret integer who's value is ensured to not be leaked by Rust's type-system
         ///
         /// Note, like the underlying Rc type, clone is relatively cheap, but
         /// not a bytewise copy, which means we can't implement the Copy trait
         #[derive(Clone)]
-        pub struct $t(Rc<OpTree<$u>>);
+        pub struct $t(Rc<OpTree<[u8;$n]>>);
 
         impl SecretType for $t {
-            type TreeType = $u;
-            type PrimType = $p;
+            type TreeType = [u8;$n];
+            type PrimType = $u;
 
-            fn classify(n: $p) -> Self {
-                Self(Rc::new(OpTree::new(OpKind::Imm(n as $u))))
+            fn classify(n: $u) -> Self {
+                match_arr! { $s {
+                    _ => {
+                        Self(Rc::new(OpTree::new(OpKind::Imm(n.to_le_bytes()))))
+                    }
+                    a => {
+                        Self(Rc::new(OpTree::new(OpKind::Imm(n))))
+                    }
+                }}
             }
 
-            unsafe fn declassify(self) -> $p {
-                self.try_declassify().unwrap() as $p
+            unsafe fn declassify(self) -> $u {
+                self.try_declassify().unwrap()
             }
 
-            unsafe fn try_declassify(self) -> Result<$p, Error> {
-                Ok(self.0.eval()? as $p)
+            unsafe fn try_declassify(self) -> Result<$u, Error> {
+                match_arr! { $s {
+                    _ => {
+                        Ok(<$u>::from_le_bytes(self.0.eval()?))
+                    }
+                    a => {
+                        Ok(self.0.eval()?)
+                    }
+                }}
             }
 
-            fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<$p, Error> {
+            fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<$u, Error> {
                 let res = exec(bytecode, stack)?;
-                let v = <$u>::from_le_bytes(
-                    res.try_into().map_err(|_| Error::InvalidReturn)?
-                );
-                Ok(v as $p)
+                match_arr! { $s {
+                    _ => {
+                        Ok(<$u>::from_le_bytes(
+                            <[u8;$n]>::try_from(res).map_err(|_| Error::InvalidReturn)?
+                        ))
+                    }
+                    a => {
+                        Ok(
+                            <[u8;$n]>::try_from(res).map_err(|_| Error::InvalidReturn)?
+                        )
+                    }
+                }}
             }
 
             fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {
@@ -418,35 +406,42 @@ macro_rules! secret_impl {
             }
         }
 
-        impl From<$p> for $t {
-            fn from(v: $p) -> $t {
+        impl From<$u> for $t {
+            fn from(v: $u) -> $t {
                 Self::classify(v)
             }
         }
 
         impl Default for $t {
             fn default() -> Self {
-                Self(OpTree::constant(0))
+                Self::constant($zero)
             }
         }
 
         impl $t {
             /// Wraps a non-secret value as a secret value
-            pub fn new(v: $p) -> Self {
+            pub fn new(v: $u) -> Self {
                 Self::classify(v)
             }
 
             /// Create a non-secret constant value, these are available for
             /// more optimizations than secret values
-            pub fn constant(v: $p) -> Self {
-                Self(OpTree::constant(v as $u))
-            }
+            pub fn constant(v: $u) -> Self {
+                match_arr! { $s {
+                    _ => {
+                        Self(OpTree::constant(v.to_le_bytes()))
+                    }
+                    a => {
+                        Self(OpTree::constant(v))
+                    }
+                }
+            }}
 
             // abs only available on signed types
             match_sig! { $s {
                 s => {
                     pub fn abs(self) -> Self {
-                        self.clone().lt(Self(OpTree::constant(0))).select(
+                        self.clone().lt(Self::constant($zero)).select(
                             self.clone().neg(),
                             self
                         )
@@ -485,18 +480,18 @@ macro_rules! secret_impl {
                 s => {}
                 u => {
                     pub fn is_power_of_two(self) -> SecretBool {
-                        self.count_ones().eq(Self(OpTree::constant(1)))
+                        self.count_ones().eq(Self::constant($one))
                     }
 
                     pub fn next_power_of_two(self) -> $t {
                         // based on implementation in rust core
-                        self.clone().le(Self(OpTree::constant(1))).select(
+                        self.clone().le(Self::constant($one)).select(
                             // special case if <= 1
-                            Self(OpTree::constant(0)),
+                            Self::constant($zero),
                             // next_power_of_two_minus_1
-                            Self(OpTree::constant(<$u>::MAX))
-                                >> (self - Self(OpTree::constant(1))).leading_zeros()
-                        ) + Self(OpTree::constant(1))
+                            Self::constant($ones)
+                                >> (self - Self::constant($one)).leading_zeros()
+                        ) + Self::constant($one)
                     }
                 }
             }}
@@ -514,7 +509,7 @@ macro_rules! secret_impl {
             type Output = $t;
             fn not(self) -> $t {
                 // note, this is how it's done in wasm
-                self ^ Self(OpTree::constant(<$u>::MAX))
+                self ^ Self::constant($ones)
             }
         }
 
@@ -564,7 +559,7 @@ macro_rules! secret_impl {
                     type Output = $t;
                     fn neg(self) -> $t {
                         // note, this is how it's done in wasm
-                        Self(OpTree::constant(0)) - self
+                        Self::constant($zero) - self
                     }
                 }
             }
@@ -689,181 +684,194 @@ macro_rules! secret_impl {
             }
         }
 
-        secret_eq_impl! { $t, $u }
-        secret_ord_impl! { $t, $u, $s }
+        impl SecretEq for $t {
+            fn eq(self, other: Self) -> SecretBool {
+                SecretBool(Rc::new(OpTree::new(OpKind::Eq(self.0, other.0))))
+            }
+
+            fn ne(self, other: Self) -> SecretBool {
+                SecretBool(Rc::new(OpTree::new(OpKind::Ne(self.0, other.0))))
+            }
+        }
+
+        impl SecretOrd for $t {
+            match_sig! { $s {
+                s => {
+                    fn lt(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Lts(self.0, other.0))))
+                    }
+
+                    fn le(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Les(self.0, other.0))))
+                    }
+
+                    fn gt(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Gts(self.0, other.0))))
+                    }
+
+                    fn ge(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Ges(self.0, other.0))))
+                    }
+                }
+                u => {
+                    fn lt(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Ltu(self.0, other.0))))
+                    }
+
+                    fn le(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Leu(self.0, other.0))))
+                    }
+
+                    fn gt(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Gtu(self.0, other.0))))
+                    }
+
+                    fn ge(self, other: Self) -> SecretBool {
+                        SecretBool(Rc::new(OpTree::new(OpKind::Geu(self.0, other.0))))
+                    }
+                }
+            }}
+        }
     }
 }
 
-secret_impl! { SecretU8,  u8,  u8,  u }
-secret_impl! { SecretU16, u16, u16, u }
-secret_impl! { SecretU32, u32, u32, u }
-secret_impl! { SecretI8,  u8,  i8,  s }
-secret_impl! { SecretI16, u16, i16, s }
-secret_impl! { SecretI32, u32, i32, s }
+secret_impl! { SecretU8,    u8,       1,   u,  0, 1, u8::MAX   }
+secret_impl! { SecretU16,   u16,      2,   u,  0, 1, u16::MAX  }
+secret_impl! { SecretU32,   u32,      4,   u,  0, 1, u32::MAX  }
+secret_impl! { SecretU64,   u64,      8,   u,  0, 1, u64::MAX  }
+secret_impl! { SecretU128,  u128,     16,  u,  0, 1, u128::MAX }
+secret_impl! { SecretU256,  [u8;32],  32,  ua, [0;32], [
+    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+], [0xff;32] }
+secret_impl! { SecretU512,  [u8;64],  64,  ua, [0;64], [
+    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+], [0xff;64] }
+secret_impl! { SecretU1024, [u8;128], 128, ua, [0;128], [
+    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+], [0xff;128] }
+secret_impl! { SecretI8,    i8,       1,   s,  0, 1, -1 }
+secret_impl! { SecretI16,   i16,      2,   s,  0, 1, -1 }
+secret_impl! { SecretI32,   i32,      4,   s,  0, 1, -1 }
+secret_impl! { SecretI64,   i64,      8,   s,  0, 1, -1 }
+secret_impl! { SecretI128,  i128,     16,  s,  0, 1, -1 }
+secret_impl! { SecretI256,  [u8;32],  32,  sa, [0;32], [
+    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+], [0xff;32] }
+secret_impl! { SecretI512,  [u8;64],  64,  sa, [0;64], [
+    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+], [0xff;64] }
+secret_impl! { SecretI1024, [u8;128], 128, sa, [0;128], [
+    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+], [0xff;128] }
 
 
 //// Conversions U* <-> U* ////
 
-impl From<SecretBool> for SecretU8 {
-    fn from(v: SecretBool) -> SecretU8 {
-        Self(v.truncated_tree())
-    }
+// these are really tedius, so we use a really heavy-weight macro here
+macro_rules! secret_from_impl {
+    // bool extending (bool -> u32)
+    ($from:ty => FB($to:ty), $($rest:tt)*) => {
+        impl From<$from> for $to {
+            fn from(v: $from) -> $to {
+                Self(v.truncated_tree())
+            }
+        }
+        secret_from_impl! { $from => $($rest)* }
+    };
+    // sign truncating (i32 -> u32)
+    ($from:ty => TS($to:ty), $($rest:tt)*) => {
+        impl SecretTruncate<$from> for $to {
+            fn truncate(v: $from) -> $to {
+                Self(v.0)
+            }
+        }
+        secret_from_impl! { $from => $($rest)* }
+    };
+    // truncate truncating (u32 -> u8)
+    ($from:ty => TT($to:ty), $($rest:tt)*) => {
+        impl SecretTruncate<$from> for $to {
+            fn truncate(v: $from) -> $to {
+                Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
+            }
+        }
+        secret_from_impl! { $from => $($rest)* }
+    };
+    // unsigned extending (u8 -> u32)
+    ($from:ty => FU($to:ty), $($rest:tt)*) => {
+        impl SecretTruncate<$from> for $to {
+            fn truncate(v: $from) -> $to {
+                Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
+            }
+        }
+        secret_from_impl! { $from => $($rest)* }
+    };
+    // signed extending (i8 -> i32)
+    ($from:ty => FS($to:ty), $($rest:tt)*) => {
+        impl SecretTruncate<$from> for $to {
+            fn truncate(v: $from) -> $to {
+                Self(Rc::new(OpTree::new(OpKind::Extends(v.0))))
+            }
+        }
+        secret_from_impl! { $from => $($rest)* }
+    };
+    // base cases
+    ($from:ty => ) => {};
+    ($_:ty => $from:ty => $($rest:tt)*) => {
+        secret_from_impl! { $from => $($rest)* }
+    };
 }
 
-impl From<SecretBool> for SecretU16 {
-    fn from(v: SecretBool) -> SecretU16 {
-        Self(v.truncated_tree())
-    }
+secret_from_impl! {
+    SecretBool  => FB(SecretU8), FB(SecretU16), FB(SecretU32), FB(SecretU64), FB(SecretU128), FB(SecretU256), FB(SecretU512), FB(SecretU1024),
+    SecretBool  => FB(SecretI8), FB(SecretI16), FB(SecretI32), FB(SecretI64), FB(SecretI128), FB(SecretI256), FB(SecretI512), FB(SecretI1024),
 }
 
-impl From<SecretBool> for SecretU32 {
-    fn from(v: SecretBool) -> SecretU32 {
-        Self(v.truncated_tree())
-    }
+secret_from_impl! {
+    SecretU8    =>               FU(SecretU16), FU(SecretU32), FU(SecretU64), FU(SecretU128), FU(SecretU256), FU(SecretU512), FU(SecretU1024),
+    SecretU16   => TT(SecretU8),                FU(SecretU32), FU(SecretU64), FU(SecretU128), FU(SecretU256), FU(SecretU512), FU(SecretU1024),
+    SecretU32   => TT(SecretU8), TT(SecretU16),                FU(SecretU64), FU(SecretU128), FU(SecretU256), FU(SecretU512), FU(SecretU1024),
+    SecretU64   => TT(SecretU8), TT(SecretU16), TT(SecretU32),                FU(SecretU128), FU(SecretU256), FU(SecretU512), FU(SecretU1024),
+    SecretU128  => TT(SecretU8), TT(SecretU16), TT(SecretU32), TT(SecretU64),                 FU(SecretU256), FU(SecretU512), FU(SecretU1024),
+    SecretU256  => TT(SecretU8), TT(SecretU16), TT(SecretU32), TT(SecretU64), TT(SecretU128),                 FU(SecretU512), FU(SecretU1024),
+    SecretU512  => TT(SecretU8), TT(SecretU16), TT(SecretU32), TT(SecretU64), TT(SecretU128), TT(SecretU256),                 FU(SecretU1024),
+    SecretU1024 => TT(SecretU8), TT(SecretU16), TT(SecretU32), TT(SecretU64), TT(SecretU128), TT(SecretU256), TT(SecretU512),
+
+    SecretU8    => TS(SecretI8), FU(SecretI16), FU(SecretI32), FU(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512), FU(SecretI1024),
+    SecretU16   =>               TS(SecretI16), FU(SecretI32), FU(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512), FU(SecretI1024),
+    SecretU32   =>                              TS(SecretI32), FU(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512), FU(SecretI1024),  
+    SecretU64   =>                                             TS(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512), FU(SecretI1024),
+    SecretU128  =>                                                            TS(SecretI128), FU(SecretI256), FU(SecretI512), FU(SecretI1024),
+    SecretU256  =>                                                                            TS(SecretI256), FU(SecretI512), FU(SecretI1024),
+    SecretU512  =>                                                                                            TS(SecretI512), FU(SecretI1024),
+    SecretU1024 =>                                                                                                            TS(SecretI1024),
 }
 
-impl From<SecretBool> for SecretI8 {
-    fn from(v: SecretBool) -> SecretI8 {
-        Self(v.truncated_tree())
-    }
-}
+secret_from_impl! {
+    SecretI8    => TS(SecretU8),
+    SecretI16   =>               TS(SecretU16),
+    SecretI32   =>                              TS(SecretU32),
+    SecretI64   =>                                             TS(SecretU64),
+    SecretI128  =>                                                            TS(SecretU128),
+    SecretI256  =>                                                                            TS(SecretU256),
+    SecretI512  =>                                                                                            TS(SecretU512),
+    SecretI1024 =>                                                                                                            TS(SecretU1024),
 
-impl From<SecretBool> for SecretI16 {
-    fn from(v: SecretBool) -> SecretI16 {
-        Self(v.truncated_tree())
-    }
-}
-
-impl From<SecretBool> for SecretI32 {
-    fn from(v: SecretBool) -> SecretI32 {
-        Self(v.truncated_tree())
-    }
-}
-
-impl From<SecretU8> for SecretU16 {
-    fn from(v: SecretU8) -> SecretU16 {
-        Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
-    }
-}
-
-impl From<SecretU8> for SecretU32 {
-    fn from(v: SecretU8) -> SecretU32 {
-        Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretU8> for SecretI8 {
-    fn truncate(v: SecretU8) -> SecretI8 {
-        Self(v.0)
-    }
-}
-
-impl From<SecretU8> for SecretI16 {
-    fn from(v: SecretU8) -> SecretI16 {
-        Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
-    }
-}
-
-impl From<SecretU8> for SecretI32 {
-    fn from(v: SecretU8) -> SecretI32 {
-        Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretI8> for SecretU8 {
-    fn truncate(v: SecretI8) -> SecretU8 {
-        Self(v.0)
-    }
-}
-
-impl From<SecretI8> for SecretI16 {
-    fn from(v: SecretI8) -> SecretI16 {
-        Self(Rc::new(OpTree::new(OpKind::Extends(v.0))))
-    }
-}
-
-impl From<SecretI8> for SecretI32 {
-    fn from(v: SecretI8) -> SecretI32 {
-        Self(Rc::new(OpTree::new(OpKind::Extends(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretU16> for SecretI16 {
-    fn truncate(v: SecretU16) -> SecretI16 {
-        Self(v.0)
-    }
-}
-
-impl SecretTruncate<SecretU16> for SecretU8 {
-    fn truncate(v: SecretU16) -> SecretU8 {
-        Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
-    }
-}
-
-impl From<SecretU16> for SecretU32 {
-    fn from(v: SecretU16) -> SecretU32 {
-        Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
-    }
-}
-
-impl From<SecretU16> for SecretI32 {
-    fn from(v: SecretU16) -> SecretI32 {
-        Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretI16> for SecretU16 {
-    fn truncate(v: SecretI16) -> SecretU16 {
-        Self(v.0)
-    }
-}
-
-impl SecretTruncate<SecretI16> for SecretI8 {
-    fn truncate(v: SecretI16) -> SecretI8 {
-        Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
-    }
-}
-
-impl From<SecretI16> for SecretI32 {
-    fn from(v: SecretI16) -> SecretI32 {
-        Self(Rc::new(OpTree::new(OpKind::Extends(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretU32> for SecretI32 {
-    fn truncate(v: SecretU32) -> SecretI32 {
-        Self(v.0)
-    }
-}
-
-impl SecretTruncate<SecretU32> for SecretU8 {
-    fn truncate(v: SecretU32) -> SecretU8 {
-        Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretU32> for SecretU16 {
-    fn truncate(v: SecretU32) -> SecretU16 {
-        Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretI32> for SecretU32 {
-    fn truncate(v: SecretI32) -> SecretU32 {
-        Self(v.0)
-    }
-}
-
-impl SecretTruncate<SecretI32> for SecretI8 {
-    fn truncate(v: SecretI32) -> SecretI8 {
-        Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
-    }
-}
-
-impl SecretTruncate<SecretI32> for SecretI16 {
-    fn truncate(v: SecretI32) -> SecretI16 {
-        Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
-    }
+    SecretI8    =>               FS(SecretI16), FS(SecretI32), FS(SecretI64), FS(SecretI128), FS(SecretI256), FS(SecretI512), FS(SecretI1024),
+    SecretI16   => TT(SecretI8),                FS(SecretI32), FS(SecretI64), FS(SecretI128), FS(SecretI256), FS(SecretI512), FS(SecretI1024),
+    SecretI32   => TT(SecretI8), TT(SecretI16),                FS(SecretI64), FS(SecretI128), FS(SecretI256), FS(SecretI512), FS(SecretI1024),
+    SecretI64   => TT(SecretI8), TT(SecretI16), TT(SecretI32),                FS(SecretI128), FS(SecretI256), FS(SecretI512), FS(SecretI1024),
+    SecretI128  => TT(SecretI8), TT(SecretI16), TT(SecretI32), TT(SecretI64),                 FS(SecretI256), FS(SecretI512), FS(SecretI1024),
+    SecretI256  => TT(SecretI8), TT(SecretI16), TT(SecretI32), TT(SecretI64), TT(SecretI128),                 FS(SecretI512), FS(SecretI1024),
+    SecretI512  => TT(SecretI8), TT(SecretI16), TT(SecretI32), TT(SecretI64), TT(SecretI128), TT(SecretI256),                 FS(SecretI1024),
+    SecretI1024 => TT(SecretI8), TT(SecretI16), TT(SecretI32), TT(SecretI64), TT(SecretI128), TT(SecretI256), TT(SecretI512),
 }
 
 

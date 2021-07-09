@@ -121,6 +121,7 @@ macro_rules! loadstore_impl {
 loadstore_impl! { u8  }
 loadstore_impl! { u16 }
 loadstore_impl! { u32 }
+loadstore_impl! { u64 }
 
 
 //// instructions here ////
@@ -732,223 +733,260 @@ pub fn exec<'a>(
             (0,    0x1, imm) => ins_get!(u8,         imm, stack, sp),
             (1,    0x1, imm) => ins_get!(u16,        imm, stack, sp),
             (2,    0x1, imm) => ins_get!(u32,        imm, stack, sp),
-            (npw2, 0x1, imm) => ins_get!(>u32, npw2, imm, stack, sp),
+            (3,    0x1, imm) => ins_get!(u64,        imm, stack, sp),
+            (npw2, 0x1, imm) => ins_get!(>u64, npw2, imm, stack, sp),
 
             // set
             (0,    0x2, imm) => ins_set!(u8,         imm, stack, sp),
             (1,    0x2, imm) => ins_set!(u16,        imm, stack, sp),
             (2,    0x2, imm) => ins_set!(u32,        imm, stack, sp),
-            (npw2, 0x2, imm) => ins_set!(>u32, npw2, imm, stack, sp),
+            (3,    0x2, imm) => ins_set!(u64,        imm, stack, sp),
+            (npw2, 0x2, imm) => ins_set!(>u64, npw2, imm, stack, sp),
 
             // truncate
             (0,    0x3, imm) => ins_truncate!(u8,         op, imm, stack, sp),
             (1,    0x3, imm) => ins_truncate!(u16,        op, imm, stack, sp),
             (2,    0x3, imm) => ins_truncate!(u32,        op, imm, stack, sp),
-            (npw2, 0x3, imm) => ins_truncate!(>u32, npw2, op, imm, stack, sp),
+            (3,    0x3, imm) => ins_truncate!(u64,        op, imm, stack, sp),
+            (npw2, 0x3, imm) => ins_truncate!(>u64, npw2, op, imm, stack, sp),
 
             // extends
             (0,    0x4, imm) => ins_extends!(u8,   i8,        op, imm, stack, sp),
             (1,    0x4, imm) => ins_extends!(u16,  i16,       op, imm, stack, sp),
             (2,    0x4, imm) => ins_extends!(u32,  i32,       op, imm, stack, sp),
-            (npw2, 0x4, imm) => ins_extends!(>u32, i32, npw2, op, imm, stack, sp),
+            (3,    0x4, imm) => ins_extends!(u64,  i64,       op, imm, stack, sp),
+            (npw2, 0x4, imm) => ins_extends!(>u64, i64, npw2, op, imm, stack, sp),
 
             // extendu
             (0,    0x5, imm) => ins_extendu!(u8,         op, imm, stack, sp),
             (1,    0x5, imm) => ins_extendu!(u16,        op, imm, stack, sp),
             (2,    0x5, imm) => ins_extendu!(u32,        op, imm, stack, sp),
-            (npw2, 0x5, imm) => ins_extendu!(>u32, npw2, op, imm, stack, sp),
+            (3,    0x5, imm) => ins_extendu!(u64,        op, imm, stack, sp),
+            (npw2, 0x5, imm) => ins_extendu!(>u64, npw2, op, imm, stack, sp),
 
             // unalign
             (0,    0x6, imm) => ins_unalign!(u8,         imm, stack, sp),
             (1,    0x6, imm) => ins_unalign!(u16,        imm, stack, sp),
             (2,    0x6, imm) => ins_unalign!(u32,        imm, stack, sp),
-            (npw2, 0x6, imm) => ins_unalign!(>u32, npw2, imm, stack, sp),
+            (3,    0x6, imm) => ins_unalign!(u64,        imm, stack, sp),
+            (npw2, 0x6, imm) => ins_unalign!(>u64, npw2, imm, stack, sp),
 
             // return
             (0,    0xf, 0x00) => ins_return!(u8,         stack, sp),
             (1,    0xf, 0x00) => ins_return!(u16,        stack, sp),
             (2,    0xf, 0x00) => ins_return!(u32,        stack, sp),
-            (npw2, 0xf, 0x00) => ins_return!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x00) => ins_return!(u64,        stack, sp),
+            (npw2, 0xf, 0x00) => ins_return!(>u64, npw2, stack, sp),
 
             // select
             (0,    0xf, 0x01) => ins_select!(u8,         stack, sp),
             (1,    0xf, 0x01) => ins_select!(u16,        stack, sp),
             (2,    0xf, 0x01) => ins_select!(u32,        stack, sp),
-            (npw2, 0xf, 0x01) => ins_select!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x01) => ins_select!(u64,        stack, sp),
+            (npw2, 0xf, 0x01) => ins_select!(>u64, npw2, stack, sp),
 
             // eqz
             (0,    0xf, 0x02) => ins_eqz!(u8,         stack, sp),
             (1,    0xf, 0x02) => ins_eqz!(u16,        stack, sp),
             (2,    0xf, 0x02) => ins_eqz!(u32,        stack, sp),
-            (npw2, 0xf, 0x02) => ins_eqz!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x02) => ins_eqz!(u64,        stack, sp),
+            (npw2, 0xf, 0x02) => ins_eqz!(>u64, npw2, stack, sp),
 
             // eq
             (0,    0xf, 0x03) => ins_eq!(u8,         stack, sp),
             (1,    0xf, 0x03) => ins_eq!(u16,        stack, sp),
             (2,    0xf, 0x03) => ins_eq!(u32,        stack, sp),
-            (npw2, 0xf, 0x03) => ins_eq!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x03) => ins_eq!(u64,        stack, sp),
+            (npw2, 0xf, 0x03) => ins_eq!(>u64, npw2, stack, sp),
 
             // ne
             (0,    0xf, 0x04) => ins_ne!(u8,         stack, sp),
             (1,    0xf, 0x04) => ins_ne!(u16,        stack, sp),
             (2,    0xf, 0x04) => ins_ne!(u32,        stack, sp),
-            (npw2, 0xf, 0x04) => ins_ne!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x04) => ins_ne!(u64,        stack, sp),
+            (npw2, 0xf, 0x04) => ins_ne!(>u64, npw2, stack, sp),
 
             // lts
             (0,    0xf, 0x05) => ins_lts!(u8,   i8,        stack, sp),
             (1,    0xf, 0x05) => ins_lts!(u16,  i16,       stack, sp),
             (2,    0xf, 0x05) => ins_lts!(u32,  i32,       stack, sp),
-            (npw2, 0xf, 0x05) => ins_lts!(>u32, i32, npw2, stack, sp),
+            (3,    0xf, 0x05) => ins_lts!(u64,  i64,       stack, sp),
+            (npw2, 0xf, 0x05) => ins_lts!(>u64, i64, npw2, stack, sp),
 
             // ltu
             (0,    0xf, 0x06) => ins_ltu!(u8,         stack, sp),
             (1,    0xf, 0x06) => ins_ltu!(u16,        stack, sp),
             (2,    0xf, 0x06) => ins_ltu!(u32,        stack, sp),
-            (npw2, 0xf, 0x06) => ins_ltu!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x06) => ins_ltu!(u64,        stack, sp),
+            (npw2, 0xf, 0x06) => ins_ltu!(>u64, npw2, stack, sp),
 
             // gts
             (0,    0xf, 0x07) => ins_gts!(u8,   i8,        stack, sp),
             (1,    0xf, 0x07) => ins_gts!(u16,  i16,       stack, sp),
             (2,    0xf, 0x07) => ins_gts!(u32,  i32,       stack, sp),
-            (npw2, 0xf, 0x07) => ins_gts!(>u32, i32, npw2, stack, sp),
+            (3,    0xf, 0x07) => ins_gts!(u64,  i64,       stack, sp),
+            (npw2, 0xf, 0x07) => ins_gts!(>u64, i64, npw2, stack, sp),
 
             // gtu
             (0,    0xf, 0x08) => ins_gtu!(u8,         stack, sp),
             (1,    0xf, 0x08) => ins_gtu!(u16,        stack, sp),
             (2,    0xf, 0x08) => ins_gtu!(u32,        stack, sp),
-            (npw2, 0xf, 0x08) => ins_gtu!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x08) => ins_gtu!(u64,        stack, sp),
+            (npw2, 0xf, 0x08) => ins_gtu!(>u64, npw2, stack, sp),
 
             // les
             (0,    0xf, 0x09) => ins_les!(u8,   i8,        stack, sp),
             (1,    0xf, 0x09) => ins_les!(u16,  i16,       stack, sp),
             (2,    0xf, 0x09) => ins_les!(u32,  i32,       stack, sp),
-            (npw2, 0xf, 0x09) => ins_les!(>u32, i32, npw2, stack, sp),
+            (3,    0xf, 0x09) => ins_les!(u64,  i64,       stack, sp),
+            (npw2, 0xf, 0x09) => ins_les!(>u64, i64, npw2, stack, sp),
 
             // leu
             (0,    0xf, 0x0a) => ins_leu!(u8,         stack, sp),
             (1,    0xf, 0x0a) => ins_leu!(u16,        stack, sp),
             (2,    0xf, 0x0a) => ins_leu!(u32,        stack, sp),
-            (npw2, 0xf, 0x0a) => ins_leu!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x0a) => ins_leu!(u64,        stack, sp),
+            (npw2, 0xf, 0x0a) => ins_leu!(>u64, npw2, stack, sp),
 
             // ges
             (0,    0xf, 0x0b) => ins_ges!(u8,   i8,        stack, sp),
             (1,    0xf, 0x0b) => ins_ges!(u16,  i16,       stack, sp),
             (2,    0xf, 0x0b) => ins_ges!(u32,  i32,       stack, sp),
-            (npw2, 0xf, 0x0b) => ins_ges!(>u32, i32, npw2, stack, sp),
+            (3,    0xf, 0x0b) => ins_ges!(u64,  i64,       stack, sp),
+            (npw2, 0xf, 0x0b) => ins_ges!(>u64, i64, npw2, stack, sp),
 
             // geu
             (0,    0xf, 0x0c) => ins_geu!(u8,         stack, sp),
             (1,    0xf, 0x0c) => ins_geu!(u16,        stack, sp),
             (2,    0xf, 0x0c) => ins_geu!(u32,        stack, sp),
-            (npw2, 0xf, 0x0c) => ins_geu!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x0c) => ins_geu!(u64,        stack, sp),
+            (npw2, 0xf, 0x0c) => ins_geu!(>u64, npw2, stack, sp),
 
             // clz
             (0,    0xf, 0x0d) => ins_clz!(u8,         stack, sp),
             (1,    0xf, 0x0d) => ins_clz!(u16,        stack, sp),
             (2,    0xf, 0x0d) => ins_clz!(u32,        stack, sp),
-            (npw2, 0xf, 0x0d) => ins_clz!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x0d) => ins_clz!(u64,        stack, sp),
+            (npw2, 0xf, 0x0d) => ins_clz!(>u64, npw2, stack, sp),
 
             // ctz
             (0,    0xf, 0x0e) => ins_ctz!(u8,         stack, sp),
             (1,    0xf, 0x0e) => ins_ctz!(u16,        stack, sp),
             (2,    0xf, 0x0e) => ins_ctz!(u32,        stack, sp),
-            (npw2, 0xf, 0x0e) => ins_ctz!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x0e) => ins_ctz!(u64,        stack, sp),
+            (npw2, 0xf, 0x0e) => ins_ctz!(>u64, npw2, stack, sp),
 
             // popcnt
             (0,    0xf, 0x0f) => ins_popcnt!(u8,         stack, sp),
             (1,    0xf, 0x0f) => ins_popcnt!(u16,        stack, sp),
             (2,    0xf, 0x0f) => ins_popcnt!(u32,        stack, sp),
-            (npw2, 0xf, 0x0f) => ins_popcnt!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x0f) => ins_popcnt!(u64,        stack, sp),
+            (npw2, 0xf, 0x0f) => ins_popcnt!(>u64, npw2, stack, sp),
 
             // add
             (0,    0xf, 0x10) => ins_add!(u8,         stack, sp),
             (1,    0xf, 0x10) => ins_add!(u16,        stack, sp),
             (2,    0xf, 0x10) => ins_add!(u32,        stack, sp),
-            (npw2, 0xf, 0x10) => ins_add!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x10) => ins_add!(u64,        stack, sp),
+            (npw2, 0xf, 0x10) => ins_add!(>u64, npw2, stack, sp),
 
             // sub
             (0,    0xf, 0x11) => ins_sub!(u8,         stack, sp),
             (1,    0xf, 0x11) => ins_sub!(u16,        stack, sp),
             (2,    0xf, 0x11) => ins_sub!(u32,        stack, sp),
-            (npw2, 0xf, 0x11) => ins_sub!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x11) => ins_sub!(u64,        stack, sp),
+            (npw2, 0xf, 0x11) => ins_sub!(>u64, npw2, stack, sp),
 
             // mul 
             (0,    0xf, 0x12) => ins_mul!(u8,         stack, sp),
             (1,    0xf, 0x12) => ins_mul!(u16,        stack, sp),
             (2,    0xf, 0x12) => ins_mul!(u32,        stack, sp),
-            (npw2, 0xf, 0x12) => ins_mul!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x12) => ins_mul!(u64,        stack, sp),
+            (npw2, 0xf, 0x12) => ins_mul!(>u64, npw2, stack, sp),
 
             // divs
             (0,    0xf, 0x13) => ins_divs!(u8,   i8,        stack, sp),
             (1,    0xf, 0x13) => ins_divs!(u16,  i16,       stack, sp),
             (2,    0xf, 0x13) => ins_divs!(u32,  i32,       stack, sp),
-            (npw2, 0xf, 0x13) => ins_divs!(>u32, i32, npw2, stack, sp),
+            (3,    0xf, 0x13) => ins_divs!(u64,  i64,       stack, sp),
+            (npw2, 0xf, 0x13) => ins_divs!(>u64, i64, npw2, stack, sp),
 
             // divu
             (0,    0xf, 0x14) => ins_divu!(u8,         stack, sp),
             (1,    0xf, 0x14) => ins_divu!(u16,        stack, sp),
             (2,    0xf, 0x14) => ins_divu!(u32,        stack, sp),
-            (npw2, 0xf, 0x14) => ins_divu!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x14) => ins_divu!(u64,        stack, sp),
+            (npw2, 0xf, 0x14) => ins_divu!(>u64, npw2, stack, sp),
 
             // rems
             (0,    0xf, 0x15) => ins_rems!(u8,   i8,        stack, sp),
             (1,    0xf, 0x15) => ins_rems!(u16,  i16,       stack, sp),
             (2,    0xf, 0x15) => ins_rems!(u32,  i32,       stack, sp),
-            (npw2, 0xf, 0x15) => ins_rems!(>u32, i32, npw2, stack, sp),
+            (3,    0xf, 0x15) => ins_rems!(u64,  i64,       stack, sp),
+            (npw2, 0xf, 0x15) => ins_rems!(>u64, i64, npw2, stack, sp),
 
             // remu
             (0,    0xf, 0x16) => ins_remu!(u8,         stack, sp),
             (1,    0xf, 0x16) => ins_remu!(u16,        stack, sp),
             (2,    0xf, 0x16) => ins_remu!(u32,        stack, sp),
-            (npw2, 0xf, 0x16) => ins_remu!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x16) => ins_remu!(u64,        stack, sp),
+            (npw2, 0xf, 0x16) => ins_remu!(>u64, npw2, stack, sp),
 
             // and
             (0,    0xf, 0x17) => ins_and!(u8,         stack, sp),
             (1,    0xf, 0x17) => ins_and!(u16,        stack, sp),
             (2,    0xf, 0x17) => ins_and!(u32,        stack, sp),
-            (npw2, 0xf, 0x17) => ins_and!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x17) => ins_and!(u64,        stack, sp),
+            (npw2, 0xf, 0x17) => ins_and!(>u64, npw2, stack, sp),
 
             // or
             (0,    0xf, 0x18) => ins_or!(u8,         stack, sp),
             (1,    0xf, 0x18) => ins_or!(u16,        stack, sp),
             (2,    0xf, 0x18) => ins_or!(u32,        stack, sp),
-            (npw2, 0xf, 0x18) => ins_or!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x18) => ins_or!(u64,        stack, sp),
+            (npw2, 0xf, 0x18) => ins_or!(>u64, npw2, stack, sp),
 
             // xor
             (0,    0xf, 0x19) => ins_xor!(u8,         stack, sp),
             (1,    0xf, 0x19) => ins_xor!(u16,        stack, sp),
             (2,    0xf, 0x19) => ins_xor!(u32,        stack, sp),
-            (npw2, 0xf, 0x19) => ins_xor!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x19) => ins_xor!(u64,        stack, sp),
+            (npw2, 0xf, 0x19) => ins_xor!(>u64, npw2, stack, sp),
 
             // shl
             (0,    0xf, 0x1a) => ins_shl!(u8,         stack, sp),
             (1,    0xf, 0x1a) => ins_shl!(u16,        stack, sp),
             (2,    0xf, 0x1a) => ins_shl!(u32,        stack, sp),
-            (npw2, 0xf, 0x1a) => ins_shl!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x1a) => ins_shl!(u64,        stack, sp),
+            (npw2, 0xf, 0x1a) => ins_shl!(>u64, npw2, stack, sp),
 
             // shrs
             (0,    0xf, 0x1b) => ins_shrs!(u8,   i8,        stack, sp),
             (1,    0xf, 0x1b) => ins_shrs!(u16,  i16,       stack, sp),
             (2,    0xf, 0x1b) => ins_shrs!(u32,  i32,       stack, sp),
-            (npw2, 0xf, 0x1b) => ins_shrs!(>u32, i32, npw2, stack, sp),
+            (3,    0xf, 0x1b) => ins_shrs!(u64,  i64,       stack, sp),
+            (npw2, 0xf, 0x1b) => ins_shrs!(>u64, i64, npw2, stack, sp),
 
             // shru
             (0,    0xf, 0x1c) => ins_shru!(u8,         stack, sp),
             (1,    0xf, 0x1c) => ins_shru!(u16,        stack, sp),
             (2,    0xf, 0x1c) => ins_shru!(u32,        stack, sp),
-            (npw2, 0xf, 0x1c) => ins_shru!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x1c) => ins_shru!(u64,        stack, sp),
+            (npw2, 0xf, 0x1c) => ins_shru!(>u64, npw2, stack, sp),
 
             // rotl
             (0,    0xf, 0x1d) => ins_rotl!(u8,         stack, sp),
             (1,    0xf, 0x1d) => ins_rotl!(u16,        stack, sp),
             (2,    0xf, 0x1d) => ins_rotl!(u32,        stack, sp),
-            (npw2, 0xf, 0x1d) => ins_rotl!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x1d) => ins_rotl!(u64,        stack, sp),
+            (npw2, 0xf, 0x1d) => ins_rotl!(>u64, npw2, stack, sp),
 
             // rotr
             (0,    0xf, 0x1e) => ins_rotr!(u8,         stack, sp),
             (1,    0xf, 0x1e) => ins_rotr!(u16,        stack, sp),
             (2,    0xf, 0x1e) => ins_rotr!(u32,        stack, sp),
-            (npw2, 0xf, 0x1e) => ins_rotr!(>u32, npw2, stack, sp),
+            (3,    0xf, 0x1e) => ins_rotr!(u64,        stack, sp),
+            (npw2, 0xf, 0x1e) => ins_rotr!(>u64, npw2, stack, sp),
 
             // unknown opcode?
             _ => {
@@ -977,9 +1015,9 @@ mod tests {
 
     #[test]
     fn exec_add() {
-        let example = OpTree::new(OpKind::<u32>::Add(
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(2)))
+        let example = OpTree::new(OpKind::Add(
+            Rc::new(OpTree::from(1u32)),
+            Rc::new(OpTree::from(2u32))
         ));
 
         println!();
@@ -1011,12 +1049,12 @@ mod tests {
 
     #[test]
     fn exec_alignment() {
-        let example = OpTree::new(OpKind::<u16>::Add(
-            Rc::new(OpTree::new(OpKind::<u16>::Extends(
-                Rc::new(OpTree::new(OpKind::<u8>::Imm(2)))
+        let example = OpTree::new(OpKind::Add(
+            Rc::new(OpTree::new(OpKind::<[u8;2]>::Extends(
+                Rc::new(OpTree::from(2u8))
             ))),
-            Rc::new(OpTree::new(OpKind::<u16>::Truncate(
-                Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
+            Rc::new(OpTree::new(OpKind::<[u8;2]>::Truncate(
+                Rc::new(OpTree::from(1u32)),
             ))),
         ));
 
@@ -1049,20 +1087,20 @@ mod tests {
 
     #[test]
     fn exec_dag() {
-        let two = Rc::new(OpTree::new(OpKind::<u32>::Imm(2)));
-        let a = Rc::new(OpTree::new(OpKind::<u32>::Add(
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(2)))
+        let two = Rc::new(OpTree::from(2u32));
+        let a = Rc::new(OpTree::new(OpKind::Add(
+            Rc::new(OpTree::from(1u32)),
+            Rc::new(OpTree::from(2u32))
         )));
-        let b = Rc::new(OpTree::new(OpKind::<u32>::Divu(
+        let b = Rc::new(OpTree::new(OpKind::Divu(
             a.clone(), two.clone()
         )));
-        let c = Rc::new(OpTree::new(OpKind::<u32>::Remu(
+        let c = Rc::new(OpTree::new(OpKind::Remu(
             a.clone(), two.clone()
         )));
-        let example = OpTree::new(OpKind::<u32>::Eq(
-            Rc::new(OpTree::new(OpKind::<u32>::Add(
-                Rc::new(OpTree::new(OpKind::<u32>::Mul(b, two))),
+        let example = OpTree::new(OpKind::Eq(
+            Rc::new(OpTree::new(OpKind::Add(
+                Rc::new(OpTree::new(OpKind::Mul(b, two))),
                 c,
             ))),
             a,
@@ -1097,15 +1135,15 @@ mod tests {
 
     #[test]
     fn exec_pythag() {
-        let a = Rc::new(OpTree::new(OpKind::<u32>::Imm(3)));
-        let b = Rc::new(OpTree::new(OpKind::<u32>::Imm(4)));
-        let c = Rc::new(OpTree::new(OpKind::<u32>::Imm(5)));
-        let example = OpTree::new(OpKind::<u32>::Eq(
-            Rc::new(OpTree::new(OpKind::<u32>::Add(
-                Rc::new(OpTree::new(OpKind::<u32>::Mul(a.clone(), a))),
-                Rc::new(OpTree::new(OpKind::<u32>::Mul(b.clone(), b)))
+        let a = Rc::new(OpTree::from(3u32));
+        let b = Rc::new(OpTree::from(4u32));
+        let c = Rc::new(OpTree::from(5u32));
+        let example = OpTree::new(OpKind::Eq(
+            Rc::new(OpTree::new(OpKind::Add(
+                Rc::new(OpTree::new(OpKind::Mul(a.clone(), a))),
+                Rc::new(OpTree::new(OpKind::Mul(b.clone(), b)))
             ))),
-            Rc::new(OpTree::new(OpKind::<u32>::Mul(c.clone(), c)))
+            Rc::new(OpTree::new(OpKind::Mul(c.clone(), c)))
         ));
 
         println!();
@@ -1138,12 +1176,17 @@ mod tests {
 
     // tests for low-level instructions
     macro_rules! test_ins {
-        ($name:ident, $op:ident, $u:ty, $($a:expr),+ => $t:ty, $expected:expr) => {
+        (@arr u8)   => { [u8;1]  };
+        (@arr u16)  => { [u8;2]  };
+        (@arr u32)  => { [u8;4]  };
+        (@arr u64)  => { [u8;8]  };
+        (@arr u128) => { [u8;16] };
+        ($name:ident, $op:ident, $u:ident, $($a:expr),+ => $t:ident, $expected:expr) => {
             #[test]
             fn $name() {
-                let input = OpTree::new(OpKind::<$t>::$op(
+                let input = OpTree::new(OpKind::<test_ins!(@arr $t)>::$op(
                     $(
-                        Rc::new(OpTree::new(OpKind::<$u>::Imm($a)))
+                        Rc::new(OpTree::from($a as $u))
                     ),+
                 ));
 
@@ -1169,7 +1212,7 @@ mod tests {
                 assert_eq!(result, $expected);
             }
         };
-        ($name:ident, $op:ident, $t:ty, $($a:expr),+ => $expected:expr) => {
+        ($name:ident, $op:ident, $t:ident, $($a:expr),+ => $expected:expr) => {
             test_ins! { $name, $op, $t, $($a),+ => $t, $expected }
         };
     }

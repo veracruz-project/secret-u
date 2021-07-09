@@ -22,6 +22,7 @@ macro_rules! lambda_compile {
     (@ident $_:ident $($a:ident)+) => { lambda_compile!(@ident $($a)+) };
     (@str $($a:ident)+) => { stringify!(lambda_compile!(@ident $($a)+)) };
     (@prim $t:ty) => { <$t as SecretType>::PrimType };
+    (@tree $t:ty) => { Rc<OpTree<<$t as SecretType>::TreeType>> };
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
         $crate::lambda::paste! {
@@ -35,7 +36,7 @@ macro_rules! lambda_compile {
             struct SecretClosure {
                 // any arguments that may need patching
                 $(
-                    [<__sym_$($a)+>]: Rc<OpTree<lambda_compile!(@prim $t)>>,
+                    [<__sym_$($a)+>]: lambda_compile!(@tree $t),
                 )*
 
                 // bytecode and stack
@@ -106,7 +107,7 @@ macro_rules! lambda_compile {
                     // patch arguments
                     $(
                         self.[<__sym_$($a)+>].patch(
-                            lambda_compile!(@ident $($a)+),
+                            lambda_compile!(@ident $($a)+).to_le_bytes(),
                             &mut stack
                         );
                     )*

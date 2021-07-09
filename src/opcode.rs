@@ -141,8 +141,12 @@ impl Op {
         (self.0 >> 12) as u8
     }
 
-    pub fn width(&self) -> usize {
+    pub fn size(&self) -> usize {
         1usize << self.npw2()
+    }
+
+    pub fn width(&self) -> usize {
+        8*self.size()
     }
 
     pub fn imm(&self) -> u8 {
@@ -229,21 +233,21 @@ impl fmt::Display for Op {
         match self.opcode() {
             OpCode::Truncate | OpCode::Extends | OpCode::Extendu => {
                 write!(fmt, "u{}.{} u{}",
-                    8*self.width(),
+                    self.width(),
                     self.opcode(),
                     8*(1 << self.imm())
                 )
             }
             _ if self.has_imm() => {
                 write!(fmt, "u{}.{} {}",
-                    8*self.width(),
+                    self.width(),
                     self.opcode(),
                     self.imm()
                 )
             }
             _ => {
                 write!(fmt, "u{}.{}",
-                    8*self.width(),
+                    self.width(),
                     self.opcode()
                 )
             }
@@ -276,12 +280,18 @@ pub fn disas<W: io::Write>(
 
 
 /// Trait for types that can be compiled
-pub trait OpType: Copy + Clone + Default + Debug + 'static {
-    /// width in bytes, emitted as part of bytecode
+pub trait OpType: Copy + Clone + Debug + 'static {
+    /// size in bytes
+    const SIZE: usize;
+
+    /// width in bits
     const WIDTH: usize;
 
-    /// npw2(width), used in instruction encoding
+    /// npw2(size), used in instruction encoding
     const NPW2: u8;
+
+    /// workaround for lack of array default impls
+    fn default() -> Self;
 
     /// write into stack as bytes
     fn encode(&self, stack: &mut dyn io::Write) -> Result<(), io::Error>;
@@ -297,29 +307,34 @@ pub trait OpType: Copy + Clone + Default + Debug + 'static {
 }
 
 macro_rules! optype_impl {
-    ($t:ty, $s:ty, $w:expr, $p:expr) => {
-        impl OpType for $t {
-            const WIDTH: usize = $w;
+    ([u8; $n:literal ($p:literal)]) => {
+        impl OpType for [u8;$n] {
+            const SIZE: usize = $n;
+            const WIDTH: usize = 8*$n;
             const NPW2: u8 = $p;
+
+            fn default() -> Self {
+                [0; $n]
+            }
 
             fn encode(
                 &self,
                 stack: &mut dyn io::Write
             ) -> Result<(), io::Error> {
-                stack.write_all(&self.to_le_bytes())
+                stack.write_all(self)
             }
 
             fn decode(
                 stack: &mut dyn io::Read
             ) -> Result<Self, io::Error> {
-                let mut buf = [0; $w];
+                let mut buf = [0; $n];
                 stack.read_exact(&mut buf)?;
-                Ok(<$t>::from_le_bytes(buf))
+                Ok(buf)
             }
 
             fn constant(v: Self) -> Rc<OpTree<Self>> {
                 thread_local! {
-                    static CONSTANTS: RefCell<HashMap<$t, Weak<OpTree<$t>>>> = {
+                    static CONSTANTS: RefCell<HashMap<[u8;$n], Weak<OpTree<[u8;$n]>>>> = {
                         RefCell::new(HashMap::new())
                     };
                 }
@@ -338,14 +353,21 @@ macro_rules! optype_impl {
                 })
             }
         }
-    }
+    };
+
 }
 
-optype_impl! { u8,   i8,    1,  0 }
-optype_impl! { u16,  i16,   2,  1 }
-optype_impl! { u32,  i32,   4,  2 }
-optype_impl! { u64,  i64,   8,  3 }
-optype_impl! { u128, i128,  16, 4 }
+optype_impl! { [u8; 1   (0)] }
+optype_impl! { [u8; 2   (1)] }
+optype_impl! { [u8; 4   (2)] }
+optype_impl! { [u8; 8   (3)] }
+optype_impl! { [u8; 16  (4)] }
+optype_impl! { [u8; 32  (5)] }
+optype_impl! { [u8; 64  (6)] }
+optype_impl! { [u8; 128 (7)] }
+
+
+
 
 /// Kinds of operations in tree
 #[derive(Debug, Clone)]
@@ -436,9 +458,9 @@ impl OpCompile<'_> {
     fn sp_push(
         &mut self,
         delta: usize,
-        width: usize,
+        size: usize,
     ) {
-        let x = self.sp + (delta * width);
+        let x = self.sp + (delta * size);
         self.sp = x;
         self.max_sp = max(self.max_sp, x);
     }
@@ -446,26 +468,26 @@ impl OpCompile<'_> {
     fn sp_pop(
         &mut self,
         delta: usize,
-        width: usize,
+        size: usize,
     ) {
-        let x = self.sp - (delta * width);
+        let x = self.sp - (delta * size);
         self.sp = x;
     }
 
     fn sp_align(
         &mut self,
-        width: usize,
+        size: usize,
     ) {
         // align up, we assume sp_align is followed by sp_push,
         // so we leave it to sp_push to check max_sp
         let x = self.sp;
-        let x = x + width-1;
-        let x = x - (x % width);
+        let x = x + size-1;
+        let x = x - (x % size);
         self.sp = x;
 
         // all pushes onto the stack go through a sp_align, so
         // this is where we can also find the max_align
-        self.max_align = max(self.max_align, width);
+        self.max_align = max(self.max_align, size);
     }
 }
 
@@ -551,8 +573,8 @@ impl<T: OpType> OpTree<T> {
 
         let slot = self.slot.get().expect("patching with no slot?");
         let mut slice = &mut stack[
-            slot as usize * T::WIDTH
-                .. slot as usize * T::WIDTH + T::WIDTH
+            slot as usize * T::SIZE
+                .. slot as usize * T::SIZE + T::SIZE
         ];
         v.encode(&mut slice).expect("slice write resulted in io::error?");
     }
@@ -575,13 +597,13 @@ impl<T: OpType> fmt::Display for OpTree<T> {
         match &self.kind {
             // don't bother showing truncate if it's used as a nop,
             // it won't be emitted
-            OpKind::Truncate(a) if a.width() == T::WIDTH => {
+            OpKind::Truncate(a) if a.size() == T::SIZE => {
                 return write!(fmt, "{}", a)
             }
             _ => {}
         }
 
-        let w = 8*T::WIDTH;
+        let w = T::WIDTH;
         match &self.kind {
             OpKind::Imm(v)          => write!(fmt, "(u{}.imm {:?})", w, v),
             OpKind::Sym(s)          => write!(fmt, "(u{}.sym {:?})", w, s),
@@ -622,13 +644,33 @@ impl<T: OpType> fmt::Display for OpTree<T> {
     }
 }
 
+// extra froms for primitives
+macro_rules! optree_from_prim_impl {
+    ($u:ty, $n:literal) => {
+        impl From<$u> for OpTree<[u8;$n]> {
+            fn from(v: $u) -> OpTree<[u8;$n]> {
+                OpTree::new(OpKind::Imm(v.to_le_bytes()))
+            }
+        }
+    }
+}
+
+optree_from_prim_impl! { u8,   1  }
+optree_from_prim_impl! { u16,  2  }
+optree_from_prim_impl! { u32,  4  }
+optree_from_prim_impl! { u64,  8  }
+optree_from_prim_impl! { u128, 16 }
+
 
 // dyn-compatible wrapping trait
 pub trait DynOpTree: Debug + fmt::Display {
-    /// type's width in bytes, needed for determining cast sizes
+    /// type's size in bytes, needed for determining cast sizes
+    fn size(&self) -> usize;
+
+    /// type's width in bits
     fn width(&self) -> usize;
 
-    /// npw2(width), used as a part of instruction encoding
+    /// npw2(size), used as a part of instruction encoding
     fn npw2(&self) -> u8;
 
     /// hook to enable eqz without known type
@@ -647,6 +689,10 @@ pub trait DynOpTree: Debug + fmt::Display {
 }
 
 impl<T: OpType> DynOpTree for OpTree<T> {
+    fn size(&self) -> usize {
+        T::SIZE
+    }
+
     fn width(&self) -> usize {
         T::WIDTH
     }
@@ -682,14 +728,14 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         match &self.kind {
             OpKind::Imm(v) => {
                 // align imms?
-                while state.imms % T::WIDTH != 0 {
+                while state.imms % T::SIZE != 0 {
                     state.stack.write_all(&[0])?;
                     state.imms += 1;
                 }
 
                 // save slot
-                assert!(state.imms % T::WIDTH == 0, "unaligned slot");
-                let slot = state.imms / T::WIDTH;
+                assert!(state.imms % T::SIZE == 0, "unaligned slot");
+                let slot = state.imms / T::SIZE;
                 let slot = u8::try_from(slot).expect("slot overflow");
                 self.slot.set(Some(slot));
 
@@ -697,30 +743,30 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                 v.encode(state.stack)?;
 
                 // update imms
-                state.imms += T::WIDTH;
+                state.imms += T::SIZE;
             }
 
             OpKind::Sym(_) => {
                 // align imms?
-                while state.imms % T::WIDTH != 0 {
+                while state.imms % T::SIZE != 0 {
                     state.stack.write_all(&[0])?;
                     state.imms += 1;
                 }
 
                 // save slot
-                assert!(state.imms % T::WIDTH == 0, "unaligned slot");
-                let slot = state.imms / T::WIDTH;
+                assert!(state.imms % T::SIZE == 0, "unaligned slot");
+                let slot = state.imms / T::SIZE;
                 let slot = u8::try_from(slot).expect("slot overflow");
                 self.slot.set(Some(slot));
 
                 // we'll fill this in later, use an arbitrary constant
                 // to hopefully help debugging
-                for _ in 0..T::WIDTH {
+                for _ in 0..T::SIZE {
                     state.stack.write_all(&[0xcc])?;
                 }
 
                 // update imms
-                state.imms += T::WIDTH;
+                state.imms += T::SIZE;
             }
 
             OpKind::Truncate(a) => {
@@ -896,8 +942,8 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         if let Some(slot) = slot {
             // get slot and align
             Op::new(OpCode::Get, T::NPW2, slot).encode(state.bytecode)?;
-            state.sp_align(T::WIDTH);
-            state.sp_push(1, T::WIDTH);
+            state.sp_align(T::SIZE);
+            state.sp_push(1, T::SIZE);
 
             // are we done with slot? contribute to slot_pool
             if prefs == 1 {
@@ -922,26 +968,26 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
             OpKind::Truncate(a) => {
                 // keep track of original sp to unalign if needed
-                let expected_sp = state.sp + T::WIDTH;
+                let expected_sp = state.sp + T::SIZE;
 
                 a.compile_pass2(state)?;
 
                 // nop if size does not change
-                if a.width() != T::WIDTH {
+                if a.size() != T::SIZE {
                     // truncate
                     Op::new(OpCode::Truncate, T::NPW2, a.npw2()).encode(state.bytecode)?;
-                    state.sp_pop(1, a.width());
-                    state.sp_push(1, T::WIDTH);
+                    state.sp_pop(1, a.size());
+                    state.sp_push(1, T::SIZE);
                 }
 
                 // manually unalign?
                 if state.sp > expected_sp {
                     let diff = state.sp - expected_sp;
-                    assert!(diff % T::WIDTH == 0, "unaligned truncate");
-                    let diff = diff / T::WIDTH;
+                    assert!(diff % T::SIZE == 0, "unaligned truncate");
+                    let diff = diff / T::SIZE;
                     let diff = u8::try_from(diff).expect("unalign overflow");
                     Op::new(OpCode::Unalign, T::NPW2, diff).encode(state.bytecode)?;
-                    state.sp_pop(diff as usize, T::WIDTH);
+                    state.sp_pop(diff as usize, T::SIZE);
                 }
             }
 
@@ -950,9 +996,9 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
                 // extends and align
                 Op::new(OpCode::Extends, a.npw2(), T::NPW2).encode(state.bytecode)?;
-                state.sp_pop(1, a.width());
-                state.sp_align(T::WIDTH);
-                state.sp_push(1, T::WIDTH);
+                state.sp_pop(1, a.size());
+                state.sp_align(T::SIZE);
+                state.sp_push(1, T::SIZE);
             }
 
             OpKind::Extendu(a) => {
@@ -960,9 +1006,9 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
                 // extendu and align
                 Op::new(OpCode::Extendu, a.npw2(), T::NPW2).encode(state.bytecode)?;
-                state.sp_pop(1, a.width());
-                state.sp_align(T::WIDTH);
-                state.sp_push(1, T::WIDTH);
+                state.sp_pop(1, a.size());
+                state.sp_align(T::SIZE);
+                state.sp_push(1, T::SIZE);
             }
 
             OpKind::Select(p, a, b) => {
@@ -970,7 +1016,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Select, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(2, T::WIDTH);
+                state.sp_pop(2, T::SIZE);
             }
 
             OpKind::Eqz(a) => {
@@ -982,70 +1028,70 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Eq, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Ne(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Ne, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Lts(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Lts, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Ltu(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Ltu, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Gts(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Gts, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Gtu(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Gtu, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Les(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Les, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Leu(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Leu, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Ges(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Ges, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Geu(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Geu, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Clz(a) => {
@@ -1067,105 +1113,105 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Add, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Sub(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Sub, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Mul(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Mul, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Divs(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Divs, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Divu(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Divu, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Rems(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Rems, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Remu(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Remu, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::And(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::And, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Or(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Or, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Xor(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Xor, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Shl(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Shl, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Shrs(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Shrs, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Shru(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Shru, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Rotl(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Rotl, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
 
             OpKind::Rotr(a, b) => {
                 a.compile_pass2(state)?;
                 b.compile_pass2(state)?;
                 Op::new(OpCode::Rotr, T::NPW2, 0).encode(state.bytecode)?;
-                state.sp_pop(1, T::WIDTH);
+                state.sp_pop(1, T::SIZE);
             }
         }
 
@@ -1188,16 +1234,16 @@ impl<T: OpType> DynOpTree for OpTree<T> {
             // fallback to allocating an immediate
             let slot = slot.unwrap_or_else(|| {
                 // align imms?
-                if state.imms % T::WIDTH != 0 {
-                    state.imms += T::WIDTH - (state.imms % T::WIDTH);
+                if state.imms % T::SIZE != 0 {
+                    state.imms += T::SIZE - (state.imms % T::SIZE);
                 }
 
-                assert!(state.imms % T::WIDTH == 0, "unaligned slot");
-                let slot = state.imms / T::WIDTH;
+                assert!(state.imms % T::SIZE == 0, "unaligned slot");
+                let slot = state.imms / T::SIZE;
                 let slot = u8::try_from(slot).expect("slot overflow");
 
                 // update imms
-                state.imms += T::WIDTH;
+                state.imms += T::SIZE;
 
                 slot
             });
@@ -1218,9 +1264,9 @@ mod tests {
 
     #[test]
     fn compile_add() {
-        let example = OpTree::new(OpKind::<u32>::Add(
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(2)))
+        let example = OpTree::new(OpKind::Add(
+            Rc::new(OpTree::from(1u32)),
+            Rc::new(OpTree::from(2u32))
         ));
 
         println!();
@@ -1246,12 +1292,12 @@ mod tests {
 
     #[test]
     fn compile_alignment() {
-        let example = OpTree::new(OpKind::<u16>::Add(
-            Rc::new(OpTree::new(OpKind::<u16>::Extends(
-                Rc::new(OpTree::new(OpKind::<u8>::Imm(2)))
+        let example = OpTree::new(OpKind::Add(
+            Rc::new(OpTree::new(OpKind::<[u8;2]>::Extends(
+                Rc::new(OpTree::from(2u8))
             ))),
-            Rc::new(OpTree::new(OpKind::<u16>::Truncate(
-                Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
+            Rc::new(OpTree::new(OpKind::<[u8;2]>::Truncate(
+                Rc::new(OpTree::from(1u32)),
             ))),
         ));
 
@@ -1278,20 +1324,20 @@ mod tests {
 
     #[test]
     fn compile_dag() {
-        let two = Rc::new(OpTree::new(OpKind::<u32>::Imm(2)));
-        let a = Rc::new(OpTree::new(OpKind::<u32>::Add(
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(1))),
-            Rc::new(OpTree::new(OpKind::<u32>::Imm(2)))
+        let two = Rc::new(OpTree::from(2u32));
+        let a = Rc::new(OpTree::new(OpKind::Add(
+            Rc::new(OpTree::from(1u32)),
+            Rc::new(OpTree::from(2u32))
         )));
-        let b = Rc::new(OpTree::new(OpKind::<u32>::Divu(
+        let b = Rc::new(OpTree::new(OpKind::Divu(
             a.clone(), two.clone()
         )));
-        let c = Rc::new(OpTree::new(OpKind::<u32>::Remu(
+        let c = Rc::new(OpTree::new(OpKind::Remu(
             a.clone(), two.clone()
         )));
-        let example = OpTree::new(OpKind::<u32>::Eq(
-            Rc::new(OpTree::new(OpKind::<u32>::Add(
-                Rc::new(OpTree::new(OpKind::<u32>::Mul(b, two))),
+        let example = OpTree::new(OpKind::Eq(
+            Rc::new(OpTree::new(OpKind::Add(
+                Rc::new(OpTree::new(OpKind::Mul(b, two))),
                 c,
             ))),
             a,
@@ -1320,15 +1366,15 @@ mod tests {
 
     #[test]
     fn compile_pythag() {
-        let a = Rc::new(OpTree::new(OpKind::<u32>::Imm(3)));
-        let b = Rc::new(OpTree::new(OpKind::<u32>::Imm(4)));
-        let c = Rc::new(OpTree::new(OpKind::<u32>::Imm(5)));
-        let example = OpTree::new(OpKind::<u32>::Eq(
-            Rc::new(OpTree::new(OpKind::<u32>::Add(
-                Rc::new(OpTree::new(OpKind::<u32>::Mul(a.clone(), a))),
-                Rc::new(OpTree::new(OpKind::<u32>::Mul(b.clone(), b)))
+        let a = Rc::new(OpTree::from(3u32));
+        let b = Rc::new(OpTree::from(4u32));
+        let c = Rc::new(OpTree::from(5u32));
+        let example = OpTree::new(OpKind::Eq(
+            Rc::new(OpTree::new(OpKind::Add(
+                Rc::new(OpTree::new(OpKind::Mul(a.clone(), a))),
+                Rc::new(OpTree::new(OpKind::Mul(b.clone(), b)))
             ))),
-            Rc::new(OpTree::new(OpKind::<u32>::Mul(c.clone(), c)))
+            Rc::new(OpTree::new(OpKind::Mul(c.clone(), c)))
         ));
 
         println!();
