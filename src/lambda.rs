@@ -123,6 +123,29 @@ macro_rules! lambda_compile {
                 ) -> lambda_compile!(@prim $r) {
                     self.try_call($(lambda_compile!(@ident $($a)+)),*).unwrap()
                 }
+
+                /// Call underlying lambda, returning any errors during execution,
+                /// while maintaining secrecy
+                #[allow(dead_code)]
+                pub fn try_secret_call(
+                    &self,
+                    $(lambda_compile!(@ident $($a)+): $t),*
+                ) -> Result<$r, $crate::error::Error> {
+                    self.try_call(
+                        $(
+                            unsafe { lambda_compile!(@ident $($a)+).declassify() }
+                        ),*
+                    ).map(|r| <$r>::classify(r))
+                }
+
+                /// Call underlying lambda, while maintaining secrecy
+                #[allow(dead_code)]
+                pub fn secret_call(
+                    &self,
+                    $(lambda_compile!(@ident $($a)+): $t),*
+                ) -> $r {
+                    self.try_secret_call($(lambda_compile!(@ident $($a)+)),*).unwrap()
+                }
             }
 
             SecretClosure::compile(
