@@ -63,7 +63,7 @@ macro_rules! lambda_compile {
                     );
 
                     // compile tree
-                    let (bytecode, stack) = v.tree().compile();
+                    let (bytecode, stack) = v.tree().compile(true);
 
                     // return closure
                     SecretClosure {
@@ -239,5 +239,54 @@ mod tests {
         let v = l(6, 7, 8);
         println!("{}", v);
         assert_eq!(v, false);
+    }
+
+    #[test]
+    fn lambda_sqrt() {
+        println!();
+
+        // a simple binary-search based sqrt
+        let l = lambda_compile!(|x: SecretU32| -> SecretU32 {
+            // binary search
+            let mut lo = SecretU32::constant(0);
+            let mut hi = x.clone();
+
+            // each round determines one bit, so only need log(x) rounds
+            for _ in 0..32 {
+                // test mid
+                let mid = (lo.clone() + hi.clone()) / SecretU32::constant(2);
+                let mid_sq = mid.clone()*mid.clone();
+
+                // find new lo/hi using select to preserve const-time
+                let mid_sq_lt = mid_sq.lt(x.clone());
+                lo = mid_sq_lt.clone().select(mid.clone(), lo.clone());
+                hi = mid_sq_lt.clone().select(hi.clone(), mid.clone());
+            }
+
+            // lo and hi should converge
+            hi
+        });
+        print!("  bytecode:");
+        for i in (0..l.bytecode().len()).step_by(2) {
+            print!(" {:04x}", u16::from_le_bytes(
+                <[u8; 2]>::try_from(&l.bytecode()[i..i+2]).unwrap()
+            ));
+        }
+        println!();
+        l.disas(io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..unsafe { l.stack() }.len() {
+            print!(" {:02x}", unsafe { l.stack()[i] });
+        }
+        println!();
+        println!("  call:");
+        let v = l.try_call(100);
+        println!("{:?}", v);
+        assert_eq!(v.unwrap(), 10);
+
+        println!("  call:");
+        let v = l.try_call(10000);
+        println!("{:?}", v);
+        assert_eq!(v.unwrap(), 100);
     }
 }

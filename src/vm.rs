@@ -984,7 +984,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, mut stack) = example.compile();
+        let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1022,7 +1022,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, mut stack) = example.compile();
+        let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1070,7 +1070,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, mut stack) = example.compile();
+        let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1110,7 +1110,7 @@ mod tests {
 
         println!();
         println!("input: {}", example);
-        let (bytecode, mut stack) = example.compile();
+        let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
             print!(" {:04x}", u16::from_le_bytes(
@@ -1148,7 +1148,7 @@ mod tests {
                 ));
 
                 println!();
-                let (bytecode, mut stack) = input.compile();
+                let (bytecode, mut stack) = input.compile(true);
                 print!("  bytecode:");
                 for i in (0..bytecode.len()).step_by(2) {
                     print!(" {:04x}", u16::from_le_bytes(

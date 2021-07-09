@@ -197,7 +197,7 @@ impl From<bool> for SecretBool {
 
 impl Default for SecretBool {
     fn default() -> Self {
-        Self(OpTree::<u8>::zero())
+        Self::constant(false)
     }
 }
 
@@ -205,6 +205,12 @@ impl SecretBool {
     /// Wraps a non-secret value as a secret value
     pub fn new(v: bool) -> SecretBool {
         Self::classify(v)
+    }
+
+    /// Create a non-secret constant value, these are available for
+    /// more optimizations than secret values
+    pub fn constant(v: bool) -> SecretBool {
+        Self(OpTree::<u8>::constant(v as u8))
     }
 
     /// Helper to convert to any type, we can do this without worry
@@ -420,7 +426,7 @@ macro_rules! secret_impl {
 
         impl Default for $t {
             fn default() -> Self {
-                Self(OpTree::zero())
+                Self(OpTree::constant(0))
             }
         }
 
@@ -430,11 +436,17 @@ macro_rules! secret_impl {
                 Self::classify(v)
             }
 
+            /// Create a non-secret constant value, these are available for
+            /// more optimizations than secret values
+            pub fn constant(v: $p) -> Self {
+                Self(OpTree::constant(v as $u))
+            }
+
             // abs only available on signed types
             match_sig! { $s {
                 s => {
                     pub fn abs(self) -> Self {
-                        self.clone().lt(Self(OpTree::zero())).select(
+                        self.clone().lt(Self(OpTree::constant(0))).select(
                             self.clone().neg(),
                             self
                         )
@@ -473,18 +485,18 @@ macro_rules! secret_impl {
                 s => {}
                 u => {
                     pub fn is_power_of_two(self) -> SecretBool {
-                        self.count_ones().eq(Self(OpTree::one()))
+                        self.count_ones().eq(Self(OpTree::constant(1)))
                     }
 
                     pub fn next_power_of_two(self) -> $t {
                         // based on implementation in rust core
-                        self.clone().le(Self(OpTree::one()).clone()).select(
+                        self.clone().le(Self(OpTree::constant(1))).select(
                             // special case if <= 1
-                            Self(OpTree::zero()),
+                            Self(OpTree::constant(0)),
                             // next_power_of_two_minus_1
-                            Self(OpTree::ones())
-                                >> (self - Self(OpTree::one()).clone()).leading_zeros()
-                        ) + Self(OpTree::one())
+                            Self(OpTree::constant(<$u>::MAX))
+                                >> (self - Self(OpTree::constant(1))).leading_zeros()
+                        ) + Self(OpTree::constant(1))
                     }
                 }
             }}
@@ -502,7 +514,7 @@ macro_rules! secret_impl {
             type Output = $t;
             fn not(self) -> $t {
                 // note, this is how it's done in wasm
-                self ^ Self(OpTree::ones())
+                self ^ Self(OpTree::constant(<$u>::MAX))
             }
         }
 
@@ -552,7 +564,7 @@ macro_rules! secret_impl {
                     type Output = $t;
                     fn neg(self) -> $t {
                         // note, this is how it's done in wasm
-                        Self(OpTree::zero()) - self
+                        Self(OpTree::constant(0)) - self
                     }
                 }
             }
