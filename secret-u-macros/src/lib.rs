@@ -23,14 +23,16 @@ fn npw2(x: u128) -> usize {
     }
 }
 
-fn find_in_width(table: &[u128]) -> usize {
+fn find_in_width(table: &[u128], parallel: usize) -> usize {
     let width = npw2(table.len() as u128);
+    let width = max(width, parallel);
     // the width needs itself to be a power of two for our transpose to work
     width.next_power_of_two()
 }
 
-fn find_out_width(table: &[u128]) -> usize {
+fn find_out_width(table: &[u128], parallel: usize) -> usize {
     let width = npw2(table.iter().max().copied().unwrap_or(0) + 1);
+    let width = max(width, parallel);
     // the width needs itself to be a power of two for our transpose to work
     width.next_power_of_two()
 }
@@ -433,15 +435,23 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     let index_ty = index_ty.unwrap_or(elem_ty);
 
     // build function
+    let parallel = args.parallel.unwrap_or(1);
     let prim_ty = mid_ty.prim_ty();
     let secret_ty = mid_ty.secret_ty();
     let index_secret_ty = index_ty.secret_ty();
     let ret_secret_ty = ret_ty.secret_ty();
-    let a_width = find_in_width(&elems);
-    let b_width = find_out_width(&elems);
+    let a_width = find_in_width(&elems, parallel);
+    let b_width = find_out_width(&elems, parallel);
+
+    let arg_tys = (0..parallel).map(|i| -> syn::FnArg {
+        let a = ident!("a{}", i);
+        parse_quote! { #a: #index_secret_ty }
+    });
+    let ret_tys = (0..parallel).map(|_| -> syn::Type {
+        parse_quote! { #ret_secret_ty }
+    });
 
     // create variables
-    let parallel = args.parallel.unwrap_or(1);
     let a_args = (0..parallel)
         .map(|i| -> syn::Expr {
             let a = ident!("a{}", i);
@@ -498,8 +508,7 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     let q = quote! {
-        #vis fn #name(a0: #index_secret_ty) -> #ret_secret_ty {
-            // TODO should we be more careful with forcing trait imports?
+        #vis fn #name(#(#arg_tys),*) -> (#(#ret_tys),*) {
             use secret_u::int::SecretTruncate;
             use secret_u::int::SecretEq;
 
@@ -515,7 +524,7 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#b_transpose)*
 
-            ( #(#b_rets),* )
+            (#(#b_rets),*)
         }
     };
 

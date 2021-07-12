@@ -177,4 +177,42 @@ mod tests {
             format!("Hello World!").into_bytes()
         );
     }
+
+    #[bitslice(parallel=4)]
+    const par: [u8; 4] = [
+        0x12, 0x34, 0x56, 0x78
+    ];
+
+    #[test]
+    fn bitslice_parallel() {
+        use crate::int::*;
+        println!();
+
+        let f = lambda_compile!(|a: SecretU8, b: SecretU8, c: SecretU8, d: SecretU8| -> SecretU32 {
+            let (a, b, c, d) = par(a, b, c, d);
+            // marshall into u32
+            (SecretU32::from(a) << SecretU32::constant(24))
+                | (SecretU32::from(b) << SecretU32::constant(16))
+                | (SecretU32::from(c) << SecretU32::constant(8))
+                | (SecretU32::from(d) << SecretU32::constant(0))
+        });
+
+        print!("  bytecode:");
+        for i in (0..f.bytecode().len()).step_by(2) {
+            print!(" {:04x}", u16::from_le_bytes(
+                <[u8; 2]>::try_from(&f.bytecode()[i..i+2]).unwrap()
+            ));
+        }
+        println!();
+        f.disas(io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..unsafe { f.stack() }.len() {
+            print!(" {:02x}", unsafe { f.stack()[i] });
+        }
+        println!();
+
+        let a = f.call(0, 1, 2, 3);
+        println!("{:?}", a);
+        assert_eq!(a, 0x12345678);
+    }
 }
