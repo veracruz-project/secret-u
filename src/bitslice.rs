@@ -53,12 +53,12 @@ mod tests {
         );
     }
 
-    #[bitslice]
-    const div3: [u8; 8] = [
-        1, 0, 0, 1,
-        0, 0, 1, 0,
-        0, 1, 0, 0,
-        1, 0, 0, 1,
+    #[bitslice(index_type="u32")]
+    const div3: [bool; 16] = [
+        true,  false, false, true,
+        false, false, true,  false,
+        false, true,  false, false,
+        true,  false, false, true,
     ];
 
     #[test]
@@ -66,7 +66,7 @@ mod tests {
         use crate::int::*;
         println!();
 
-        let f = lambda_compile!(|x: SecretU8| -> SecretU8 {
+        let f = lambda_compile!(|x: SecretU32| -> SecretBool {
             div3(x)
         });
 
@@ -92,13 +92,53 @@ mod tests {
         assert_eq!(
             a,
             (0..16)
-                .map(|i| if i % 3 == 0 { 1 } else { 0 })
+                .map(|i| i % 3 == 0)
                 .collect::<Vec<_>>()
         );
     }
 
     #[bitslice]
-    const hello: [u8; 8] = [
+    const big: [u32; 2] = [
+        0x12345678,
+        0x87654321,
+    ];
+
+    #[test]
+    fn bitslice_big() {
+        use crate::int::*;
+        println!();
+
+        let f = lambda_compile!(|x: SecretU8| -> SecretU32 {
+            big(x)
+        });
+
+        print!("  bytecode:");
+        for i in (0..f.bytecode().len()).step_by(2) {
+            print!(" {:04x}", u16::from_le_bytes(
+                <[u8; 2]>::try_from(&f.bytecode()[i..i+2]).unwrap()
+            ));
+        }
+        println!();
+        f.disas(io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..unsafe { f.stack() }.len() {
+            print!(" {:02x}", unsafe { f.stack()[i] });
+        }
+        println!();
+
+        let mut a = Vec::new();
+        for i in 0..2 {
+            a.push(f.call(i));
+        }
+        println!("{:?}", a);
+        assert_eq!(
+            a,
+            vec![0x12345678, 0x87654321]
+        );
+    }
+
+    #[bitslice]
+    const hello: [u8; 12] = [
         b'H', b'e', b'l', b'l',
         b'o', b' ', b'W', b'o',
         b'r', b'l', b'd', b'!',

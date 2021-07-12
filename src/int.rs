@@ -806,8 +806,8 @@ macro_rules! secret_from_impl {
     };
     // unsigned extending (u8 -> u32)
     ($from:ty => FU($to:ty), $($rest:tt)*) => {
-        impl SecretTruncate<$from> for $to {
-            fn truncate(v: $from) -> $to {
+        impl From<$from> for $to {
+            fn from(v: $from) -> $to {
                 Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
             }
         }
@@ -815,8 +815,8 @@ macro_rules! secret_from_impl {
     };
     // signed extending (i8 -> i32)
     ($from:ty => FS($to:ty), $($rest:tt)*) => {
-        impl SecretTruncate<$from> for $to {
-            fn truncate(v: $from) -> $to {
+        impl From<$from> for $to {
+            fn from(v: $from) -> $to {
                 Self(Rc::new(OpTree::new(OpKind::Extends(v.0))))
             }
         }

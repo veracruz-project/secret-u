@@ -527,9 +527,11 @@ impl<T: OpType> OpTree<T> {
 
         // at this point stack contains imms, but we also need space for
         // the working stack
-        let imms = state.imms + state.max_align-1;
+        let imms = state.imms + state.max_align-1;  // align imms
         let imms = imms - (imms % state.max_align);
-        let imms = imms + state.max_sp;
+        let imms = imms + state.max_sp;             // add space for stack
+        let imms = imms + state.max_align-1;        // align stack
+        let imms = imms - (imms % state.max_align);
         stack.resize(imms, 0);
 
         // add return instruction to type-check the result

@@ -9,6 +9,7 @@ use syn::parse_quote;
 use quote::quote;
 use darling::FromMeta;
 use std::iter;
+use std::cmp::*;
 
 use quine_mc_cluskey as qmc;
 
@@ -75,6 +76,8 @@ fn simplify_bitexpr(expr: qmc::Bool) -> qmc::Bool {
 struct BitSliceArgs {
     #[darling(default)]
     parallel: Option<usize>,
+    #[darling(default)]
+    index_type: Option<String>,
 }
 
 macro_rules! ident {
@@ -90,6 +93,14 @@ macro_rules! lit {
 }
 
 macro_rules! bail {
+    (_, $($fmt:tt)+) => {
+        return TokenStream::from(
+            syn::Error::new(
+                Span::call_site(),
+                format!($($fmt)+)
+            ).to_compile_error()
+        )
+    };
     ($s:expr, $($fmt:tt)+) => {
         return TokenStream::from(
             syn::Error::new(
@@ -97,11 +108,12 @@ macro_rules! bail {
                 format!($($fmt)+)
             ).to_compile_error()
         )
-    }
+    };
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum Prim {
+    Bool,
     U8,
     U16,
     U32,
@@ -115,8 +127,37 @@ enum Prim {
 }
 
 impl Prim {
+    fn from_ident(ident: &str) -> Option<Prim> {
+        match ident {
+            "bool" => Some(Prim::Bool),
+            "u8"   => Some(Prim::U8),
+            "u16"  => Some(Prim::U16),
+            "u32"  => Some(Prim::U32),
+            "u64"  => Some(Prim::U64),
+            "u128" => Some(Prim::U128),
+            "i8"   => Some(Prim::I8),
+            "i16"  => Some(Prim::I16),
+            "i32"  => Some(Prim::I32),
+            "i64"  => Some(Prim::I64),
+            "i128" => Some(Prim::I128),
+            _      => None,
+        }
+    }
+
+    fn from_len(len: usize) -> Prim {
+        match len {
+            len if len <= u8::MAX as usize => Prim::U8,
+            len if len <= u16::MAX as usize  => Prim::U16,
+            len if len <= u32::MAX as usize  => Prim::U32,
+            len if len <= u64::MAX as usize  => Prim::U64,
+            len if len <= u128::MAX as usize => Prim::U128,
+            _ => panic!("len > u128?"),
+        }
+    }
+
     fn width(&self) -> usize {
         match self {
+            Prim::Bool => 1,
             Prim::U8   => 8,
             Prim::U16  => 16,
             Prim::U32  => 32,
@@ -132,6 +173,7 @@ impl Prim {
 
     fn prim_ty(&self) -> syn::Type {
         let ident = match self {
+            Prim::Bool => ident!("bool"),
             Prim::U8   => ident!("u8"),
             Prim::U16  => ident!("u16"),
             Prim::U32  => ident!("u32"),
@@ -151,6 +193,7 @@ impl Prim {
 
     fn secret_ty(&self) -> syn::Type {
         let ident = match self {
+            Prim::Bool => ident!("SecretBool"),
             Prim::U8   => ident!("SecretU8"),
             Prim::U16  => ident!("SecretU16"),
             Prim::U32  => ident!("SecretU32"),
@@ -182,13 +225,11 @@ fn build_transpose(
         let mut dim = #dim;
         let mut mask = #mask;
         while dim > 0 {
-            println!("dim {}", dim);
             let dim_s = #secret_ty::constant(dim as #prim_ty);
             let mask_s = #secret_ty::constant(mask);
 
             let mut i = 0;
             while i < #width {
-                println!("i {}", i);
                 let x = mask_s.clone() & ((#a[i].clone() >> dim_s.clone()) ^ #a[i+dim].clone());
                 #a[i]     ^= x.clone() << dim_s.clone();
                 #a[i+dim] ^= x;
@@ -301,11 +342,20 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
+    let index_ty = if let Some(arg) = args.index_type {
+        match Prim::from_ident(&arg) {
+            Some(index_ty) => Some(index_ty),
+            None => bail!(_, "index_type must be a primitive"),
+        }
+    } else {
+        None
+    };
+
     // parse table
     let name = table.ident;
     let vis = table.vis;
 
-    let prim;
+    let ret_ty;
     let size;
     match *table.ty {
         syn::Type::Array(arr) => {
@@ -317,18 +367,9 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
                 },
                 _ => None,
             };
-            prim = match ident.as_ref().map(|s| s.as_str()) {
-                Some("u8")   => Prim::U8,
-                Some("u16")  => Prim::U16,
-                Some("u32")  => Prim::U32,
-                Some("u64")  => Prim::U64,
-                Some("u128") => Prim::U128,
-                Some("i8")   => Prim::I8,
-                Some("i16")  => Prim::I16,
-                Some("i32")  => Prim::I32,
-                Some("i64")  => Prim::I64,
-                Some("i128") => Prim::I128,
-                _ => bail!(arr.elem, "bitslice requires a primitive type here"),
+            ret_ty = match ident.and_then(|s| Prim::from_ident(&s)) {
+                Some(ret_ty) => ret_ty,
+                None => bail!(arr.elem, "bitslice requires a primitive type here"),
             };
 
             // find array size
@@ -355,13 +396,16 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     // now find the array elements
     let mut elems = Vec::<u128>::new();
     match *table.expr {
-        syn::Expr::Array(arr) => {
-            for elem in arr.elems {
+        syn::Expr::Array(ref arr) => {
+            for elem in &arr.elems {
                 let lit = match &elem {
                     syn::Expr::Lit(lit) => Some(&lit.lit),
                     _ => None,
                 };
                 match lit {
+                    Some(syn::Lit::Bool(bool_)) => {
+                        elems.push(if bool_.value { 1 } else { 0 })
+                    }
                     Some(syn::Lit::Byte(byte)) => {
                         elems.push(byte.value() as u128);
                     }
@@ -378,14 +422,21 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
         _ => bail!(table.expr, "bitslice requires an array"),
     }
 
-    println!("args = {:?}", args);
-    println!("prim = {:?}", prim);
-    println!("size = {:?}", size);
-    println!("elems = {:?}", elems);
+    // check size
+    if size != elems.len() {
+        bail!(table.expr, "expected array of size {}, found one of size {}", size, elems.len());
+    }
+
+    // find best types
+    let elem_ty = Prim::from_len(elems.len());
+    let mid_ty = max_by_key(elem_ty, ret_ty, |x| x.width());
+    let index_ty = index_ty.unwrap_or(elem_ty);
 
     // build function
-    let prim_ty = prim.prim_ty();
-    let secret_ty = prim.secret_ty();
+    let prim_ty = mid_ty.prim_ty();
+    let secret_ty = mid_ty.secret_ty();
+    let index_secret_ty = index_ty.secret_ty();
+    let ret_secret_ty = ret_ty.secret_ty();
     let a_width = find_in_width(&elems);
     let b_width = find_out_width(&elems);
 
@@ -394,7 +445,13 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     let a_args = (0..parallel)
         .map(|i| -> syn::Expr {
             let a = ident!("a{}", i);
-            parse_quote! { #a }
+            if mid_ty.width() > index_ty.width() {
+                parse_quote! { #secret_ty::from(#a) }
+            } else if mid_ty.width() < index_ty.width() {
+                parse_quote! { #secret_ty::truncate(#a) }
+            } else {
+                parse_quote! { #a }
+            }
         })
         .chain(
             iter::repeat(parse_quote! { #secret_ty :: constant(0) })
@@ -403,13 +460,23 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     let b_rets = (0..parallel)
         .map(|i| -> syn::Expr {
             // mask off extra bits introduced by bitwise not
-            if b_width == prim.width() {
+            let ret: syn::Expr = if b_width == ret_ty.width() {
                 let i = lit!(i);
                 parse_quote! { b[#i].clone() }
             } else {
                 let mask = lit!((1 << b_width) - 1);
                 let i = lit!(i);
                 parse_quote! { #secret_ty::constant(#mask) & b[#i].clone() }
+            };
+
+            if ret_ty == Prim::Bool {
+                parse_quote! { (#ret & #secret_ty::constant(1)).eq(#secret_ty::constant(1)) }
+            } else if ret_ty.width() > mid_ty.width() {
+                parse_quote! { #ret_secret_ty::from(#ret) }
+            } else if ret_ty.width() < mid_ty.width() {
+                parse_quote! { #ret_secret_ty::truncate(#ret) }
+            } else {
+                parse_quote! { #ret }
             }
         });
 
@@ -431,7 +498,11 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     let q = quote! {
-        #vis fn #name(a0: #secret_ty) -> #secret_ty {
+        #vis fn #name(a0: #index_secret_ty) -> #ret_secret_ty {
+            // TODO should we be more careful with forcing trait imports?
+            use secret_u::int::SecretTruncate;
+            use secret_u::int::SecretEq;
+
             let mut a: [#secret_ty; #a_width] = [
                 #(#a_args),*
             ];

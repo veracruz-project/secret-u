@@ -719,7 +719,10 @@ pub fn exec<'a>(
         {
             print!("    exec {:#06x} ::", op);
             for i in 0..stack.len() {
-                print!(" {:02x}", stack[i]);
+                print!("{}{:02x}",
+                    if i == sp { '|' } else { ' ' },
+                    stack[i]
+                );
             }
             println!();
         }
