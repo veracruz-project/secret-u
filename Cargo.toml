@@ -7,7 +7,10 @@ edition = "2018"
 [features]
 # show VM execution
 trace = []
+# show proc macro generation
+debug-proc-macro = ["secret-u-macros/debug-proc-macro"]
 
 [dependencies]
+secret-u-macros = { path = "secret-u-macros" }
 thiserror = "1.0.25"
 paste = "1.0.5"

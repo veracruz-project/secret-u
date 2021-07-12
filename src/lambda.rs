@@ -1,7 +1,6 @@
 
 // used by macros?
-#[allow(unused)]
-use paste::paste;
+pub use paste::paste;
 
 
 /// A macro for compiling parameterized, secret expressions into 
