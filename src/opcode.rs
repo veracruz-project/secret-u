@@ -299,11 +299,29 @@ pub trait OpType: Copy + Clone + Debug + 'static {
     /// read from stack
     fn decode(stack: &mut dyn io::Read) -> Result<Self, io::Error>;
 
+    /// A constant, non-secret 0
+    ///
+    /// Note, this needs to be here since thread-local storage can't
+    /// depend on generic types
+    fn zero() -> Rc<OpTree<Self>>;
+
+    /// A constant, non-secret 1
+    ///
+    /// Note, this needs to be here since thread-local storage can't
+    /// depend on generic types
+    fn one() -> Rc<OpTree<Self>>;
+
+    /// A constant with all bits set to 1, non-secret
+    ///
+    /// Note, this needs to be here since thread-local storage can't
+    /// depend on generic types
+    fn ones() -> Rc<OpTree<Self>>;
+
     /// Register a const in this OpType's constant pool
     ///
     /// Note, this needs to be here since thread-local storage can't
     /// depend on generic types
-    fn constant(v: Self) -> Rc<OpTree<Self>>;
+    fn const_(v: Self) -> Rc<OpTree<Self>>;
 }
 
 macro_rules! optype_impl {
@@ -332,7 +350,51 @@ macro_rules! optype_impl {
                 Ok(buf)
             }
 
-            fn constant(v: Self) -> Rc<OpTree<Self>> {
+            fn zero() -> Rc<OpTree<Self>> {
+                // Hold an Rc here so this is never freed
+                thread_local! {
+                    static ZERO: RefCell<Option<Rc<OpTree<[u8;$n]>>>> = RefCell::new(None);
+                }
+
+                ZERO.with(|v| {
+                    v.borrow_mut()
+                        .get_or_insert_with(|| Self::const_([0; $n]))
+                        .clone()
+                })
+            }
+
+            fn one() -> Rc<OpTree<Self>> {
+                // Hold an Rc here so this is never freed
+                thread_local! {
+                    static ONE: RefCell<Option<Rc<OpTree<[u8;$n]>>>> = RefCell::new(None);
+                }
+
+                ONE.with(|v| {
+                    v.borrow_mut()
+                        .get_or_insert_with(|| {
+                            // don't know an easier way to build this
+                            let mut one = [0; $n];
+                            one[0] = 1;
+                            Self::const_(one)
+                        })
+                        .clone()
+                })
+            }
+
+            fn ones() -> Rc<OpTree<Self>> {
+                // Hold an Rc here so this is never freed
+                thread_local! {
+                    static ONES: RefCell<Option<Rc<OpTree<[u8;$n]>>>> = RefCell::new(None);
+                }
+
+                ONES.with(|v| {
+                    v.borrow_mut()
+                        .get_or_insert_with(|| Self::const_([0xff; $n]))
+                        .clone()
+                })
+            }
+
+            fn const_(v: Self) -> Rc<OpTree<Self>> {
                 thread_local! {
                     static CONSTANTS: RefCell<HashMap<[u8;$n], Weak<OpTree<[u8;$n]>>>> = {
                         RefCell::new(HashMap::new())
@@ -500,9 +562,24 @@ impl<T: OpType> OpTree<T> {
         }
     }
 
+    /// A constant 0
+    pub fn zero() -> Rc<Self> {
+        T::zero()
+    }
+
+    /// A constant 1
+    pub fn one() -> Rc<Self> {
+        T::one()
+    }
+
+    /// A constant with all bits set to 1
+    pub fn ones() -> Rc<Self> {
+        T::ones()
+    }
+
     /// Register a const in this OpType's constant pool
-    pub fn constant(v: T) -> Rc<Self> {
-        T::constant(v)
+    pub fn const_(v: T) -> Rc<Self> {
+        T::const_(v)
     }
 
     /// high-level compile into bytecode, stack, and initial stack pointer

@@ -271,13 +271,13 @@ mod tests {
         // a simple binary-search based sqrt
         let l = lambda_compile!(|x: SecretU32| -> SecretU32 {
             // binary search
-            let mut lo = SecretU32::constant(0);
+            let mut lo = SecretU32::const_(0);
             let mut hi = x.clone();
 
             // each round determines one bit, so only need log(x) rounds
             for _ in 0..32 {
                 // test mid
-                let mid = (lo.clone() + hi.clone()) / SecretU32::constant(2);
+                let mid = (lo.clone() + hi.clone()) / SecretU32::const_(2);
                 let mid_sq = mid.clone()*mid.clone();
 
                 // find new lo/hi using select to preserve const-time

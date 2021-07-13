@@ -191,10 +191,10 @@ mod tests {
         let f = lambda_compile!(|a: SecretU8, b: SecretU8, c: SecretU8, d: SecretU8| -> SecretU32 {
             let (a, b, c, d) = par(a, b, c, d);
             // marshall into u32
-            (SecretU32::from(a) << SecretU32::constant(24))
-                | (SecretU32::from(b) << SecretU32::constant(16))
-                | (SecretU32::from(c) << SecretU32::constant(8))
-                | (SecretU32::from(d) << SecretU32::constant(0))
+            (SecretU32::from(a) << SecretU32::const_(24))
+                | (SecretU32::from(b) << SecretU32::const_(16))
+                | (SecretU32::from(c) << SecretU32::const_(8))
+                | (SecretU32::from(d) << SecretU32::const_(0))
         });
 
         print!("  bytecode:");

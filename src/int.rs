@@ -199,7 +199,7 @@ impl From<bool> for SecretBool {
 
 impl Default for SecretBool {
     fn default() -> Self {
-        Self::constant(false)
+        Self::const_(false)
     }
 }
 
@@ -211,8 +211,12 @@ impl SecretBool {
 
     /// Create a non-secret constant value, these are available for
     /// more optimizations than secret values
-    pub fn constant(v: bool) -> SecretBool {
-        Self(OpTree::<[u8;1]>::constant([v as u8]))
+    pub fn const_(v: bool) -> SecretBool {
+        Self(if v {
+            OpTree::<[u8;1]>::one()
+        } else {
+            OpTree::<[u8;1]>::zero()
+        })
     }
 
     /// Helper to convert to any type, we can do this without worry
@@ -343,7 +347,7 @@ macro_rules! match_arr {
 }
 
 macro_rules! secret_impl {
-    ($t:ident, $u:ty, $n:literal, $s:ident, $zero:expr, $one:expr, $ones:expr) => {
+    ($t:ident, $u:ty, $n:literal, $s:ident) => {
         /// A secret integer who's value is ensured to not be leaked by Rust's type-system
         ///
         /// Note, like the underlying Rc type, clone is relatively cheap, but
@@ -414,7 +418,7 @@ macro_rules! secret_impl {
 
         impl Default for $t {
             fn default() -> Self {
-                Self::constant($zero)
+                Self::zero()
             }
         }
 
@@ -424,15 +428,30 @@ macro_rules! secret_impl {
                 Self::classify(v)
             }
 
+            /// A constant, non-secret 0
+            pub fn zero() -> Self {
+                Self(OpTree::zero())
+            }
+
+            /// A constant, non-secret 1
+            pub fn one() -> Self {
+                Self(OpTree::one())
+            }
+
+            /// A constant with all bits set to 1, non-secret
+            pub fn ones() -> Self {
+                Self(OpTree::ones())
+            }
+
             /// Create a non-secret constant value, these are available for
             /// more optimizations than secret values
-            pub fn constant(v: $u) -> Self {
+            pub fn const_(v: $u) -> Self {
                 match_arr! { $s {
                     _ => {
-                        Self(OpTree::constant(v.to_le_bytes()))
+                        Self(OpTree::const_(v.to_le_bytes()))
                     }
                     a => {
-                        Self(OpTree::constant(v))
+                        Self(OpTree::const_(v))
                     }
                 }
             }}
@@ -441,7 +460,7 @@ macro_rules! secret_impl {
             match_sig! { $s {
                 s => {
                     pub fn abs(self) -> Self {
-                        self.clone().lt(Self::constant($zero)).select(
+                        self.clone().lt(Self::zero()).select(
                             self.clone().neg(),
                             self
                         )
@@ -480,18 +499,18 @@ macro_rules! secret_impl {
                 s => {}
                 u => {
                     pub fn is_power_of_two(self) -> SecretBool {
-                        self.count_ones().eq(Self::constant($one))
+                        self.count_ones().eq(Self::one())
                     }
 
                     pub fn next_power_of_two(self) -> $t {
                         // based on implementation in rust core
-                        self.clone().le(Self::constant($one)).select(
+                        self.clone().le(Self::one()).select(
                             // special case if <= 1
-                            Self::constant($zero),
+                            Self::zero(),
                             // next_power_of_two_minus_1
-                            Self::constant($ones)
-                                >> (self - Self::constant($one)).leading_zeros()
-                        ) + Self::constant($one)
+                            Self::ones()
+                                >> (self - Self::one()).leading_zeros()
+                        ) + Self::one()
                     }
                 }
             }}
@@ -509,7 +528,7 @@ macro_rules! secret_impl {
             type Output = $t;
             fn not(self) -> $t {
                 // note, this is how it's done in wasm
-                self ^ Self::constant($ones)
+                self ^ Self::ones()
             }
         }
 
@@ -559,7 +578,7 @@ macro_rules! secret_impl {
                     type Output = $t;
                     fn neg(self) -> $t {
                         // note, this is how it's done in wasm
-                        Self::constant($zero) - self
+                        Self::zero() - self
                     }
                 }
             }
@@ -735,42 +754,22 @@ macro_rules! secret_impl {
     }
 }
 
-secret_impl! { SecretU8,    u8,       1,   u,  0, 1, u8::MAX   }
-secret_impl! { SecretU16,   u16,      2,   u,  0, 1, u16::MAX  }
-secret_impl! { SecretU32,   u32,      4,   u,  0, 1, u32::MAX  }
-secret_impl! { SecretU64,   u64,      8,   u,  0, 1, u64::MAX  }
-secret_impl! { SecretU128,  u128,     16,  u,  0, 1, u128::MAX }
-secret_impl! { SecretU256,  [u8;32],  32,  ua, [0;32], [
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-], [0xff;32] }
-secret_impl! { SecretU512,  [u8;64],  64,  ua, [0;64], [
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-], [0xff;64] }
-secret_impl! { SecretU1024, [u8;128], 128, ua, [0;128], [
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-], [0xff;128] }
-secret_impl! { SecretI8,    i8,       1,   s,  0, 1, -1 }
-secret_impl! { SecretI16,   i16,      2,   s,  0, 1, -1 }
-secret_impl! { SecretI32,   i32,      4,   s,  0, 1, -1 }
-secret_impl! { SecretI64,   i64,      8,   s,  0, 1, -1 }
-secret_impl! { SecretI128,  i128,     16,  s,  0, 1, -1 }
-secret_impl! { SecretI256,  [u8;32],  32,  sa, [0;32], [
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-], [0xff;32] }
-secret_impl! { SecretI512,  [u8;64],  64,  sa, [0;64], [
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-], [0xff;64] }
-secret_impl! { SecretI1024, [u8;128], 128, sa, [0;128], [
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-], [0xff;128] }
+secret_impl! { SecretU8,    u8,       1,   u  }
+secret_impl! { SecretU16,   u16,      2,   u  }
+secret_impl! { SecretU32,   u32,      4,   u  }
+secret_impl! { SecretU64,   u64,      8,   u  }
+secret_impl! { SecretU128,  u128,     16,  u  }
+secret_impl! { SecretU256,  [u8;32],  32,  ua }
+secret_impl! { SecretU512,  [u8;64],  64,  ua }
+secret_impl! { SecretU1024, [u8;128], 128, ua }
+secret_impl! { SecretI8,    i8,       1,   s  }
+secret_impl! { SecretI16,   i16,      2,   s  }
+secret_impl! { SecretI32,   i32,      4,   s  }
+secret_impl! { SecretI64,   i64,      8,   s  }
+secret_impl! { SecretI128,  i128,     16,  s  }
+secret_impl! { SecretI256,  [u8;32],  32,  sa }
+secret_impl! { SecretI512,  [u8;64],  64,  sa }
+secret_impl! { SecretI1024, [u8;128], 128, sa }
 
 
 //// Conversions U* <-> U* ////

@@ -227,8 +227,8 @@ fn build_transpose(
         let mut dim = #dim;
         let mut mask = #mask;
         while dim > 0 {
-            let dim_s = #secret_ty::constant(dim as #prim_ty);
-            let mask_s = #secret_ty::constant(mask);
+            let dim_s = #secret_ty::const_(dim as #prim_ty);
+            let mask_s = #secret_ty::const_(mask);
 
             let mut i = 0;
             while i < #width {
@@ -254,10 +254,10 @@ fn build_bitexpr(
 ) -> syn::Expr {
     match expr {
         qmc::Bool::True  => parse_quote! {
-            #secret_ty::constant(#prim_ty::MAX)
+            #secret_ty::ones()
         },
         qmc::Bool::False => parse_quote! {
-            #secret_ty::constant(0)
+            #secret_ty::zero()
         },
         qmc::Bool::Term(i) => {
             let i = lit!(i);
@@ -464,7 +464,7 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         })
         .chain(
-            iter::repeat(parse_quote! { #secret_ty :: constant(0) })
+            iter::repeat(parse_quote! { #secret_ty::zero() })
                 .take(a_width - parallel)
         );
     let b_rets = (0..parallel)
@@ -476,11 +476,11 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
             } else {
                 let mask = lit!((1 << b_width) - 1);
                 let i = lit!(i);
-                parse_quote! { #secret_ty::constant(#mask) & b[#i].clone() }
+                parse_quote! { #secret_ty::const_(#mask) & b[#i].clone() }
             };
 
             if ret_ty == Prim::Bool {
-                parse_quote! { (#ret & #secret_ty::constant(1)).eq(#secret_ty::constant(1)) }
+                parse_quote! { (#ret & #secret_ty::one()).eq(#secret_ty::one()) }
             } else if ret_ty.width() > mid_ty.width() {
                 parse_quote! { #ret_secret_ty::from(#ret) }
             } else if ret_ty.width() < mid_ty.width() {
