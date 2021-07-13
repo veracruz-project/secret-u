@@ -5,8 +5,16 @@ authors = ["Christopher Haster <christopher.haster@arm.com>"]
 edition = "2018"
 
 [features]
+default = ["opt-register-coloring", "opt-const-folding"]
+# color registers to minimize memory consumption, note this,
+# somewhat ironically, requires memory allocations during
+# compilation
+opt-register-coloring = []
+# perform constant folding during compilation, note this run
+# small chunks of bytecode in the vm to do the folding
+opt-const-folding = []
 # show VM execution
-trace = []
+debug-trace = []
 # show proc macro generation
 debug-proc-macro = ["secret-u-macros/debug-proc-macro"]
 

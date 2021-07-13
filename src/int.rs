@@ -1,7 +1,6 @@
 //! Definitions of secret integers
 
 use crate::opcode::OpTree;
-use crate::opcode::OpKind;
 use crate::opcode::OpType;
 use crate::opcode::DynOpTree;
 use crate::vm::exec;
@@ -75,7 +74,7 @@ where
     ///
     /// Useful for catching things like divide-by-zero
     fn try_eval(self) -> Result<Self, Error> {
-        Ok(Self::from_tree(Rc::new(OpTree::new(OpKind::Imm(self.tree().eval()?)))))
+        Ok(Self::from_tree(OpTree::imm(self.tree().eval()?)))
     }
 
     /// Evaluate precompiled-bytecode to immediate form
@@ -167,7 +166,7 @@ impl SecretType for SecretBool {
     type TreeType = [u8;1];
 
     fn classify(v: bool) -> SecretBool {
-        SecretBool(Rc::new(OpTree::new(OpKind::Imm([v as u8]))))
+        SecretBool(OpTree::imm([v as u8]))
     }
 
     unsafe fn try_declassify(self) -> Result<bool, Error> {
@@ -223,9 +222,11 @@ impl SecretBool {
     /// since we internally ensure the value is only ever zero or one
     fn truncated_tree<T: OpType>(self) -> Rc<OpTree<T>> {
         if T::SIZE > self.0.size() {
-            Rc::new(OpTree::new(OpKind::Extendu(self.0)))
+            OpTree::extendu(self.0)
+        } else if T::SIZE < self.0.size() {
+            OpTree::truncate(self.0)
         } else {
-            Rc::new(OpTree::new(OpKind::Truncate(self.0)))
+            OpTree::downcast(self.0)
         }
     }
 
@@ -234,28 +235,28 @@ impl SecretBool {
     where
         T: SecretType + From<SecretBool>
     {
-        T::from_tree(Rc::new(OpTree::new(OpKind::Select(
+        T::from_tree(OpTree::select(
             T::from(self).tree(),
             a.tree(),
             b.tree()
-        ))))
+        ))
     }
 }
 
 impl Not for SecretBool {
     type Output = SecretBool;
     fn not(self) -> SecretBool {
-        Self(self.0.eqz()(self.0))
+        Self(self.0.dyn_eqz()(self.0))
     }
 }
 
 impl BitAnd for SecretBool {
     type Output = SecretBool;
     fn bitand(self, other: SecretBool) -> SecretBool {
-        Self(Rc::new(OpTree::new(OpKind::And(
+        Self(OpTree::and(
             self.truncated_tree::<[u8;1]>(),
             other.truncated_tree::<[u8;1]>()
-        ))))
+        ))
     }
 }
 
@@ -268,10 +269,10 @@ impl BitAndAssign for SecretBool {
 impl BitOr for SecretBool {
     type Output = SecretBool;
     fn bitor(self, other: SecretBool) -> SecretBool {
-        Self(Rc::new(OpTree::new(OpKind::Or(
+        Self(OpTree::or(
             self.truncated_tree::<[u8;1]>(),
             other.truncated_tree::<[u8;1]>()
-        ))))
+        ))
     }
 }
 
@@ -284,10 +285,10 @@ impl BitOrAssign for SecretBool {
 impl BitXor for SecretBool {
     type Output = SecretBool;
     fn bitxor(self, other: SecretBool) -> SecretBool {
-        Self(Rc::new(OpTree::new(OpKind::Xor(
+        Self(OpTree::xor(
             self.truncated_tree::<[u8;1]>(),
             other.truncated_tree::<[u8;1]>()
-        ))))
+        ))
     }
 }
 
@@ -299,17 +300,17 @@ impl BitXorAssign for SecretBool {
 
 impl SecretEq for SecretBool {
     fn eq(self, other: Self) -> SecretBool {
-        SecretBool(Rc::new(OpTree::new(OpKind::Eq(
+        SecretBool(OpTree::eq(
             self.truncated_tree::<[u8;1]>(),
             other.truncated_tree::<[u8;1]>()
-        ))))
+        ))
     }
 
     fn ne(self, other: Self) -> SecretBool {
-        SecretBool(Rc::new(OpTree::new(OpKind::Ne(
+        SecretBool(OpTree::ne(
             self.truncated_tree::<[u8;1]>(),
             other.truncated_tree::<[u8;1]>()
-        ))))
+        ))
     }
 }
 
@@ -362,10 +363,10 @@ macro_rules! secret_impl {
             fn classify(n: $u) -> Self {
                 match_arr! { $s {
                     _ => {
-                        Self(Rc::new(OpTree::new(OpKind::Imm(n.to_le_bytes()))))
+                        Self(OpTree::imm(n.to_le_bytes()))
                     }
                     a => {
-                        Self(Rc::new(OpTree::new(OpKind::Imm(n))))
+                        Self(OpTree::imm(n))
                     }
                 }}
             }
@@ -471,7 +472,7 @@ macro_rules! secret_impl {
 
             // other non-trait operations
             pub fn trailing_zeros(self) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Ctz(self.0))))
+                Self(OpTree::ctz(self.0))
             }
 
             pub fn trailing_ones(self) -> $t {
@@ -479,7 +480,7 @@ macro_rules! secret_impl {
             }
 
             pub fn leading_zeros(self) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Clz(self.0))))
+                Self(OpTree::clz(self.0))
             }
 
             pub fn leading_ones(self) -> $t {
@@ -491,7 +492,7 @@ macro_rules! secret_impl {
             }
 
             pub fn count_ones(self) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Popcnt(self.0))))
+                Self(OpTree::popcnt(self.0))
             }
 
             // ipw2/npw2 only available on unsigned types
@@ -516,11 +517,11 @@ macro_rules! secret_impl {
             }}
 
             pub fn rotate_left(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Rotl(self.0, other.0))))
+                Self(OpTree::rotl(self.0, other.0))
             }
 
             pub fn rotate_right(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Rotr(self.0, other.0))))
+                Self(OpTree::rotr(self.0, other.0))
             }
         }
 
@@ -535,7 +536,7 @@ macro_rules! secret_impl {
         impl BitAnd for $t {
             type Output = $t;
             fn bitand(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::And(self.0, other.0))))
+                Self(OpTree::and(self.0, other.0))
             }
         }
 
@@ -548,7 +549,7 @@ macro_rules! secret_impl {
         impl BitOr for $t {
             type Output = $t;
             fn bitor(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Or(self.0, other.0))))
+                Self(OpTree::or(self.0, other.0))
             }
         }
 
@@ -561,7 +562,7 @@ macro_rules! secret_impl {
         impl BitXor for $t {
             type Output = $t;
             fn bitxor(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Xor(self.0, other.0))))
+                Self(OpTree::xor(self.0, other.0))
             }
         }
 
@@ -588,7 +589,7 @@ macro_rules! secret_impl {
         impl Add for $t {
             type Output = $t;
             fn add(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Add(self.0, other.0))))
+                Self(OpTree::add(self.0, other.0))
             }
         }
 
@@ -601,7 +602,7 @@ macro_rules! secret_impl {
         impl Sub for $t {
             type Output = $t;
             fn sub(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Sub(self.0, other.0))))
+                Self(OpTree::sub(self.0, other.0))
             }
         }
 
@@ -614,7 +615,7 @@ macro_rules! secret_impl {
         impl Mul for $t {
             type Output = $t;
             fn mul(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Mul(self.0, other.0))))
+                Self(OpTree::mul(self.0, other.0))
             }
         }
 
@@ -629,12 +630,12 @@ macro_rules! secret_impl {
             match_sig! { $s {
                 s => {
                     fn div(self, other: $t) -> $t {
-                        Self(Rc::new(OpTree::new(OpKind::Divs(self.0, other.0))))
+                        Self(OpTree::divs(self.0, other.0))
                     }
                 }
                 u => {
                     fn div(self, other: $t) -> $t {
-                        Self(Rc::new(OpTree::new(OpKind::Divu(self.0, other.0))))
+                        Self(OpTree::divu(self.0, other.0))
                     }
                 }
             }}
@@ -651,12 +652,12 @@ macro_rules! secret_impl {
             match_sig! { $s {
                 s => {
                     fn rem(self, other: $t) -> $t {
-                        Self(Rc::new(OpTree::new(OpKind::Rems(self.0, other.0))))
+                        Self(OpTree::rems(self.0, other.0))
                     }
                 }
                 u => {
                     fn rem(self, other: $t) -> $t {
-                        Self(Rc::new(OpTree::new(OpKind::Remu(self.0, other.0))))
+                        Self(OpTree::remu(self.0, other.0))
                     }
                 }
             }}
@@ -671,7 +672,7 @@ macro_rules! secret_impl {
         impl Shl for $t {
             type Output = $t;
             fn shl(self, other: $t) -> $t {
-                Self(Rc::new(OpTree::new(OpKind::Shl(self.0, other.0))))
+                Self(OpTree::shl(self.0, other.0))
             }
         }
 
@@ -686,12 +687,12 @@ macro_rules! secret_impl {
             match_sig! { $s {
                 s => {
                     fn shr(self, other: $t) -> $t {
-                        Self(Rc::new(OpTree::new(OpKind::Shrs(self.0, other.0))))
+                        Self(OpTree::shrs(self.0, other.0))
                     }
                 }
                 u => {
                     fn shr(self, other: $t) -> $t {
-                        Self(Rc::new(OpTree::new(OpKind::Shru(self.0, other.0))))
+                        Self(OpTree::shru(self.0, other.0))
                     }
                 }
             }}
@@ -705,11 +706,11 @@ macro_rules! secret_impl {
 
         impl SecretEq for $t {
             fn eq(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Eq(self.0, other.0))))
+                SecretBool(OpTree::eq(self.0, other.0))
             }
 
             fn ne(self, other: Self) -> SecretBool {
-                SecretBool(Rc::new(OpTree::new(OpKind::Ne(self.0, other.0))))
+                SecretBool(OpTree::ne(self.0, other.0))
             }
         }
 
@@ -717,36 +718,36 @@ macro_rules! secret_impl {
             match_sig! { $s {
                 s => {
                     fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Lts(self.0, other.0))))
+                        SecretBool(OpTree::lts(self.0, other.0))
                     }
 
                     fn le(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Les(self.0, other.0))))
+                        SecretBool(OpTree::les(self.0, other.0))
                     }
 
                     fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Gts(self.0, other.0))))
+                        SecretBool(OpTree::gts(self.0, other.0))
                     }
 
                     fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Ges(self.0, other.0))))
+                        SecretBool(OpTree::ges(self.0, other.0))
                     }
                 }
                 u => {
                     fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Ltu(self.0, other.0))))
+                        SecretBool(OpTree::ltu(self.0, other.0))
                     }
 
                     fn le(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Leu(self.0, other.0))))
+                        SecretBool(OpTree::leu(self.0, other.0))
                     }
 
                     fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Gtu(self.0, other.0))))
+                        SecretBool(OpTree::gtu(self.0, other.0))
                     }
 
                     fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(Rc::new(OpTree::new(OpKind::Geu(self.0, other.0))))
+                        SecretBool(OpTree::geu(self.0, other.0))
                     }
                 }
             }}
@@ -798,7 +799,7 @@ macro_rules! secret_from_impl {
     ($from:ty => TT($to:ty), $($rest:tt)*) => {
         impl SecretTruncate<$from> for $to {
             fn truncate(v: $from) -> $to {
-                Self(Rc::new(OpTree::new(OpKind::Truncate(v.0))))
+                Self(OpTree::truncate(v.0))
             }
         }
         secret_from_impl! { $from => $($rest)* }
@@ -807,7 +808,7 @@ macro_rules! secret_from_impl {
     ($from:ty => FU($to:ty), $($rest:tt)*) => {
         impl From<$from> for $to {
             fn from(v: $from) -> $to {
-                Self(Rc::new(OpTree::new(OpKind::Extendu(v.0))))
+                Self(OpTree::extendu(v.0))
             }
         }
         secret_from_impl! { $from => $($rest)* }
@@ -816,7 +817,7 @@ macro_rules! secret_from_impl {
     ($from:ty => FS($to:ty), $($rest:tt)*) => {
         impl From<$from> for $to {
             fn from(v: $from) -> $to {
-                Self(Rc::new(OpTree::new(OpKind::Extends(v.0))))
+                Self(OpTree::extends(v.0))
             }
         }
         secret_from_impl! { $from => $($rest)* }

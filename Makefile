@@ -6,7 +6,8 @@ run:
 	cargo run
 
 test:
-	cargo test --features trace --features debug-proc-macro -- --nocapture --test-threads 1
+	cargo build --no-default-features 
+	cargo test --features debug-trace,debug-proc-macro -- --nocapture --test-threads 1
 
 clean:
 	cargo clean

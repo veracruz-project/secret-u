@@ -27,7 +27,6 @@ macro_rules! lambda_compile {
         $crate::lambda::paste! {
             use $crate::int::SecretType;
             use $crate::opcode::OpTree;
-            use $crate::opcode::OpKind;
             use std::rc::Rc;
             use std::io;
 
@@ -50,9 +49,9 @@ macro_rules! lambda_compile {
                 {
                     // create symbols
                     $(
-                        let [<__sym_$($a)+>] = Rc::new(OpTree::new(OpKind::Sym(
+                        let [<__sym_$($a)+>] = OpTree::sym(
                             lambda_compile!(@str $($a)+)
-                        )));
+                        );
                     )*
 
                     // call user function with symbols

@@ -715,7 +715,7 @@ pub fn exec<'a>(
         let op = unsafe { u16::load_unchecked(bytecode, pc) };
         pc += 2;
 
-        #[cfg(feature="trace")]
+        #[cfg(feature="debug-trace")]
         {
             print!("    exec {:#06x} ::", op);
             for i in 0..stack.len() {
@@ -1013,15 +1013,14 @@ mod tests {
     use super::*;
     use crate::opcode::*;
     use std::convert::TryFrom;
-    use std::rc::Rc;
     use std::io;
 
     #[test]
     fn exec_add() {
-        let example = OpTree::new(OpKind::Add(
-            Rc::new(OpTree::from(1u32)),
-            Rc::new(OpTree::from(2u32))
-        ));
+        let example = OpTree::add(
+            OpTree::imm(1u32.to_le_bytes()),
+            OpTree::imm(2u32.to_le_bytes())
+        );
 
         println!();
         println!("input: {}", example);
@@ -1052,14 +1051,14 @@ mod tests {
 
     #[test]
     fn exec_alignment() {
-        let example = OpTree::new(OpKind::Add(
-            Rc::new(OpTree::new(OpKind::<[u8;2]>::Extends(
-                Rc::new(OpTree::from(2u8))
-            ))),
-            Rc::new(OpTree::new(OpKind::<[u8;2]>::Truncate(
-                Rc::new(OpTree::from(1u32)),
-            ))),
-        ));
+        let example = OpTree::add(
+            OpTree::<[u8;2]>::extends(
+                OpTree::imm(2u8.to_le_bytes())
+            ),
+            OpTree::<[u8;2]>::truncate(
+                OpTree::imm(1u32.to_le_bytes()),
+            ),
+        );
 
         println!();
         println!("input: {}", example);
@@ -1090,24 +1089,24 @@ mod tests {
 
     #[test]
     fn exec_dag() {
-        let two = Rc::new(OpTree::from(2u32));
-        let a = Rc::new(OpTree::new(OpKind::Add(
-            Rc::new(OpTree::from(1u32)),
-            Rc::new(OpTree::from(2u32))
-        )));
-        let b = Rc::new(OpTree::new(OpKind::Divu(
+        let two = OpTree::imm(2u32.to_le_bytes());
+        let a = OpTree::add(
+            OpTree::imm(1u32.to_le_bytes()),
+            OpTree::imm(2u32.to_le_bytes())
+        );
+        let b = OpTree::divu(
             a.clone(), two.clone()
-        )));
-        let c = Rc::new(OpTree::new(OpKind::Remu(
+        );
+        let c = OpTree::remu(
             a.clone(), two.clone()
-        )));
-        let example = OpTree::new(OpKind::Eq(
-            Rc::new(OpTree::new(OpKind::Add(
-                Rc::new(OpTree::new(OpKind::Mul(b, two))),
+        );
+        let example = OpTree::eq(
+            OpTree::add(
+                OpTree::mul(b, two),
                 c,
-            ))),
+            ),
             a,
-        ));
+        );
 
         println!();
         println!("input: {}", example);
@@ -1138,16 +1137,16 @@ mod tests {
 
     #[test]
     fn exec_pythag() {
-        let a = Rc::new(OpTree::from(3u32));
-        let b = Rc::new(OpTree::from(4u32));
-        let c = Rc::new(OpTree::from(5u32));
-        let example = OpTree::new(OpKind::Eq(
-            Rc::new(OpTree::new(OpKind::Add(
-                Rc::new(OpTree::new(OpKind::Mul(a.clone(), a))),
-                Rc::new(OpTree::new(OpKind::Mul(b.clone(), b)))
-            ))),
-            Rc::new(OpTree::new(OpKind::Mul(c.clone(), c)))
-        ));
+        let a = OpTree::imm(3u32.to_le_bytes());
+        let b = OpTree::imm(4u32.to_le_bytes());
+        let c = OpTree::imm(5u32.to_le_bytes());
+        let example = OpTree::eq(
+            OpTree::add(
+                OpTree::mul(a.clone(), a),
+                OpTree::mul(b.clone(), b)
+            ),
+            OpTree::mul(c.clone(), c)
+        );
 
         println!();
         println!("input: {}", example);
@@ -1187,11 +1186,11 @@ mod tests {
         ($name:ident, $op:ident, $u:ident, $($a:expr),+ => $t:ident, $expected:expr) => {
             #[test]
             fn $name() {
-                let input = OpTree::new(OpKind::<test_ins!(@arr $t)>::$op(
+                let input = OpTree::<test_ins!(@arr $t)>::$op(
                     $(
-                        Rc::new(OpTree::from($a as $u))
+                        OpTree::imm(($a as $u).to_le_bytes())
                     ),+
-                ));
+                );
 
                 println!();
                 let (bytecode, mut stack) = input.compile(true);
@@ -1220,42 +1219,42 @@ mod tests {
         };
     }
 
-    test_ins! { ins_truncate, Truncate, u32, 0x12345678 => u8, 0x78 }
-    test_ins! { ins_extends,  Extends, u8, 0x85 => u32, 0xffffff85 }
-    test_ins! { ins_extendu,  Extendu, u8, 0x85 => u32, 0x00000085 }
+    test_ins! { ins_truncate, truncate, u32, 0x12345678 => u8, 0x78 }
+    test_ins! { ins_extends,  extends, u8, 0x85 => u32, 0xffffff85 }
+    test_ins! { ins_extendu,  extendu, u8, 0x85 => u32, 0x00000085 }
 
-    test_ins! { ins_select1, Select, u32, 1, 2, 3 => 2}
-    test_ins! { ins_select2, Select, u32, 0, 2, 3 => 3}
+    test_ins! { ins_select1, select, u32, 1, 2, 3 => 2}
+    test_ins! { ins_select2, select, u32, 0, 2, 3 => 3}
 
-    test_ins! { ins_eqz, Eqz, u32, 0    => 1 }
-    test_ins! { ins_eq,  Eq,  u32, 2, 2 => 1 }
-    test_ins! { ins_ne,  Ne,  u32, 2, 3 => 1 }
-    test_ins! { ins_lts, Lts, u8, 0xff, 1 => 1 }
-    test_ins! { ins_ltu, Ltu, u8, 0xff, 1 => 0 }
-    test_ins! { ins_gts, Gts, u8, 0xff, 1 => 0 }
-    test_ins! { ins_gtu, Gtu, u8, 0xff, 1 => 1 }
-    test_ins! { ins_les, Les, u8, 0xff, 1 => 1 }
-    test_ins! { ins_leu, Leu, u8, 0xff, 1 => 0 }
-    test_ins! { ins_ges, Ges, u8, 0xff, 1 => 0 }
-    test_ins! { ins_geu, Geu, u8, 0xff, 1 => 1 }
+    test_ins! { ins_eqz, eqz, u32, 0    => 1 }
+    test_ins! { ins_eq,  eq,  u32, 2, 2 => 1 }
+    test_ins! { ins_ne,  ne,  u32, 2, 3 => 1 }
+    test_ins! { ins_lts, lts, u8, 0xff, 1 => 1 }
+    test_ins! { ins_ltu, ltu, u8, 0xff, 1 => 0 }
+    test_ins! { ins_gts, gts, u8, 0xff, 1 => 0 }
+    test_ins! { ins_gtu, gtu, u8, 0xff, 1 => 1 }
+    test_ins! { ins_les, les, u8, 0xff, 1 => 1 }
+    test_ins! { ins_leu, leu, u8, 0xff, 1 => 0 }
+    test_ins! { ins_ges, ges, u8, 0xff, 1 => 0 }
+    test_ins! { ins_geu, geu, u8, 0xff, 1 => 1 }
 
-    test_ins! { ins_clz,    Clz,    u16, 0x1234 => 3 }
-    test_ins! { ins_ctz,    Ctz,    u16, 0x1234 => 2 }
-    test_ins! { ins_popcnt, Popcnt, u16, 0x1234 => 5 }
-    test_ins! { ins_add, Add, u32, 1, 2 => 3 }
-    test_ins! { ins_sub, Sub, u32, 2, 1 => 1 }
-    test_ins! { ins_mul, Mul, u32, 2, 3 => 6 }
-    test_ins! { ins_divs, Divs, u8,  0xfd, 2 => 0xff }
-    test_ins! { ins_divu, Divu, u32, 7,    2 => 3    }
-    test_ins! { ins_rems, Rems, u8,  0xfd, 2 => 0xff }
-    test_ins! { ins_remu, Remu, u32, 7,    2 => 1    }
-    test_ins! { ins_and, And, u16, 0x4321, 0x1234 => 0x0220 }
-    test_ins! { ins_or,  Or,  u16, 0x4321, 0x1234 => 0x5335 }
-    test_ins! { ins_xor, Xor, u16, 0x4321, 0x1234 => 0x5115 }
-    test_ins! { ins_shl,  Shl,  u16, 0x89ab, 7 => 0xd580 }
-    test_ins! { ins_shrs, Shrs, u16, 0x89ab, 7 => 0xff13 }
-    test_ins! { ins_shru, Shru, u16, 0x89ab, 7 => 0x0113 }
-    test_ins! { ins_rotl, Rotl, u16, 0x89ab, 7 => 0xd5c4 }
-    test_ins! { ins_rotr, Rotr, u16, 0x89ab, 7 => 0x5713 }
+    test_ins! { ins_clz,    clz,    u16, 0x1234 => 3 }
+    test_ins! { ins_ctz,    ctz,    u16, 0x1234 => 2 }
+    test_ins! { ins_popcnt, popcnt, u16, 0x1234 => 5 }
+    test_ins! { ins_add, add, u32, 1, 2 => 3 }
+    test_ins! { ins_sub, sub, u32, 2, 1 => 1 }
+    test_ins! { ins_mul, mul, u32, 2, 3 => 6 }
+    test_ins! { ins_divs, divs, u8,  0xfd, 2 => 0xff }
+    test_ins! { ins_divu, divu, u32, 7,    2 => 3    }
+    test_ins! { ins_rems, rems, u8,  0xfd, 2 => 0xff }
+    test_ins! { ins_remu, remu, u32, 7,    2 => 1    }
+    test_ins! { ins_and, and, u16, 0x4321, 0x1234 => 0x0220 }
+    test_ins! { ins_or,  or,  u16, 0x4321, 0x1234 => 0x5335 }
+    test_ins! { ins_xor, xor, u16, 0x4321, 0x1234 => 0x5115 }
+    test_ins! { ins_shl,  shl,  u16, 0x89ab, 7 => 0xd580 }
+    test_ins! { ins_shrs, shrs, u16, 0x89ab, 7 => 0xff13 }
+    test_ins! { ins_shru, shru, u16, 0x89ab, 7 => 0x0113 }
+    test_ins! { ins_rotl, rotl, u16, 0x89ab, 7 => 0xd5c4 }
+    test_ins! { ins_rotr, rotr, u16, 0x89ab, 7 => 0x5713 }
 }
 

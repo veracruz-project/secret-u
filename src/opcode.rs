@@ -322,6 +322,15 @@ pub trait OpType: Copy + Clone + Debug + 'static {
     /// Note, this needs to be here since thread-local storage can't
     /// depend on generic types
     fn const_(v: Self) -> Rc<OpTree<Self>>;
+
+    /// Test if self is zero
+    fn is_zero(&self) -> bool;
+
+    /// Test if self is one
+    fn is_one(&self) -> bool;
+
+    /// Test if self is ones
+    fn is_ones(&self) -> bool;
 }
 
 macro_rules! optype_impl {
@@ -408,11 +417,26 @@ macro_rules! optype_impl {
                     if let Some(c) = c {
                         c
                     } else {
-                        let c = Rc::new(OpTree::new(OpKind::Imm(v)));
+                        let c = Rc::new(OpTree::new(OpKind::Imm(v), true));
                         map.insert(v, Rc::downgrade(&c));
                         c
                     }
                 })
+            }
+
+            fn is_zero(&self) -> bool {
+                self == &[0; $n]
+            }
+
+            fn is_one(&self) -> bool {
+                // don't know an easier way to build this
+                let mut one = [0; $n];
+                one[0] = 1;
+                self == &one
+            }
+
+            fn is_ones(&self) -> bool {
+                self == &[0xff; $n]
             }
         }
     };
@@ -432,7 +456,7 @@ optype_impl! { [u8; 128 (7)] }
 
 
 /// Kinds of operations in tree
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum OpKind<T: OpType> {
     Imm(T),
     Sym(&'static str),
@@ -477,11 +501,14 @@ pub enum OpKind<T: OpType> {
 
 /// Tree of operations, including metadata to deduplicate
 /// common branches
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpTree<T: OpType> {
     kind: OpKind<T>,
     refs: Cell<u32>,
     slot: Cell<Option<u8>>,
+    const_: bool,
+    #[cfg(feature="opt-const-folding")]
+    folded: RefCell<Option<Option<Rc<OpTree<T>>>>>,
 }
 
 /// Compilation state
@@ -494,6 +521,7 @@ pub struct OpCompile<'a> {
     max_sp: usize,
     max_align: usize,
 
+    #[cfg(feature="opt-register-coloring")]
     slot_pool: Option<Vec<(u8, u8)>>,
 }
 
@@ -501,6 +529,7 @@ impl OpCompile<'_> {
     fn new<'a>(
         bytecode: &'a mut dyn io::Write,
         stack: &'a mut dyn io::Write,
+        #[allow(unused)]
         opt: bool,
     ) -> OpCompile<'a> {
         OpCompile {
@@ -512,6 +541,7 @@ impl OpCompile<'_> {
             max_sp: 0,
             max_align: 0,
 
+            #[cfg(feature="opt-register-coloring")]
             slot_pool: opt.then(|| Vec::new()),
         }
     }
@@ -554,11 +584,14 @@ impl OpCompile<'_> {
 }
 
 impl<T: OpType> OpTree<T> {
-    pub fn new(kind: OpKind<T>) -> OpTree<T> {
+    fn new(kind: OpKind<T>, const_: bool) -> OpTree<T> {
         OpTree {
             kind: kind,
             refs: Cell::new(0),
             slot: Cell::new(None),
+            const_: const_,
+            #[cfg(feature="opt-const-folding")]
+            folded: RefCell::new(None),
         }
     }
 
@@ -582,8 +615,199 @@ impl<T: OpType> OpTree<T> {
         T::const_(v)
     }
 
+    /// Create an immediate, secret value
+    pub fn imm(v: T) -> Rc<Self> {
+        Rc::new(Self::new(OpKind::Imm(v), false))
+    }
+
+    // Constructors for other tree nodes, note that
+    // constant-ness is propogated
+    pub fn sym(name: &'static str) -> Rc<Self> {
+        Rc::new(Self::new(OpKind::Sym(name), false))
+    }
+
+    pub fn truncate(a: Rc<dyn DynOpTree>) -> Rc<Self> {
+        let const_ = a.is_const();
+        Rc::new(Self::new(OpKind::Truncate(a), const_))
+    }
+
+    pub fn extends(a: Rc<dyn DynOpTree>) -> Rc<Self> {
+        let const_ = a.is_const();
+        Rc::new(Self::new(OpKind::Extends(a), const_))
+    }
+
+    pub fn extendu(a: Rc<dyn DynOpTree>) -> Rc<Self> {
+        let const_ = a.is_const();
+        Rc::new(Self::new(OpKind::Extendu(a), const_))
+    }
+
+    pub fn select(a: Rc<Self>, b: Rc<Self>, c: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const() && c.is_const();
+        Rc::new(Self::new(OpKind::Select(a, b, c), const_))
+    }
+
+    pub fn eqz(a: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const();
+        Rc::new(Self::new(OpKind::Eqz(a), const_))
+    }
+
+    pub fn eq(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Eq(a, b), const_))
+    }
+
+    pub fn ne(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Ne(a, b), const_))
+    }
+
+    pub fn lts(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Lts(a, b), const_))
+    }
+
+    pub fn ltu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Ltu(a, b), const_))
+    }
+
+    pub fn gts(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Gts(a, b), const_))
+    }
+
+    pub fn gtu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Gtu(a, b), const_))
+    }
+
+    pub fn les(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Les(a, b), const_))
+    }
+
+    pub fn leu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Leu(a, b), const_))
+    }
+
+    pub fn ges(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Ges(a, b), const_))
+    }
+
+    pub fn geu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Geu(a, b), const_))
+    }
+
+    pub fn clz(a: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const();
+        Rc::new(Self::new(OpKind::Clz(a), const_))
+    }
+
+    pub fn ctz(a: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const();
+        Rc::new(Self::new(OpKind::Ctz(a), const_))
+    }
+
+    pub fn popcnt(a: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const();
+        Rc::new(Self::new(OpKind::Popcnt(a), const_))
+    }
+
+    pub fn add(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Add(a, b), const_))
+    }
+
+    pub fn sub(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Sub(a, b), const_))
+    }
+
+    pub fn mul(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Mul(a, b), const_))
+    }
+
+    pub fn divs(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Divs(a, b), const_))
+    }
+
+    pub fn divu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Divu(a, b), const_))
+    }
+
+    pub fn rems(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Rems(a, b), const_))
+    }
+
+    pub fn remu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Remu(a, b), const_))
+    }
+
+    pub fn and(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::And(a, b), const_))
+    }
+
+    pub fn or(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Or(a, b), const_))
+    }
+
+    pub fn xor(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Xor(a, b), const_))
+    }
+
+    pub fn shl(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Shl(a, b), const_))
+    }
+
+    pub fn shrs(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Shrs(a, b), const_))
+    }
+
+    pub fn shru(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Shru(a, b), const_))
+    }
+
+    pub fn rotl(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Rotl(a, b), const_))
+    }
+
+    pub fn rotr(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let const_ = a.is_const() && b.is_const();
+        Rc::new(Self::new(OpKind::Rotr(a, b), const_))
+    }
+
+    /// Downcast a generic OpTree, panicing if types do not match
+    pub fn downcast(a: Rc<dyn DynOpTree>) -> Rc<OpTree<T>> {
+        assert!(a.width() == T::WIDTH);
+        // based on Rc::downcast impl
+        unsafe {
+            Rc::from_raw(Rc::into_raw(a) as _)
+        }
+    }
+
     /// high-level compile into bytecode, stack, and initial stack pointer
     pub fn compile(&self, opt: bool) -> (Vec<u8>, Vec<u8>) {
+        // should we do a constant folding pass?
+        #[cfg(feature="opt-const-folding")]
+        if opt {
+            self.fold_consts();
+        }
+
         // NOTE! We make sure to zero all refs from pass1 to pass2, this is
         // rather fragile and requires all passes to always be run as a pair,
         // we can't interrupt between passes without needing to reset all
@@ -619,19 +843,11 @@ impl<T: OpType> OpTree<T> {
         (bytecode, stack)
     }
 
-    /// try to get immediate value if we are a flat value
-    pub fn imm(&self) -> Option<T> {
-        match self.kind {
-            OpKind::Imm(v) => Some(v),
-            _              => None,
-        }
-    }
-
-    /// compile and execute if value is not an immediate already
+    /// compile and execute if value is not an immediate or constant already
     pub fn eval(&self) -> Result<T, Error> {
-        match self.imm() {
-            Some(v) => Ok(v),
-            None => {
+        match self.kind {
+            OpKind::Imm(v) => Ok(v),
+            _ => {
                 let (bytecode, mut stack) = self.compile(false);
                 let mut res = exec(&bytecode, &mut stack)?;
                 let v = T::decode(&mut res).map_err(|_| Error::InvalidReturn)?;
@@ -642,13 +858,7 @@ impl<T: OpType> OpTree<T> {
 
     /// Assuming we are Sym, patch the stack during a call
     pub fn patch(&self, v: T, stack: &mut [u8]) {
-        assert!(
-            match self.kind {
-                OpKind::Sym(_) => true,
-                _              => false,
-            },
-            "patching non-sym?"
-        );
+        assert!(self.is_sym(), "patching non-sym?");
 
         let slot = self.slot.get().expect("patching with no slot?");
         let mut slice = &mut stack[
@@ -659,29 +869,8 @@ impl<T: OpType> OpTree<T> {
     }
 }
 
-impl<T: OpType> From<T> for OpTree<T> {
-    fn from(t: T) -> OpTree<T> {
-        OpTree::new(OpKind::Imm(t))
-    }
-}
-
-impl<T: OpType> Default for OpTree<T> {
-    fn default() -> OpTree<T> {
-        OpTree::new(OpKind::Imm(T::default()))
-    }
-}
-
 impl<T: OpType> fmt::Display for OpTree<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        match &self.kind {
-            // don't bother showing truncate if it's used as a nop,
-            // it won't be emitted
-            OpKind::Truncate(a) if a.size() == T::SIZE => {
-                return write!(fmt, "{}", a)
-            }
-            _ => {}
-        }
-
         let w = T::WIDTH;
         match &self.kind {
             OpKind::Imm(v)          => write!(fmt, "(u{}.imm {:?})", w, v),
@@ -723,24 +912,6 @@ impl<T: OpType> fmt::Display for OpTree<T> {
     }
 }
 
-// extra froms for primitives
-macro_rules! optree_from_prim_impl {
-    ($u:ty, $n:literal) => {
-        impl From<$u> for OpTree<[u8;$n]> {
-            fn from(v: $u) -> OpTree<[u8;$n]> {
-                OpTree::new(OpKind::Imm(v.to_le_bytes()))
-            }
-        }
-    }
-}
-
-optree_from_prim_impl! { u8,   1  }
-optree_from_prim_impl! { u16,  2  }
-optree_from_prim_impl! { u32,  4  }
-optree_from_prim_impl! { u64,  8  }
-optree_from_prim_impl! { u128, 16 }
-
-
 // dyn-compatible wrapping trait
 pub trait DynOpTree: Debug + fmt::Display {
     /// type's size in bytes, needed for determining cast sizes
@@ -752,8 +923,30 @@ pub trait DynOpTree: Debug + fmt::Display {
     /// npw2(size), used as a part of instruction encoding
     fn npw2(&self) -> u8;
 
+    /// is expression an immediate?
+    fn is_imm(&self) -> bool;
+
+    /// is expression a symbol?
+    fn is_sym(&self) -> bool;
+
+    /// is expression const?
+    fn is_const(&self) -> bool;
+
+    /// checks if expression is const and is zero
+    fn is_zero(&self) -> bool;
+
+    /// checks if expression is const and is one
+    fn is_one(&self) -> bool;
+
+    /// checks if expression is const and is ones
+    fn is_ones(&self) -> bool;
+
     /// hook to enable eqz without known type
-    fn eqz(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree>;
+    fn dyn_eqz(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree>;
+
+    /// An optional pass to fold consts in the tree
+    #[cfg(feature="opt-const-folding")]
+    fn fold_consts(&self);
 
     /// First compile pass, used to find the number of immediates
     /// for offset calculation, and local reference counting to
@@ -780,19 +973,318 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         T::NPW2
     }
 
-    fn eqz(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
+    fn is_imm(&self) -> bool {
+        match self.kind {
+            OpKind::Imm(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_sym(&self) -> bool {
+        match self.kind {
+            OpKind::Sym(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_const(&self) -> bool {
+        self.const_
+    }
+
+    fn is_zero(&self) -> bool {
+        #[cfg(feature="opt-const-folding")]
+        match (self.is_const(), &self.kind, &*self.folded.borrow()) {
+            (true, OpKind::Imm(v), _            ) => v.is_zero(),
+            (true, _,              Some(Some(x))) => x.is_zero(),
+            _                                     => false,
+        }
+        #[cfg(not(feature="opt-const-folding"))]
+        match (self.is_const(), &self.kind) {
+            (true, OpKind::Imm(v)) => v.is_zero(),
+            _                      => false,
+        }
+    }
+
+    fn is_one(&self) -> bool {
+        #[cfg(feature="opt-const-folding")]
+        match (self.is_const(), &self.kind, &*self.folded.borrow()) {
+            (true, OpKind::Imm(v), _            ) => v.is_one(),
+            (true, _,              Some(Some(x))) => x.is_one(),
+            _                                     => false,
+        }
+        #[cfg(not(feature="opt-const-folding"))]
+        match (self.is_const(), &self.kind) {
+            (true, OpKind::Imm(v)) => v.is_one(),
+            _                      => false,
+        }
+    }
+
+    fn is_ones(&self) -> bool {
+        #[cfg(feature="opt-const-folding")]
+        match (self.is_const(), &self.kind, &*self.folded.borrow()) {
+            (true, OpKind::Imm(v), _            ) => v.is_ones(),
+            (true, _,              Some(Some(x))) => x.is_ones(),
+            _                                     => false,
+        }
+        #[cfg(not(feature="opt-const-folding"))]
+        match (self.is_const(), &self.kind) {
+            (true, OpKind::Imm(v)) => v.is_ones(),
+            _                      => false,
+        }
+    }
+
+    fn dyn_eqz(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
         // bit messy but this works
         // unfortunately this only works when there is a single argument
         fn eqz<T: OpType>(tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
-            Rc::new(OpTree::<T>::new(OpKind::<T>::Eqz(
-                // truncate here is a nop
-                Rc::new(OpTree::<T>::new(OpKind::<T>::Truncate(tree)))
-            )))
+            OpTree::eqz(OpTree::<T>::downcast(tree))
         }
         &eqz::<T>
     }
 
+    #[cfg(feature="opt-const-folding")]
+    fn fold_consts(&self) {
+        // already folded?
+        if self.folded.borrow().is_some() {
+            return;
+        }
+        self.folded.replace(Some(None));
+        
+        if !self.is_imm() && self.is_const() {
+            // oh hey, we're const
+            //
+            // note this recursively triggers another compilation
+            // + execution, so be careful
+            //
+            // if this fails we just bail on the const folding so the error
+            // can be reported at runtime
+            if let Ok(v) = self.eval() {
+                self.folded.replace(Some(Some(Self::const_(v))));
+                return;
+            }
+        }
+
+        match &self.kind {
+            OpKind::Imm(_) => {},
+            OpKind::Sym(_) => {},
+
+            OpKind::Truncate(a) => {
+                a.fold_consts();
+            }
+
+            OpKind::Extends(a) => {
+                a.fold_consts();
+            }
+
+            OpKind::Extendu(a) => {
+                a.fold_consts();
+            }
+
+            OpKind::Select(p, a, b) => {
+                p.fold_consts();
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Eqz(a) => {
+                a.fold_consts();
+            }
+
+            OpKind::Eq(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Ne(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Lts(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Ltu(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Gts(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Gtu(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Les(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Leu(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Ges(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Geu(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Clz(a) => {
+                a.fold_consts();
+            }
+
+            OpKind::Ctz(a) => {
+                a.fold_consts();
+            }
+
+            OpKind::Popcnt(a) => {
+                a.fold_consts();
+            }
+
+            OpKind::Add(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if a.is_zero() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Sub(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Mul(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if a.is_one() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_one() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Divs(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_one() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Divu(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_one() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Rems(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::Remu(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind::And(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if a.is_ones() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_ones() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Or(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if a.is_zero() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Xor(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if a.is_zero() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Shl(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Shrs(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Shru(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Rotl(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+
+            OpKind::Rotr(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+        }
+    }
+
     fn compile_pass1(&self, state: &mut OpCompile) -> Result<(), io::Error> {
+        // prefer folded tree
+        #[cfg(feature="opt-const-folding")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.compile_pass1(state);
+        }
+
         // mark node as seen
         let prefs = self.refs.get();
         self.refs.set(prefs + 1);
@@ -1012,6 +1504,12 @@ impl<T: OpType> DynOpTree for OpTree<T> {
     }
 
     fn compile_pass2(&self, state: &mut OpCompile) -> Result<(), io::Error> {
+        // prefer folded tree
+        #[cfg(feature="opt-const-folding")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.compile_pass2(state);
+        }
+
         // is node shared?
         let prefs = self.refs.get();
         self.refs.set(prefs - 1);
@@ -1025,6 +1523,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
             state.sp_push(1, T::SIZE);
 
             // are we done with slot? contribute to slot_pool
+            #[cfg(feature="opt-register-coloring")]
             if prefs == 1 {
                 if let Some(pool) = state.slot_pool.as_mut() {
                     pool.push((T::NPW2, slot));
@@ -1051,13 +1550,10 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
                 a.compile_pass2(state)?;
 
-                // nop if size does not change
-                if a.size() != T::SIZE {
-                    // truncate
-                    Op::new(OpCode::Truncate, T::NPW2, a.npw2()).encode(state.bytecode)?;
-                    state.sp_pop(1, a.size());
-                    state.sp_push(1, T::SIZE);
-                }
+                // truncate
+                Op::new(OpCode::Truncate, T::NPW2, a.npw2()).encode(state.bytecode)?;
+                state.sp_pop(1, a.size());
+                state.sp_push(1, T::SIZE);
 
                 // manually unalign?
                 if state.sp > expected_sp {
@@ -1297,6 +1793,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         // save for later computations?
         if prefs > 1 {
             // can we reuse a slot in the slot pool?
+            #[cfg(feature="opt-register-coloring")]
             let slot = state.slot_pool.as_mut().and_then(|pool| {
                 let slot = pool.iter().copied()
                     .enumerate()
@@ -1309,6 +1806,8 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                     None
                 }
             });
+            #[cfg(not(feature="opt-register-coloring"))]
+            let slot = None;
 
             // fallback to allocating an immediate
             let slot = slot.unwrap_or_else(|| {
@@ -1343,10 +1842,10 @@ mod tests {
 
     #[test]
     fn compile_add() {
-        let example = OpTree::new(OpKind::Add(
-            Rc::new(OpTree::from(1u32)),
-            Rc::new(OpTree::from(2u32))
-        ));
+        let example = OpTree::add(
+            OpTree::imm(1u32.to_le_bytes()),
+            OpTree::imm(2u32.to_le_bytes())
+        );
 
         println!();
         println!("input: {}", example);
@@ -1371,14 +1870,14 @@ mod tests {
 
     #[test]
     fn compile_alignment() {
-        let example = OpTree::new(OpKind::Add(
-            Rc::new(OpTree::new(OpKind::<[u8;2]>::Extends(
-                Rc::new(OpTree::from(2u8))
-            ))),
-            Rc::new(OpTree::new(OpKind::<[u8;2]>::Truncate(
-                Rc::new(OpTree::from(1u32)),
-            ))),
-        ));
+        let example = OpTree::add(
+            OpTree::<[u8;2]>::extends(
+                OpTree::imm(2u8.to_le_bytes())
+            ),
+            OpTree::<[u8;2]>::truncate(
+                OpTree::imm(1u32.to_le_bytes()),
+            ),
+        );
 
         println!();
         println!("input: {}", example);
@@ -1403,24 +1902,24 @@ mod tests {
 
     #[test]
     fn compile_dag() {
-        let two = Rc::new(OpTree::from(2u32));
-        let a = Rc::new(OpTree::new(OpKind::Add(
-            Rc::new(OpTree::from(1u32)),
-            Rc::new(OpTree::from(2u32))
-        )));
-        let b = Rc::new(OpTree::new(OpKind::Divu(
+        let two = OpTree::imm(2u32.to_le_bytes());
+        let a = OpTree::add(
+            OpTree::imm(1u32.to_le_bytes()),
+            OpTree::imm(2u32.to_le_bytes())
+        );
+        let b = OpTree::divu(
             a.clone(), two.clone()
-        )));
-        let c = Rc::new(OpTree::new(OpKind::Remu(
+        );
+        let c = OpTree::remu(
             a.clone(), two.clone()
-        )));
-        let example = OpTree::new(OpKind::Eq(
-            Rc::new(OpTree::new(OpKind::Add(
-                Rc::new(OpTree::new(OpKind::Mul(b, two))),
+        );
+        let example = OpTree::eq(
+            OpTree::add(
+                OpTree::mul(b, two),
                 c,
-            ))),
+            ),
             a,
-        ));
+        );
 
         println!();
         println!("input: {}", example);
@@ -1445,16 +1944,16 @@ mod tests {
 
     #[test]
     fn compile_pythag() {
-        let a = Rc::new(OpTree::from(3u32));
-        let b = Rc::new(OpTree::from(4u32));
-        let c = Rc::new(OpTree::from(5u32));
-        let example = OpTree::new(OpKind::Eq(
-            Rc::new(OpTree::new(OpKind::Add(
-                Rc::new(OpTree::new(OpKind::Mul(a.clone(), a))),
-                Rc::new(OpTree::new(OpKind::Mul(b.clone(), b)))
-            ))),
-            Rc::new(OpTree::new(OpKind::Mul(c.clone(), c)))
-        ));
+        let a = OpTree::imm(3u32.to_le_bytes());
+        let b = OpTree::imm(4u32.to_le_bytes());
+        let c = OpTree::imm(5u32.to_le_bytes());
+        let example = OpTree::eq(
+            OpTree::add(
+                OpTree::mul(a.clone(), a),
+                OpTree::mul(b.clone(), b)
+            ),
+            OpTree::mul(c.clone(), c)
+        );
 
         println!();
         println!("input: {}", example);
