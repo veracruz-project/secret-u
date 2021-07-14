@@ -14,6 +14,8 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::cell::RefCell;
 
+use aligned_utils::bytes::AlignedBytes;
+
 
 /// OpCodes emitted as a part of bytecode
 ///
@@ -583,6 +585,7 @@ impl OpCompile<'_> {
     }
 }
 
+/// Core OpTree type
 impl<T: OpType> OpTree<T> {
     fn new(kind: OpKind<T>, const_: bool) -> OpTree<T> {
         OpTree {
@@ -801,7 +804,7 @@ impl<T: OpType> OpTree<T> {
     }
 
     /// high-level compile into bytecode, stack, and initial stack pointer
-    pub fn compile(&self, opt: bool) -> (Vec<u8>, Vec<u8>) {
+    pub fn compile(&self, opt: bool) -> (AlignedBytes, AlignedBytes) {
         // should we do a constant folding pass?
         #[cfg(feature="opt-const-folding")]
         if opt {
@@ -826,21 +829,32 @@ impl<T: OpType> OpTree<T> {
         self.compile_pass2(&mut state)
             .expect("vector write resulted in io::error?");
 
-        // at this point stack contains imms, but we also need space for
-        // the working stack
-        let imms = state.imms + state.max_align-1;  // align imms
-        let imms = imms - (imms % state.max_align);
-        let imms = imms + state.max_sp;             // add space for stack
-        let imms = imms + state.max_align-1;        // align stack
-        let imms = imms - (imms % state.max_align);
-        stack.resize(imms, 0);
+        // extract so we can drop OpCompile (due to lifetime messiness)
+        let imms = state.imms;
+        let max_sp = state.max_sp;
+        let max_align = state.max_align;
 
         // add return instruction to type-check the result
         Op::new(OpCode::Return, T::NPW2, 0).encode(&mut bytecode)
             .expect("vector write resulted in io::error?");
 
+        // align bytecode
+        // TODO we should internally use a u16 and transmute this
+        let aligned_bytecode = AlignedBytes::new_from_slice(&bytecode, 4);
+
+        // at this point stack contains imms, but we need to make space for
+        // the working stack, also align the stack
+        let imms = imms + max_align-1;          // align imms
+        let imms = imms - (imms % max_align);
+        let imms = imms + max_sp;               // add space for stack
+        let imms = imms + max_align-1;          // align stack
+        let imms = imms - (imms % max_align);
+
+        let mut aligned_stack = AlignedBytes::new_zeroed(imms, max_align);
+        aligned_stack[..stack.len()].copy_from_slice(&stack);
+
         // imms is now the initial stack pointer
-        (bytecode, stack)
+        (aligned_bytecode, aligned_stack)
     }
 
     /// compile and execute if value is not an immediate or constant already

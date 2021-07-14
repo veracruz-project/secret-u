@@ -1,6 +1,7 @@
 
 // used by macros?
 pub use paste::paste;
+pub use aligned_utils::bytes::AlignedBytes;
 
 
 /// A macro for compiling parameterized, secret expressions into 
@@ -38,8 +39,8 @@ macro_rules! lambda_compile {
                 )*
 
                 // bytecode and stack
-                __bytecode: Vec<u8>,
-                __stack: Vec<u8>,
+                __bytecode: $crate::lambda::AlignedBytes,
+                __stack: $crate::lambda::AlignedBytes,
             }
 
             impl SecretClosure {
