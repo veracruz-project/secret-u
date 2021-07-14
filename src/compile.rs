@@ -4,28 +4,32 @@ pub use paste::paste;
 pub use aligned_utils::bytes::AlignedBytes;
 
 
+/// A macro for wrapping precompiled (or manually compiled?)
+/// code into a
+
+
 /// A macro for compiling parameterized, secret expressions into 
-/// bytecode for fast repeated execution, resulting in a SecretFn
+/// bytecode for fast repeated execution, resulting in a SecretClosure
 /// instead of callable Fn.
 ///
 /// Due to current limitations in Rust we can't impl Fn and SecretFn
 /// simultaneously (or impl Fn at all actually), so the method `call`
 /// is provided instead
 ///
-/// `lambda!` provides an alternative simpler interface when you only
+/// `compile!` provides an alternative simpler interface when you only
 /// need a `Fn(blah) -> blah`
 ///
 #[macro_export]
-macro_rules! lambda_compile {
+macro_rules! compile_object {
     // helper macros
     (@ident $a:ident) => { $a };
-    (@ident $_:ident $($a:ident)+) => { lambda_compile!(@ident $($a)+) };
-    (@str $($a:ident)+) => { stringify!(lambda_compile!(@ident $($a)+)) };
+    (@ident $_:ident $($a:ident)+) => { compile_object!(@ident $($a)+) };
+    (@str $($a:ident)+) => { stringify!(compile_object!(@ident $($a)+)) };
     (@prim $t:ty) => { <$t as SecretType>::PrimType };
     (@tree $t:ty) => { Rc<OpTree<<$t as SecretType>::TreeType>> };
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
-        $crate::lambda::paste! {
+        $crate::compile::paste! {
             use $crate::int::SecretType;
             use $crate::opcode::OpTree;
             use std::rc::Rc;
@@ -35,12 +39,12 @@ macro_rules! lambda_compile {
             struct SecretClosure {
                 // any arguments that may need patching
                 $(
-                    [<__sym_$($a)+>]: lambda_compile!(@tree $t),
+                    [<__sym_$($a)+>]: compile_object!(@tree $t),
                 )*
 
                 // bytecode and stack
-                __bytecode: $crate::lambda::AlignedBytes,
-                __stack: $crate::lambda::AlignedBytes,
+                __bytecode: $crate::compile::AlignedBytes,
+                __stack: $crate::compile::AlignedBytes,
             }
 
             impl SecretClosure {
@@ -51,7 +55,7 @@ macro_rules! lambda_compile {
                     // create symbols
                     $(
                         let [<__sym_$($a)+>] = OpTree::sym(
-                            lambda_compile!(@str $($a)+)
+                            compile_object!(@str $($a)+)
                         );
                     )*
 
@@ -94,57 +98,57 @@ macro_rules! lambda_compile {
                     $crate::opcode::disas(&self.__bytecode, out)
                 }
 
-                /// Call underlying lambda, returning any errors during execution
+                /// Call underlying bytecode, returning any errors during execution
                 #[allow(dead_code)]
                 pub fn try_call(
                     &self,
-                    $(lambda_compile!(@ident $($a)+): lambda_compile!(@prim $t)),*
-                ) -> Result<lambda_compile!(@prim $r), $crate::error::Error> {
+                    $(compile_object!(@ident $($a)+): compile_object!(@prim $t)),*
+                ) -> Result<compile_object!(@prim $r), $crate::error::Error> {
                     // clone since we don't watch to patch the common stack
                     let mut stack = self.__stack.clone();
 
                     // patch arguments
                     $(
                         self.[<__sym_$($a)+>].patch(
-                            lambda_compile!(@ident $($a)+).to_le_bytes(),
+                            compile_object!(@ident $($a)+).to_le_bytes(),
                             &mut stack
                         );
                     )*
 
                     // execute
-                    <$r>::try_eval_lambda(&self.__bytecode, &mut stack)
+                    <$r>::try_eval_bytecode(&self.__bytecode, &mut stack)
                 }
 
-                /// Call underlying lambda
+                /// Call underlying bytecode
                 #[allow(dead_code)]
                 pub fn call(
                     &self,
-                    $(lambda_compile!(@ident $($a)+): lambda_compile!(@prim $t)),*
-                ) -> lambda_compile!(@prim $r) {
-                    self.try_call($(lambda_compile!(@ident $($a)+)),*).unwrap()
+                    $(compile_object!(@ident $($a)+): compile_object!(@prim $t)),*
+                ) -> compile_object!(@prim $r) {
+                    self.try_call($(compile_object!(@ident $($a)+)),*).unwrap()
                 }
 
-                /// Call underlying lambda, returning any errors during execution,
+                /// Call underlying bytecode, returning any errors during execution,
                 /// while maintaining secrecy
                 #[allow(dead_code)]
                 pub fn try_secret_call(
                     &self,
-                    $(lambda_compile!(@ident $($a)+): $t),*
+                    $(compile_object!(@ident $($a)+): $t),*
                 ) -> Result<$r, $crate::error::Error> {
                     self.try_call(
                         $(
-                            unsafe { lambda_compile!(@ident $($a)+).declassify() }
+                            unsafe { compile_object!(@ident $($a)+).declassify() }
                         ),*
                     ).map(|r| <$r>::classify(r))
                 }
 
-                /// Call underlying lambda, while maintaining secrecy
+                /// Call underlying bytecode, while maintaining secrecy
                 #[allow(dead_code)]
                 pub fn secret_call(
                     &self,
-                    $(lambda_compile!(@ident $($a)+): $t),*
+                    $(compile_object!(@ident $($a)+): $t),*
                 ) -> $r {
-                    self.try_secret_call($(lambda_compile!(@ident $($a)+)),*).unwrap()
+                    self.try_secret_call($(compile_object!(@ident $($a)+)),*).unwrap()
                 }
             }
 
@@ -160,20 +164,20 @@ macro_rules! lambda_compile {
 /// A macro for compiling parameterized, secret expressions into 
 /// bytecode for fast repeated execution
 #[macro_export]
-macro_rules! lambda {
+macro_rules! compile {
     // helper macros
     (@ident $a:ident) => { $a };
-    (@ident $_:ident $($a:ident)+) => { lambda!(@ident $($a)+) };
+    (@ident $_:ident $($a:ident)+) => { compile!(@ident $($a)+) };
     (@prim $t:ty) => { <$t as SecretType>::PrimType };
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
         use $crate::int::SecretType;
 
-        // defer to lambda_compile and wrap in closure
-        let lambda = lambda_compile!($($move)? |$($($a)+: $t),*| -> $r {$($block)*});
+        // defer to compile_object and wrap in closure
+        let object = compile_object!($($move)? |$($($a)+: $t),*| -> $r {$($block)*});
 
-        move |$(lambda!(@ident $($a)+): lambda!(@prim $t)),*| -> lambda!(@prim $r) {
-            lambda.call($(lambda!(@ident $($a)+)),*)
+        move |$(compile!(@ident $($a)+): compile!(@prim $t)),*| -> compile!(@prim $r) {
+            object.call($(compile!(@ident $($a)+)),*)
         }
     }}
 }
@@ -186,10 +190,10 @@ mod tests {
     use std::convert::TryFrom;
 
     #[test]
-    fn lambda_add() {
+    fn compile_add() {
         println!();
 
-        let l = lambda_compile!(|x: SecretU32, y: SecretU32| -> SecretU32 {
+        let l = compile_object!(|x: SecretU32, y: SecretU32| -> SecretU32 {
             x + y
         });
         print!("  bytecode:");
@@ -210,7 +214,7 @@ mod tests {
         println!("{:?}", v);
         assert_eq!(v, 3);
 
-        let l = lambda!(|x: SecretU32, y: SecretU32| -> SecretU32 {
+        let l = compile!(|x: SecretU32, y: SecretU32| -> SecretU32 {
             x + y
         });
 
@@ -224,10 +228,10 @@ mod tests {
     }
 
     #[test]
-    fn lambda_pythag() {
+    fn compile_pythag() {
         println!();
 
-        let l = lambda_compile!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
+        let l = compile_object!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
             let a = x.clone()*x + y.clone()*y;
             let b = z.clone()*z;
             a.eq(b)
@@ -249,7 +253,7 @@ mod tests {
         let v = l.try_call(3, 4, 5);
         println!("{:?}", v);
 
-        let l = lambda!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
+        let l = compile!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
             let a = x.clone()*x + y.clone()*y;
             let b = z.clone()*z;
             a.eq(b)
@@ -265,11 +269,11 @@ mod tests {
     }
 
     #[test]
-    fn lambda_sqrt() {
+    fn compile_sqrt() {
         println!();
 
         // a simple binary-search based sqrt
-        let l = lambda_compile!(|x: SecretU32| -> SecretU32 {
+        let l = compile_object!(|x: SecretU32| -> SecretU32 {
             // binary search
             let mut lo = SecretU32::const_(0);
             let mut hi = x.clone();

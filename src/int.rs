@@ -78,14 +78,14 @@ where
     }
 
     /// Evaluate precompiled-bytecode to immediate form
-    fn eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Self::PrimType {
-        Self::try_eval_lambda(bytecode, stack).unwrap()
+    fn eval_bytecode(bytecode: &[u8], stack: &mut [u8]) -> Self::PrimType {
+        Self::try_eval_bytecode(bytecode, stack).unwrap()
     }
 
-    /// Same as eval_lambda but propagating internal VM errors
+    /// Same as eval_bytecode but propagating internal VM errors
     ///
     /// Useful for catching things like divide-by-zero
-    fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<Self::PrimType, Error>;
+    fn try_eval_bytecode(bytecode: &[u8], stack: &mut [u8]) -> Result<Self::PrimType, Error>;
 
     /// Build from tree
     fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self;
@@ -173,7 +173,7 @@ impl SecretType for SecretBool {
         Ok(self.truncated_tree::<[u8;1]>().eval()?[0] != 0)
     }
 
-    fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<bool, Error> {
+    fn try_eval_bytecode(bytecode: &[u8], stack: &mut [u8]) -> Result<bool, Error> {
         let res = exec(bytecode, stack)?;
         let v = <u8>::from_le_bytes(
             <[u8;1]>::try_from(res).map_err(|_| Error::InvalidReturn)?
@@ -386,7 +386,7 @@ macro_rules! secret_impl {
                 }}
             }
 
-            fn try_eval_lambda(bytecode: &[u8], stack: &mut [u8]) -> Result<$u, Error> {
+            fn try_eval_bytecode(bytecode: &[u8], stack: &mut [u8]) -> Result<$u, Error> {
                 let res = exec(bytecode, stack)?;
                 match_arr! { $s {
                     _ => {

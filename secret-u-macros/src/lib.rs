@@ -301,7 +301,7 @@ fn build_bitexpr(
 ///
 /// Usage:
 /// ```
-/// #[bitslice]
+/// #[static_bitslice]
 /// const table: [u8; 256] = [
 ///     ...
 /// ];
@@ -314,7 +314,7 @@ fn build_bitexpr(
 /// 
 /// With args:
 /// ```
-/// #[attr(parallel=4)]
+/// #[static_bitslice(parallel=4)]
 /// const table: [u16; 6] = [
 ///     ...
 /// ];
@@ -327,10 +327,10 @@ fn build_bitexpr(
 /// ```
 ///
 #[proc_macro_attribute]
-pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     if cfg!(feature = "debug-proc-macro") {
-        println!("proc-macro bitslice <= {}", args);
-        println!("proc-macro bitslice <= {}", input);
+        println!("proc-macro static_bitslice <= {}", args);
+        println!("proc-macro static_bitslice <= {}", input);
     }
 
     let args = parse_macro_input!(args as syn::AttributeArgs);
@@ -371,7 +371,7 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
             };
             ret_ty = match ident.and_then(|s| Prim::from_ident(&s)) {
                 Some(ret_ty) => ret_ty,
-                None => bail!(arr.elem, "bitslice requires a primitive type here"),
+                None => bail!(arr.elem, "static_bitslice requires a primitive type here"),
             };
 
             // find array size
@@ -389,10 +389,10 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
                         Err(err) => return TokenStream::from(err.to_compile_error()),
                     };
                 }
-                _ => bail!(arr.len, "bitslice requires a literal size"),
+                _ => bail!(arr.len, "static_bitslice requires a literal size"),
             };
         }
-        _ => bail!(table.ty, "bitslice requires an array"),
+        _ => bail!(table.ty, "static_bitslice requires an array"),
     }
 
     // now find the array elements
@@ -417,11 +417,11 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
                             Err(err) => return TokenStream::from(err.to_compile_error()),
                         };
                     }
-                    _ => bail!(elem, "bitslice requires literal elements"),
+                    _ => bail!(elem, "static_bitslice requires literal elements"),
                 };
             }
         }
-        _ => bail!(table.expr, "bitslice requires an array"),
+        _ => bail!(table.expr, "static_bitslice requires an array"),
     }
 
     // check size
@@ -529,7 +529,7 @@ pub fn bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     if cfg!(feature = "debug-proc-macro") {
-        println!("proc-macro bitslice => {}", q);
+        println!("proc-macro static_bitslice => {}", q);
     }
 
     TokenStream::from(q)
