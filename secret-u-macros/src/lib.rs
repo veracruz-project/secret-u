@@ -10,28 +10,31 @@ use quote::quote;
 use darling::FromMeta;
 use std::iter;
 use std::cmp::*;
+use std::env;
 
 use quine_mc_cluskey as qmc;
+
+fn crate_() -> proc_macro2::TokenStream {
+    if env::var("CARGO_PKG_NAME").unwrap() == "secret-u" {
+        quote! { crate }
+    } else {
+        quote! { ::secret_u }
+    }
+}
 
 
 // Quine-McCluskey boolean reduction
 
-fn npw2(x: u128) -> usize {
-    match x {
-        0 => 0,
-        x => 128 - (x-1).leading_zeros() as usize,
-    }
-}
-
 fn find_in_width(table: &[u128], parallel: usize) -> usize {
-    let width = npw2(table.len() as u128);
+    let width = table.len().next_power_of_two().trailing_zeros() as usize;
     let width = max(width, parallel);
     // the width needs itself to be a power of two for our transpose to work
     width.next_power_of_two()
 }
 
 fn find_out_width(table: &[u128], parallel: usize) -> usize {
-    let width = npw2(table.iter().max().copied().unwrap_or(0) + 1);
+    let width = (table.iter().max().copied().unwrap_or(0) + 1)
+        .next_power_of_two().trailing_zeros() as usize;
     let width = max(width, parallel);
     // the width needs itself to be a power of two for our transpose to work
     width.next_power_of_two()
@@ -208,8 +211,9 @@ impl Prim {
             Prim::I128 => ident!("SecretI128"),
         };
 
+        let crate_ = crate_();
         parse_quote! {
-            secret_u::int::#ident
+            #crate_::int::#ident
         }
     }
 }
@@ -507,10 +511,11 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
         bitexprs.push(build_bitexpr(&ident!("a"), &prim_ty, &secret_ty, expr, i))
     }
 
+    let crate_ = crate_();
     let q = quote! {
         #vis fn #name(#(#arg_tys),*) -> (#(#ret_tys),*) {
-            use secret_u::int::SecretTruncate;
-            use secret_u::int::SecretEq;
+            use #crate_::int::SecretTruncate;
+            use #crate_::int::SecretEq;
 
             let mut a: [#secret_ty; #a_width] = [
                 #(#a_args),*

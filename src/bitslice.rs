@@ -11,9 +11,6 @@ mod tests {
     use std::convert::TryFrom;
     use crate::compile_object;
 
-    // hack to allow testing in same crate
-    use crate as secret_u;
-
     #[static_bitslice]
     const abcd: [u8; 4] = [
         0x3, 0x2, 0x1, 0x0
