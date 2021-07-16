@@ -47,18 +47,17 @@ where
     /// Wraps a non-secret value as a secret value
     fn classify(n: Self::PrimType) -> Self;
 
-    /// Extracts the secret value into a non-secret value
-    ///
-    /// Note this effectively "leaks" the secret value, so
-    /// is only allowed in unsafe code
-    unsafe fn declassify(self) -> Self::PrimType {
+    /// Extracts the secret value into a non-secret value, this
+    /// effectively "leaks" the secret value, but is necessary
+    /// to actually do anything
+    fn declassify(self) -> Self::PrimType {
         self.try_declassify().unwrap()
     }
 
     /// Same as declassify but propagating internal VM errors
     ///
     /// Useful for catching things like divide-by-zero
-    unsafe fn try_declassify(self) -> Result<Self::PrimType, Error>;
+    fn try_declassify(self) -> Result<Self::PrimType, Error>;
 
     /// Evaluate to immediate form
     ///
@@ -169,7 +168,7 @@ impl SecretType for SecretBool {
         SecretBool(OpTree::imm([v as u8]))
     }
 
-    unsafe fn try_declassify(self) -> Result<bool, Error> {
+    fn try_declassify(self) -> Result<bool, Error> {
         Ok(self.truncated_tree::<[u8;1]>().eval()?[0] != 0)
     }
 
@@ -371,11 +370,11 @@ macro_rules! secret_impl {
                 }}
             }
 
-            unsafe fn declassify(self) -> $u {
+            fn declassify(self) -> $u {
                 self.try_declassify().unwrap()
             }
 
-            unsafe fn try_declassify(self) -> Result<$u, Error> {
+            fn try_declassify(self) -> Result<$u, Error> {
                 match_arr! { $s {
                     _ => {
                         Ok(<$u>::from_le_bytes(self.0.eval()?))
@@ -886,7 +885,7 @@ mod tests {
         let b = SecretBool::new(true);
         let x = (a.clone() & b.clone()).eq(a | b);
         println!("{}", x.clone().tree());
-        let v = unsafe { x.declassify() };
+        let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, true);
     }
@@ -898,7 +897,7 @@ mod tests {
         let b = SecretBool::new(false);
         let x = (a.clone() | b.clone()).select(a, b);
         println!("{}", x.clone().tree());
-        let v = unsafe { x.declassify() };
+        let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, true);
     }
@@ -910,13 +909,13 @@ mod tests {
         let b = SecretU32::new(10);
         let x = !a.clone().gt(b.clone());
         println!("{}", x.clone().tree());
-        let v = unsafe { x.declassify() };
+        let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, false);
 
         let x = (!a.clone().gt(b.clone())).select(a, b);
         println!("{}", x.clone().tree());
-        let v = unsafe { x.declassify() };
+        let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 10);
     }
@@ -927,7 +926,7 @@ mod tests {
         let a = SecretI32::new(-100);
         let x = a.abs();
         println!("{}", x.clone().tree());
-        let v = unsafe { x.declassify() };
+        let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 100);
     }
@@ -940,7 +939,7 @@ mod tests {
         let c = SecretU32::new(5);
         let x = (a.clone()*a + b.clone()*b) / c;
         println!("{}", x.clone().tree());
-        let v = unsafe { x.declassify() };
+        let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 5);
     }
@@ -953,7 +952,7 @@ mod tests {
         let c = SecretI32::new(-5);
         let x = (a.clone()*a + b.clone()*b) / c;
         println!("{}", x.clone().tree());
-        let v = unsafe { x.declassify() };
+        let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, -5);
     }
@@ -968,13 +967,13 @@ mod tests {
             let sc = SecretU32::new(c);
             let x = sb.clone().lt(sc.clone());
             println!("{}", x.clone().tree());
-            let v = unsafe { x.declassify() };
+            let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, b < c);
 
             let x = sa.clamp(sb, sc);
             println!("{}", x.clone().tree());
-            let v = unsafe { x.declassify() };
+            let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, a.clamp(b, c));
         }
@@ -992,19 +991,19 @@ mod tests {
             let a = SecretU32::new(n);
             let x = a.clone().leading_zeros();
             println!("{}", x.clone().tree());
-            let v = unsafe { x.declassify() };
+            let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, n.leading_zeros());
 
             let x = a.clone().is_power_of_two();
             println!("{}", x.clone().tree());
-            let v = unsafe { x.declassify() };
+            let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, n.is_power_of_two());
 
             let x = a.next_power_of_two();
             println!("{}", x.clone().tree());
-            let v = unsafe { x.declassify() };
+            let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, n.next_power_of_two());
         }

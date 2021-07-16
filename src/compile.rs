@@ -88,7 +88,7 @@ macro_rules! compile_object {
                 /// Access to the underlying stack, note that this
                 /// may contain secrets and unpatched symbols
                 #[allow(dead_code)]
-                pub unsafe fn stack<'a>(&'a self) -> &'a [u8] {
+                pub fn stack<'a>(&'a self) -> &'a [u8] {
                     &self.__stack
                 }
 
@@ -137,7 +137,7 @@ macro_rules! compile_object {
                 ) -> Result<$r, $crate::error::Error> {
                     self.try_call(
                         $(
-                            unsafe { compile_object!(@ident $($a)+).declassify() }
+                            compile_object!(@ident $($a)+).declassify()
                         ),*
                     ).map(|r| <$r>::classify(r))
                 }
@@ -205,8 +205,8 @@ mod tests {
         println!();
         l.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { l.stack() }.len() {
-            print!(" {:02x}", unsafe { l.stack()[i] });
+        for i in 0..l.stack().len() {
+            print!(" {:02x}", l.stack()[i]);
         }
         println!();
         println!("  call:");
@@ -245,8 +245,8 @@ mod tests {
         println!();
         l.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { l.stack() }.len() {
-            print!(" {:02x}", unsafe { l.stack()[i] });
+        for i in 0..l.stack().len() {
+            print!(" {:02x}", l.stack()[i]);
         }
         println!();
         println!("  call:");
@@ -302,8 +302,8 @@ mod tests {
         println!();
         l.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { l.stack() }.len() {
-            print!(" {:02x}", unsafe { l.stack()[i] });
+        for i in 0..l.stack().len() {
+            print!(" {:02x}", l.stack()[i]);
         }
         println!();
         println!("  call:");

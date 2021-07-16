@@ -34,8 +34,8 @@ mod tests {
         println!();
         f.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { f.stack() }.len() {
-            print!(" {:02x}", unsafe { f.stack()[i] });
+        for i in 0..f.stack().len() {
+            print!(" {:02x}", f.stack()[i]);
         }
         println!();
 
@@ -76,8 +76,8 @@ mod tests {
         println!();
         f.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { f.stack() }.len() {
-            print!(" {:02x}", unsafe { f.stack()[i] });
+        for i in 0..f.stack().len() {
+            print!(" {:02x}", f.stack()[i]);
         }
         println!();
 
@@ -118,8 +118,8 @@ mod tests {
         println!();
         f.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { f.stack() }.len() {
-            print!(" {:02x}", unsafe { f.stack()[i] });
+        for i in 0..f.stack().len() {
+            print!(" {:02x}", f.stack()[i]);
         }
         println!();
 
@@ -159,8 +159,8 @@ mod tests {
         println!();
         f.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { f.stack() }.len() {
-            print!(" {:02x}", unsafe { f.stack()[i] });
+        for i in 0..f.stack().len() {
+            print!(" {:02x}", f.stack()[i]);
         }
         println!();
 
@@ -203,8 +203,8 @@ mod tests {
         println!();
         f.disas(io::stdout()).unwrap();
         print!("  stack:");
-        for i in 0..unsafe { f.stack() }.len() {
-            print!(" {:02x}", unsafe { f.stack()[i] });
+        for i in 0..f.stack().len() {
+            print!(" {:02x}", f.stack()[i]);
         }
         println!();
 

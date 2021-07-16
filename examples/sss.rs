@@ -193,7 +193,7 @@ fn main() {
 
     // declassify
     let secret = secret.into_iter()
-        .map(|x| unsafe { x.declassify() })
+        .map(|x| x.declassify())
         .collect::<Vec<_>>();
 
     let message = String::from_utf8_lossy(&secret);
