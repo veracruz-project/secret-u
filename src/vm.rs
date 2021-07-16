@@ -3,6 +3,12 @@
 use crate::error::Error;
 use std::mem::size_of;
 
+#[cfg(feature="debug-trace")]
+use crate::opcode::Op;
+#[cfg(feature="debug-trace")]
+use std::convert::TryFrom;
+
+
 //// utility traits/functions ////
 pub trait LoadStore: Sized {
     fn load(arr: &[u8], i: usize) -> Result<Self, Error>;
@@ -717,7 +723,10 @@ pub fn exec<'a>(
 
         #[cfg(feature="debug-trace")]
         {
-            print!("    exec {:#06x} ::", op);
+            match Op::try_from(op) {
+                Ok(op) => print!("    {:<16} :", format!("{}", op)),
+                _      => print!("    {:<16} :", format!("unknown {:#06x}", op)),
+            }
             for i in 0..stack.len() {
                 print!("{}{:02x}",
                     if i == sp { '|' } else { ' ' },

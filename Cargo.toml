@@ -5,7 +5,7 @@ authors = ["Christopher Haster <christopher.haster@arm.com>"]
 edition = "2018"
 
 [features]
-default = ["opt-register-coloring", "opt-const-folding"]
+default = ["opt-register-coloring", "opt-const-folding", "bitslice-simplify-bdd"]
 # color registers to minimize memory consumption, note this,
 # somewhat ironically, requires memory allocations during
 # compilation
@@ -17,9 +17,13 @@ opt-const-folding = []
 debug-trace = []
 # show proc macro generation
 debug-proc-macro = ["secret-u-macros/debug-proc-macro"]
+# simplify by DeMorgan identities
+bitslice-simplify-identities = []
+# simplify by BDD (use this if you want compilation to take forever
+bitslice-simplify-bdd = []
 
 [dependencies]
-secret-u-macros = { path = "secret-u-macros" }
+secret-u-macros = { path = "secret-u-macros", default-features = false }
 thiserror = "1.0.25"
 paste = "1.0.5"
 aligned-utils = "1.0.2"

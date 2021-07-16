@@ -175,6 +175,12 @@ impl Op {
     }
 }
 
+impl From<Op> for u16 {
+    fn from(op: Op) -> u16 {
+        op.0
+    }
+}
+
 impl TryFrom<u16> for Op {
     type Error = Error;
 
@@ -257,6 +263,7 @@ impl fmt::Display for Op {
     }
 }
 
+
 /// helper function for debugging
 pub fn disas<W: io::Write>(
     bytecode: &[u8],
@@ -266,10 +273,10 @@ pub fn disas<W: io::Write>(
     while bytecode.len() > 0 {
         match Op::decode(&mut bytecode)? {
             Ok(opcode) => {
-                writeln!(out, "    {}", opcode)?;
+                writeln!(out, "    {:04x} {}", u16::from(opcode), opcode)?;
             }
             Err(Error::InvalidOpcode(op)) => {
-                writeln!(out, "    unknown {:#06x}", op)?;
+                writeln!(out, "    {:04x} unknown {:#06x}", op, op)?;
             }
             Err(_) => {
                 panic!("unexpected error in disas?");
@@ -455,8 +462,6 @@ optype_impl! { [u8; 64  (6)] }
 optype_impl! { [u8; 128 (7)] }
 
 
-
-
 /// Kinds of operations in tree
 #[derive(Debug)]
 pub enum OpKind<T: OpType> {
@@ -544,7 +549,7 @@ impl OpCompile<'_> {
             max_align: 0,
 
             #[cfg(feature="opt-register-coloring")]
-            slot_pool: opt.then(|| Vec::new()),
+            slot_pool: Some(Vec::new()),
         }
     }
 
@@ -1813,9 +1818,9 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                     .enumerate()
                     .filter(|(_, (npw2, _))| *npw2 >= T::NPW2)
                     .min_by_key(|(_, (npw2, _))| *npw2);
-                if let Some((i, (_, slot))) = slot {
+                if let Some((i, (npw2, slot))) = slot {
                     pool.remove(i);
-                    Some(slot)
+                    Some((slot << npw2) >> T::NPW2)
                 } else {
                     None
                 }
@@ -1832,7 +1837,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
                 assert!(state.imms % T::SIZE == 0, "unaligned slot");
                 let slot = state.imms / T::SIZE;
-                let slot = u8::try_from(slot).expect("slot overflow");
+                let slot = u8::try_from(slot).unwrap_or(0); //.expect("slot overflow");
 
                 // update imms
                 state.imms += T::SIZE;
@@ -1989,4 +1994,6 @@ mod tests {
         assert_eq!(bytecode.len(), 12*2);
         assert_eq!(stack.len(), 6*4);
     }
+
+// TODO test constant folding
 }

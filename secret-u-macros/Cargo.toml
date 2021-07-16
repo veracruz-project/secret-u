@@ -9,11 +9,16 @@ edition = "2018"
 proc-macro = true
 
 [features]
+default = ["bitslice-simplify-identities"]
 debug-proc-macro = []
+# simplify by DeMorgan identities
+bitslice-simplify-identities = []
+# simplify by BDD (use this if you want compilation to take forever
+bitslice-simplify-bdd = []
 
 [dependencies]
 syn = {version="1.0.73", features=["full"]}
 quote = "1.0.9"
 proc-macro2 = "1.0.27"
 darling = "0.12.4"
-quine-mc_cluskey = "0.2.4"
+boolean_expression = "0.4.4"

@@ -12,10 +12,10 @@ use std::iter;
 use std::cmp::*;
 use std::env;
 
-use quine_mc_cluskey as qmc;
+use boolean_expression as be;
 
 fn crate_() -> proc_macro2::TokenStream {
-    if env::var("CARGO_PKG_NAME").unwrap() == "secret-u" {
+    if env::var("CARGO_CRATE_NAME").unwrap() == "secret_u" {
         quote! { crate }
     } else {
         quote! { ::secret_u }
@@ -23,7 +23,7 @@ fn crate_() -> proc_macro2::TokenStream {
 }
 
 
-// Quine-McCluskey boolean reduction
+// use the boolean_expression crate for bitexpr simplification
 
 fn find_in_width(table: &[u128], parallel: usize) -> usize {
     let width = table.len().next_power_of_two().trailing_zeros() as usize;
@@ -40,39 +40,33 @@ fn find_out_width(table: &[u128], parallel: usize) -> usize {
     width.next_power_of_two()
 }
 
-fn find_bitexpr(table: &[u128], width: usize, bit: usize) -> qmc::Bool {
+fn find_bitexpr(table: &[u128], width: usize, bit: usize) -> be::Expr<u8> {
     // build naive expr
-    let mut ors = Vec::new();
+    let mut ors = be::Expr::Const(false);
     for i in 0..table.len() {
         if table[i] & (1 << bit) == (1 << bit) {
-            let mut ands = Vec::new();
+            let mut ands = be::Expr::Const(true);
             for j in 0..width {
-                ands.push(
-                    if i & (1 << j) == (1 << j) {
-                        qmc::Bool::Term(j as u8)
-                    } else {
-                        qmc::Bool::Not(Box::new(
-                            qmc::Bool::Term(j as u8)
-                        ))
-                    }
-                );
+                if i & (1 << j) == (1 << j) {
+                    ands &= be::Expr::Terminal(j as u8);
+                } else {
+                    ands &= be::Expr::not(be::Expr::Terminal(j as u8))
+                }
             }
-            ors.push(qmc::Bool::And(ands));
+            ors |= ands;
         }
     }
 
-    match ors.len() {
-        0 => qmc::Bool::False,
-        1 => ors[0].clone(),
-        _ => qmc::Bool::Or(ors),
-    }
+    ors
 }
 
-fn simplify_bitexpr(expr: qmc::Bool) -> qmc::Bool {
-    // solve using qmc, arbitrarily choose the first form
-    // (all results have the same len)
-    let mut expr = expr.simplify();
-    expr.swap_remove(0)
+fn simplify_bitexpr(expr: be::Expr<u8>) -> be::Expr<u8> {
+    #[cfg(feature="bitslice-simplify-bdd")]
+    let expr = expr.simplify_via_bdd();
+    #[cfg(all(feature="bitslice-simplify-identities", not(feature="bitslice-simplify-bdd")))]
+    let expr = expr.simplify_via_laws();
+
+    expr
 }
 
 
@@ -151,11 +145,12 @@ impl Prim {
 
     fn from_len(len: usize) -> Prim {
         match len {
-            len if len <= u8::MAX as usize => Prim::U8,
-            len if len <= u16::MAX as usize  => Prim::U16,
-            len if len <= u32::MAX as usize  => Prim::U32,
-            len if len <= u64::MAX as usize  => Prim::U64,
-            len if len <= u128::MAX as usize => Prim::U128,
+            0 => Prim::U8,
+            len if len-1 <= u8::MAX as usize   => Prim::U8,
+            len if len-1 <= u16::MAX as usize  => Prim::U16,
+            len if len-1 <= u32::MAX as usize  => Prim::U32,
+            len if len-1 <= u64::MAX as usize  => Prim::U64,
+            len if len-1 <= u128::MAX as usize => Prim::U128,
             _ => panic!("len > u128?"),
         }
     }
@@ -253,35 +248,75 @@ fn build_bitexpr(
     b: &syn::Ident,
     prim_ty: &syn::Type,
     secret_ty: &syn::Type,
-    expr: qmc::Bool,
+    expr: be::Expr<u8>,
     bit: usize
-) -> syn::Expr {
+) -> proc_macro2::TokenStream {
     match expr {
-        qmc::Bool::True  => parse_quote! {
-            #secret_ty::ones()
+        be::Expr::Const(true) => {
+            quote! { #secret_ty::ones() }
         },
-        qmc::Bool::False => parse_quote! {
-            #secret_ty::zero()
+        be::Expr::Const(false) => {
+            quote! { #secret_ty::zero() }
         },
-        qmc::Bool::Term(i) => {
+        be::Expr::Terminal(i) => {
             let i = lit!(i);
-            parse_quote! { #b[#i].clone() }
+            quote! { #b[#i].clone() }
         },
-        qmc::Bool::Not(v) => {
+        be::Expr::Not(v) => {
             let x = build_bitexpr(b, prim_ty, secret_ty, *v, bit);
-            parse_quote! { (!#x) }
+            quote! { (!#x) }
         },
-        qmc::Bool::And(vs) => {
-            let xs = vs.into_iter()
-                .map(|v| build_bitexpr(b, prim_ty, secret_ty, v, bit))
-                .collect::<Vec<_>>();
-            parse_quote! { (#(#xs)&*) }
+        be::Expr::And(v0, v1) => {
+            // this is to reduce parsing pressure
+            let mut pending = vec![v0, v1];
+            let mut xs = Vec::new();
+            while let Some(x) = pending.pop() {
+                if let be::Expr::And(v0, v1) = *x {
+                    if let be::Expr::Const(true) = *v0 {
+                        // skip
+                    } else {
+                        pending.push(v0);
+                    }
+                    if let be::Expr::Const(true) = *v1 {
+                        // skip
+                    } else {
+                        pending.push(v1);
+                    }
+                } else {
+                    xs.push(build_bitexpr(b, prim_ty, secret_ty, *x, bit));
+                }
+            }
+
+            match xs.len() {
+                0 => quote! { #secret_ty::ones() },
+                _ => quote! { (#(#xs)&*) },
+            }
         },
-        qmc::Bool::Or(vs) => {
-            let xs = vs.into_iter()
-                .map(|v| build_bitexpr(b, prim_ty, secret_ty, v, bit))
-                .collect::<Vec<_>>();
-            parse_quote! { (#(#xs)|*) }
+        be::Expr::Or(v0, v1) => {
+            // this is to reduce parsing pressure
+            let mut pending = vec![v0, v1];
+            let mut xs = Vec::new();
+            while let Some(x) = pending.pop() {
+                if let be::Expr::Or(v0, v1) = *x {
+                    if let be::Expr::Const(false) = *v0 {
+                        // skip
+                    } else {
+                        pending.push(v0);
+                    }
+                    if let be::Expr::Const(false) = *v1 {
+                        // skip
+                    } else {
+                        pending.push(v1);
+                    }
+                } else {
+                    xs.push(build_bitexpr(b, prim_ty, secret_ty, *x, bit));
+                }
+            }
+
+            match xs.len() {
+                0 => quote! { #secret_ty::zero() },
+                _ => quote! { (#(#xs)|*) },
+            }
         },
     }
 }
@@ -504,15 +539,16 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
         let expr = find_bitexpr(&elems, a_width, i);
         let expr = simplify_bitexpr(expr);
         
-        if cfg!(feature = "debug-proc-macro") {
-            println!("bit({}) = {:?}", i, expr);
-        }
+//        if cfg!(feature = "debug-proc-macro") {
+//            println!("bit({}) = {:?}", i, expr);
+//        }
 
         bitexprs.push(build_bitexpr(&ident!("a"), &prim_ty, &secret_ty, expr, i))
     }
 
     let crate_ = crate_();
     let q = quote! {
+        #[allow(non_snake_case)]
         #vis fn #name(#(#arg_tys),*) -> (#(#ret_tys),*) {
             use #crate_::int::SecretTruncate;
             use #crate_::int::SecretEq;
