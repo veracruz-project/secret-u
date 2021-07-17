@@ -205,6 +205,6 @@ fn main() {
         .collect::<Vec<_>>();
 
     let message = String::from_utf8_lossy(&secret);
-    assert_eq!(message, "Hello World!");
     println!("{}", message);
+    assert_eq!(message, "Hello World!");
 }

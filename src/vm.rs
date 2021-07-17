@@ -1032,7 +1032,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -1070,7 +1071,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -1118,7 +1120,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -1158,7 +1161,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, mut stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -1218,7 +1222,8 @@ mod tests {
 
                 let result = exec(&bytecode, &mut stack).unwrap();
                 let result = <$t>::load(&result, 0).unwrap();
-                println!("{} -> {}", input, result);
+                input.disas(io::stdout()).unwrap();
+                println!("=> {}", result);
 
                 assert_eq!(result, $expected);
             }

@@ -13,6 +13,10 @@ opt-register-coloring = []
 # perform constant folding during compilation, note this run
 # small chunks of bytecode in the vm to do the folding
 opt-const-folding = []
+# show trees before compilation
+debug-trees = []
+# show bytecode output by compilation
+debug-bytecode = []
 # show VM execution
 debug-trace = []
 # show proc macro generation

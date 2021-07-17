@@ -91,8 +91,16 @@ macro_rules! compile_object {
 
                 /// Write dissassembly to output stream
                 #[allow(dead_code)]
-                pub fn disas<W: io::Write>(&self, out: W) -> Result<(), io::Error> {
-                    $crate::opcode::disas(&self.__bytecode, out)
+                pub fn disas<W: io::Write>(&self, mut out: W) -> Result<(), io::Error> {
+                    write!(out, "stack:")?;
+                    for b in self.__stack.iter() {
+                         write!(out, " {:02x}", b)?;
+                    }
+                    writeln!(out)?;
+
+                    writeln!(out, "bytecode:")?;
+                    $crate::opcode::disas(&self.__bytecode, out)?;
+                    Ok(())
                 }
 
                 /// Call underlying bytecode, returning any errors during execution
@@ -163,7 +171,6 @@ macro_rules! compile {
 mod tests {
     use crate::int::*;
     use std::io;
-    use std::convert::TryFrom;
 
     #[test]
     fn compile_add() {
@@ -172,20 +179,8 @@ mod tests {
         let l = compile_object!(|x: SecretU32, y: SecretU32| -> SecretU32 {
             x + y
         });
-        print!("  bytecode:");
-        for i in (0..l.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&l.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         l.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..l.stack().len() {
-            print!(" {:02x}", l.stack()[i]);
-        }
-        println!();
-        println!("  call:");
+        println!("call:");
         let v = l.call(SecretU32::new(1), SecretU32::new(2)).declassify();
         println!("{:?}", v);
         assert_eq!(v, 3);
@@ -212,20 +207,8 @@ mod tests {
             let b = z.clone()*z;
             a.eq(b)
         });
-        print!("  bytecode:");
-        for i in (0..l.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&l.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         l.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..l.stack().len() {
-            print!(" {:02x}", l.stack()[i]);
-        }
-        println!();
-        println!("  call:");
+        println!("call:");
         let v = l.call(SecretU32::new(3), SecretU32::new(4), SecretU32::new(5)).declassify();
         println!("{:?}", v);
 
@@ -269,20 +252,8 @@ mod tests {
             // lo and hi should converge
             hi
         });
-        print!("  bytecode:");
-        for i in (0..l.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&l.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         l.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..l.stack().len() {
-            print!(" {:02x}", l.stack()[i]);
-        }
-        println!();
-        println!("  call:");
+        println!("call:");
         let v = l.call(SecretU32::new(100)).declassify();
         println!("{:?}", v);
         assert_eq!(v, 10);

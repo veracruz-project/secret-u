@@ -13,6 +13,7 @@ use crate::vm::exec;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::cell::RefCell;
+use std::io::Write;
 
 use aligned_utils::bytes::AlignedBytes;
 
@@ -263,6 +264,20 @@ impl fmt::Display for Op {
     }
 }
 
+fn arbitrary_names() -> impl Iterator<Item=String> {
+    let alphabet = "abcdefghijklmnopqrstuvwxyz";
+    // a..z
+    alphabet.chars()
+        .map(move |c| String::from(c))
+        .chain(
+            // a2..z2, a3..z3, ...
+            (2..).map(move |n| {
+                    alphabet.chars()
+                        .map(move |c| format!("{}{}", c, n))
+                })
+                .flatten()
+        )
+}
 
 /// helper function for debugging
 pub fn disas<W: io::Write>(
@@ -340,6 +355,9 @@ pub trait OpType: Copy + Clone + Debug + 'static {
 
     /// Test if self is ones
     fn is_ones(&self) -> bool;
+
+    /// Display as hex, used for debugging
+    fn hex(&self) -> String;
 }
 
 macro_rules! optype_impl {
@@ -446,6 +464,15 @@ macro_rules! optype_impl {
 
             fn is_ones(&self) -> bool {
                 self == &[0xff; $n]
+            }
+
+            /// Display as hex, used for debugging
+            fn hex(&self) -> String {
+                let mut buf = vec![b'0', b'x'];
+                for b in self.iter().rev() {
+                    write!(buf, "{:02x}", b).unwrap();
+                }
+                String::from_utf8(buf).unwrap()
             }
         }
     };
@@ -843,12 +870,39 @@ impl<T: OpType> OpTree<T> {
         }
     }
 
+    /// display tree for debugging
+    pub fn disas<W: io::Write>(&self, mut out: W) -> Result<(), io::Error> {
+        // get a source of variable names, these represent
+        // deduplicate dag branches
+        let mut slot_names = HashMap::new();
+        let mut arbitrary_names = arbitrary_names();
+
+        // two passes, since we want to deduplicate the dag, otherwise
+        // our debug output gets VERY BIG
+        self.disas_pass1();
+        let expr = self.disas_pass2(
+            &mut slot_names,
+            &mut arbitrary_names,
+            &mut out
+        )?;
+
+        // cleanup last expression
+        write!(out, "    {}\n", expr)
+    }
+
     /// high-level compile into bytecode, stack, and initial stack pointer
     pub fn compile(&self, opt: bool) -> (AlignedBytes, AlignedBytes) {
         // should we do a constant folding pass?
         #[cfg(feature="opt-const-folding")]
         if opt {
             self.fold_consts();
+        }
+
+        // debug?
+        #[cfg(feature="debug-trees")]
+        {
+            println!("tree:");
+            self.disas(io::stdout()).unwrap();
         }
 
         // NOTE! We make sure to zero all refs from pass1 to pass2, this is
@@ -893,6 +947,19 @@ impl<T: OpType> OpTree<T> {
         let mut aligned_stack = AlignedBytes::new_zeroed(imms, max_align);
         aligned_stack[..stack.len()].copy_from_slice(&stack);
 
+        #[cfg(feature="debug-bytecode")]
+        {
+            println!("stack:");
+            print!("   ");
+            for b in aligned_stack.iter() {
+                 print!(" {:02x}", b);
+            }
+            println!();
+
+            println!("bytecode:");
+            disas(&aligned_bytecode, io::stdout()).unwrap();
+        }
+
         // imms is now the initial stack pointer
         (aligned_bytecode, aligned_stack)
     }
@@ -929,51 +996,8 @@ impl<T: OpType> OpTree<T> {
     }
 }
 
-impl<T: OpType> fmt::Display for OpTree<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        let w = T::WIDTH;
-        match &self.kind {
-            OpKind::Imm(v)          => write!(fmt, "(u{}.imm {:?})", w, v),
-            OpKind::Sym(s)          => write!(fmt, "(u{}.sym {:?})", w, s),
-            OpKind::Truncate(a)     => write!(fmt, "(u{}.truncate {})", w, a),
-            OpKind::Extends(a)      => write!(fmt, "(u{}.extends {})", w, a),
-            OpKind::Extendu(a)      => write!(fmt, "(u{}.extendu {})", w, a),
-            OpKind::Select(p, a, b) => write!(fmt, "(u{}.select {} {} {})", w, p, a, b),
-            OpKind::Eqz(a)          => write!(fmt, "(u{}.eqz {})", w, a),
-            OpKind::Eq(a, b)        => write!(fmt, "(u{}.eq {} {})", w, a, b),
-            OpKind::Ne(a, b)        => write!(fmt, "(u{}.ne {} {})", w, a, b),
-            OpKind::Lts(a, b)       => write!(fmt, "(u{}.lts {} {})", w, a, b),
-            OpKind::Ltu(a, b)       => write!(fmt, "(u{}.ltu {} {})", w, a, b),
-            OpKind::Gts(a, b)       => write!(fmt, "(u{}.gts {} {})", w, a, b),
-            OpKind::Gtu(a, b)       => write!(fmt, "(u{}.gtu {} {})", w, a, b),
-            OpKind::Les(a, b)       => write!(fmt, "(u{}.les {} {})", w, a, b),
-            OpKind::Leu(a, b)       => write!(fmt, "(u{}.leu {} {})", w, a, b),
-            OpKind::Ges(a, b)       => write!(fmt, "(u{}.ges {} {})", w, a, b),
-            OpKind::Geu(a, b)       => write!(fmt, "(u{}.geu {} {})", w, a, b),
-            OpKind::Clz(a)          => write!(fmt, "(u{}.clz {})", w, a),
-            OpKind::Ctz(a)          => write!(fmt, "(u{}.ctz {})", w, a),
-            OpKind::Popcnt(a)       => write!(fmt, "(u{}.popcnt {})", w, a),
-            OpKind::Add(a, b)       => write!(fmt, "(u{}.add {} {})", w, a, b),
-            OpKind::Sub(a, b)       => write!(fmt, "(u{}.sub {} {})", w, a, b),
-            OpKind::Mul(a, b)       => write!(fmt, "(u{}.mul {} {})", w, a, b),
-            OpKind::Divs(a, b)      => write!(fmt, "(u{}.divs {} {})", w, a, b),
-            OpKind::Divu(a, b)      => write!(fmt, "(u{}.divu {} {})", w, a, b),
-            OpKind::Rems(a, b)      => write!(fmt, "(u{}.rems {} {})", w, a, b),
-            OpKind::Remu(a, b)      => write!(fmt, "(u{}.remu {} {})", w, a, b),
-            OpKind::And(a, b)       => write!(fmt, "(u{}.and {} {})", w, a, b),
-            OpKind::Or(a, b)        => write!(fmt, "(u{}.or {} {})", w, a, b),
-            OpKind::Xor(a, b)       => write!(fmt, "(u{}.xor {} {})", w, a, b),
-            OpKind::Shl(a, b)       => write!(fmt, "(u{}.shl {} {})", w, a, b),
-            OpKind::Shrs(a, b)      => write!(fmt, "(u{}.shrs {} {})", w, a, b),
-            OpKind::Shru(a, b)      => write!(fmt, "(u{}.shru {} {})", w, a, b),
-            OpKind::Rotl(a, b)      => write!(fmt, "(u{}.rotl {} {})", w, a, b),
-            OpKind::Rotr(a, b)      => write!(fmt, "(u{}.rotr {} {})", w, a, b),
-        }
-    }
-}
-
 // dyn-compatible wrapping trait
-pub trait DynOpTree: Debug + fmt::Display {
+pub trait DynOpTree: Debug {
     /// type's size in bytes, needed for determining cast sizes
     fn size(&self) -> usize;
 
@@ -1003,6 +1027,17 @@ pub trait DynOpTree: Debug + fmt::Display {
 
     /// hook to enable eqz without known type
     fn dyn_eqz(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree>;
+
+    /// First pass for debug output
+    fn disas_pass1(&self);
+
+    /// Second pass for debug output
+    fn disas_pass2(
+        &self,
+        names: &mut HashMap<usize, String>,
+        arbitrary_names: &mut dyn Iterator<Item=String>,
+        stmts: &mut dyn io::Write,
+    ) -> Result<String, io::Error>;
 
     /// An optional pass to fold consts in the tree
     #[cfg(feature="opt-const-folding")]
@@ -1097,6 +1132,385 @@ impl<T: OpType> DynOpTree for OpTree<T> {
             OpTree::eqz(OpTree::<T>::downcast(tree))
         }
         &eqz::<T>
+    }
+
+    fn disas_pass1(&self) {
+        // prefer folded tree
+        #[cfg(feature="opt-const-folding")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.disas_pass1();
+        }
+
+        // mark node as seen
+        let prefs = self.refs.get();
+        self.refs.set(prefs + 1);
+        if prefs > 0 {
+            // already visited?
+            return;
+        }
+
+        match &self.kind {
+            OpKind::Imm(_) => {},
+            OpKind::Sym(_) => {},
+
+            OpKind::Truncate(a) => {
+                a.disas_pass1();
+            }
+
+            OpKind::Extends(a) => {
+                a.disas_pass1();
+            }
+
+            OpKind::Extendu(a) => {
+                a.disas_pass1();
+            }
+
+            OpKind::Select(p, a, b) => {
+                p.disas_pass1();
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Eqz(a) => {
+                a.disas_pass1();
+            }
+
+            OpKind::Eq(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Ne(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Lts(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Ltu(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Gts(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Gtu(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Les(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Leu(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Ges(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Geu(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Clz(a) => {
+                a.disas_pass1();
+            }
+
+            OpKind::Ctz(a) => {
+                a.disas_pass1();
+            }
+
+            OpKind::Popcnt(a) => {
+                a.disas_pass1();
+            }
+
+            OpKind::Add(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Sub(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Mul(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Divs(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Divu(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Rems(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Remu(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::And(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Or(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Xor(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Shl(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Shrs(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Shru(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Rotl(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+
+            OpKind::Rotr(a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
+        }
+    }
+
+    fn disas_pass2(
+        &self,
+        names: &mut HashMap<usize, String>,
+        arbitrary_names: &mut dyn Iterator<Item=String>,
+        stmts: &mut dyn io::Write,
+    ) -> Result<String, io::Error> {
+        // prefer folded tree
+        #[cfg(feature="opt-const-folding")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.disas_pass2(names, arbitrary_names, stmts);
+        }
+
+        // is node shared?
+        let prefs = self.refs.get();
+        self.refs.set(prefs - 1);
+
+        // already computed?
+        let name = names.get(&((self as *const _) as usize));
+        if let Some(name) = name {
+            return Ok(name.clone());
+        }
+
+        let expr = match &self.kind {
+            OpKind::Imm(v) => format!("(u{}.imm {})", T::WIDTH, v.hex()),
+            OpKind::Sym(s) => format!("(u{}.sym {:?})", T::WIDTH, s),
+
+            OpKind::Truncate(a) => format!("(u{}.truncate {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Extends(a) => format!("(u{}.extends {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Extendu(a) => format!("(u{}.extendu {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+
+            OpKind::Select(p, a, b) => format!("(u{}.select {} {} {})",
+                T::WIDTH,
+                p.disas_pass2(names, arbitrary_names, stmts)?,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Eqz(a) => format!("(u{}.eqz {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Eq(a, b) => format!("(u{}.eq {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Ne(a, b) => format!("(u{}.ne {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Lts(a, b) => format!("(u{}.lts {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Ltu(a, b) => format!("(u{}.ltu {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Gts(a, b) => format!("(u{}.gts {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Gtu(a, b) => format!("(u{}.gtu {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Les(a, b) => format!("(u{}.les {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Leu(a, b) => format!("(u{}.leu {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Ges(a, b) => format!("(u{}.ges {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Geu(a, b) => format!("(u{}.geu {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Clz(a) => format!("(u{}.clz {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Ctz(a) => format!("(u{}.ctz {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Popcnt(a) => format!("(u{}.popcnt {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Add(a, b) => format!("(u{}.add {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Sub(a, b) => format!("(u{}.sub {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Mul(a, b) => format!("(u{}.mul {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Divs(a, b) => format!("(u{}.divs {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Divu(a, b) => format!("(u{}.divu {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Rems(a, b) => format!("(u{}.rems {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Remu(a, b) => format!("(u{}.remu {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::And(a, b) => format!("(u{}.and {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Or(a, b) => format!("(u{}.or {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Xor(a, b) => format!("(u{}.xor {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Shl(a, b) => format!("(u{}.shl {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Shrs(a, b) => format!("(u{}.shrs {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Shru(a, b) => format!("(u{}.shru {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Rotl(a, b) => format!("(u{}.rotl {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Rotr(a, b) => format!("(u{}.rotr {} {})",
+                T::WIDTH,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+        };
+
+        // used later? save as stmt?
+        if prefs > 1 {
+            let name = arbitrary_names.next().unwrap();
+            names.insert((self as *const _) as usize, name.clone());
+            write!(stmts, "    {} = {}\n", name, expr)?;
+            Ok(name)
+        } else {
+            Ok(expr)
+        }
     }
 
     #[cfg(feature="opt-const-folding")]
@@ -1905,7 +2319,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -1937,7 +2352,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -1979,7 +2395,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -2013,7 +2430,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
@@ -2047,7 +2465,8 @@ mod tests {
         );
 
         println!();
-        println!("input: {}", example);
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
         let (bytecode, stack) = example.compile(true);
         print!("  bytecode:");
         for i in (0..bytecode.len()).step_by(2) {
