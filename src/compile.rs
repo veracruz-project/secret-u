@@ -4,10 +4,6 @@ pub use paste::paste;
 pub use aligned_utils::bytes::AlignedBytes;
 
 
-/// A macro for wrapping precompiled (or manually compiled?)
-/// code into a
-
-
 /// A macro for compiling parameterized, secret expressions into 
 /// bytecode for fast repeated execution, resulting in a SecretClosure
 /// instead of callable Fn.
@@ -24,8 +20,9 @@ macro_rules! compile_object {
     // helper macros
     (@ident $a:ident) => { $a };
     (@ident $_:ident $($a:ident)+) => { compile_object!(@ident $($a)+) };
+
     (@str $($a:ident)+) => { stringify!(compile_object!(@ident $($a)+)) };
-    (@prim $t:ty) => { <$t as SecretType>::PrimType };
+
     (@tree $t:ty) => { Rc<OpTree<<$t as SecretType>::TreeType>> };
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
@@ -102,53 +99,33 @@ macro_rules! compile_object {
                 #[allow(dead_code)]
                 pub fn try_call(
                     &self,
-                    $(compile_object!(@ident $($a)+): compile_object!(@prim $t)),*
-                ) -> Result<compile_object!(@prim $r), $crate::error::Error> {
+                    $(compile_object!(@ident $($a)+): $t),*
+                ) -> Result<$r, $crate::error::Error> {
                     // clone since we don't watch to patch the common stack
                     let mut stack = self.__stack.clone();
 
                     // patch arguments
                     $(
                         self.[<__sym_$($a)+>].patch(
-                            compile_object!(@ident $($a)+).to_le_bytes(),
+                            compile_object!(@ident $($a)+)
+                                .declassify()
+                                .to_le_bytes(),
                             &mut stack
                         );
                     )*
 
                     // execute
                     <$r>::try_eval_bytecode(&self.__bytecode, &mut stack)
+                        .map(|r| <$r>::classify(r))
                 }
 
                 /// Call underlying bytecode
                 #[allow(dead_code)]
                 pub fn call(
                     &self,
-                    $(compile_object!(@ident $($a)+): compile_object!(@prim $t)),*
-                ) -> compile_object!(@prim $r) {
-                    self.try_call($(compile_object!(@ident $($a)+)),*).unwrap()
-                }
-
-                /// Call underlying bytecode, returning any errors during execution,
-                /// while maintaining secrecy
-                #[allow(dead_code)]
-                pub fn try_secret_call(
-                    &self,
-                    $(compile_object!(@ident $($a)+): $t),*
-                ) -> Result<$r, $crate::error::Error> {
-                    self.try_call(
-                        $(
-                            compile_object!(@ident $($a)+).declassify()
-                        ),*
-                    ).map(|r| <$r>::classify(r))
-                }
-
-                /// Call underlying bytecode, while maintaining secrecy
-                #[allow(dead_code)]
-                pub fn secret_call(
-                    &self,
                     $(compile_object!(@ident $($a)+): $t),*
                 ) -> $r {
-                    self.try_secret_call($(compile_object!(@ident $($a)+)),*).unwrap()
+                    self.try_call($(compile_object!(@ident $($a)+)),*).unwrap()
                 }
             }
 
@@ -168,15 +145,14 @@ macro_rules! compile {
     // helper macros
     (@ident $a:ident) => { $a };
     (@ident $_:ident $($a:ident)+) => { compile!(@ident $($a)+) };
-    (@prim $t:ty) => { <$t as SecretType>::PrimType };
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
-        use $crate::int::SecretType;
+        use $crate::compile_object;
 
         // defer to compile_object and wrap in closure
         let object = compile_object!($($move)? |$($($a)+: $t),*| -> $r {$($block)*});
 
-        move |$(compile!(@ident $($a)+): compile!(@prim $t)),*| -> compile!(@prim $r) {
+        move |$(compile!(@ident $($a)+): $t),*| -> $r {
             object.call($(compile!(@ident $($a)+)),*)
         }
     }}
@@ -210,7 +186,7 @@ mod tests {
         }
         println!();
         println!("  call:");
-        let v = l.call(1, 2);
+        let v = l.call(SecretU32::new(1), SecretU32::new(2)).declassify();
         println!("{:?}", v);
         assert_eq!(v, 3);
 
@@ -218,11 +194,11 @@ mod tests {
             x + y
         });
 
-        let v = l(1, 2);
+        let v = l(SecretU32::new(1), SecretU32::new(2)).declassify();
         println!("{}", v);
         assert_eq!(v, 3);
 
-        let v = l(3, 4);
+        let v = l(SecretU32::new(3), SecretU32::new(4)).declassify();
         println!("{}", v);
         assert_eq!(v, 7);
     }
@@ -250,7 +226,7 @@ mod tests {
         }
         println!();
         println!("  call:");
-        let v = l.try_call(3, 4, 5);
+        let v = l.call(SecretU32::new(3), SecretU32::new(4), SecretU32::new(5)).declassify();
         println!("{:?}", v);
 
         let l = compile!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
@@ -259,11 +235,11 @@ mod tests {
             a.eq(b)
         });
 
-        let v = l(3, 4, 5);
+        let v = l(SecretU32::new(3), SecretU32::new(4), SecretU32::new(5)).declassify();
         println!("{}", v);
         assert_eq!(v, true);
 
-        let v = l(6, 7, 8);
+        let v = l(SecretU32::new(6), SecretU32::new(7), SecretU32::new(8)).declassify();
         println!("{}", v);
         assert_eq!(v, false);
     }
@@ -307,13 +283,26 @@ mod tests {
         }
         println!();
         println!("  call:");
-        let v = l.try_call(100);
+        let v = l.call(SecretU32::new(100)).declassify();
         println!("{:?}", v);
-        assert_eq!(v.unwrap(), 10);
+        assert_eq!(v, 10);
 
         println!("  call:");
-        let v = l.try_call(10000);
+        let v = l.call(SecretU32::new(10000)).declassify();
         println!("{:?}", v);
-        assert_eq!(v.unwrap(), 100);
+        assert_eq!(v, 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "DeclassifyInCompile")]
+    fn compile_declassify_failure() {
+        // this should not work, we don't allow declassify because it's
+        // probably not what the user intends to do, and not something we
+        // actually can compile
+        let l = compile!(|x: SecretU32| -> SecretU32 {
+            SecretU32::new(x.declassify())
+        });
+
+        l(SecretU32::new(123));
     }
 }

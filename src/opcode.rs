@@ -426,7 +426,7 @@ macro_rules! optype_impl {
                     if let Some(c) = c {
                         c
                     } else {
-                        let c = Rc::new(OpTree::new(OpKind::Imm(v), true));
+                        let c = Rc::new(OpTree::new(OpKind::Imm(v), true, false));
                         map.insert(v, Rc::downgrade(&c));
                         c
                     }
@@ -514,6 +514,7 @@ pub struct OpTree<T: OpType> {
     refs: Cell<u32>,
     slot: Cell<Option<u8>>,
     const_: bool,
+    sym: bool,
     #[cfg(feature="opt-const-folding")]
     folded: RefCell<Option<Option<Rc<OpTree<T>>>>>,
 }
@@ -592,12 +593,13 @@ impl OpCompile<'_> {
 
 /// Core OpTree type
 impl<T: OpType> OpTree<T> {
-    fn new(kind: OpKind<T>, const_: bool) -> OpTree<T> {
+    fn new(kind: OpKind<T>, const_: bool, sym: bool) -> OpTree<T> {
         OpTree {
             kind: kind,
             refs: Cell::new(0),
             slot: Cell::new(None),
             const_: const_,
+            sym: sym,
             #[cfg(feature="opt-const-folding")]
             folded: RefCell::new(None),
         }
@@ -625,178 +627,211 @@ impl<T: OpType> OpTree<T> {
 
     /// Create an immediate, secret value
     pub fn imm(v: T) -> Rc<Self> {
-        Rc::new(Self::new(OpKind::Imm(v), false))
+        Rc::new(Self::new(OpKind::Imm(v), false, false))
     }
 
     // Constructors for other tree nodes, note that
     // constant-ness is propogated
     pub fn sym(name: &'static str) -> Rc<Self> {
-        Rc::new(Self::new(OpKind::Sym(name), false))
+        Rc::new(Self::new(OpKind::Sym(name), false, true))
     }
 
     pub fn truncate(a: Rc<dyn DynOpTree>) -> Rc<Self> {
         let const_ = a.is_const();
-        Rc::new(Self::new(OpKind::Truncate(a), const_))
+        let sym    = a.is_sym();
+        Rc::new(Self::new(OpKind::Truncate(a), const_, sym))
     }
 
     pub fn extends(a: Rc<dyn DynOpTree>) -> Rc<Self> {
         let const_ = a.is_const();
-        Rc::new(Self::new(OpKind::Extends(a), const_))
+        let sym    = a.is_sym();
+        Rc::new(Self::new(OpKind::Extends(a), const_, sym))
     }
 
     pub fn extendu(a: Rc<dyn DynOpTree>) -> Rc<Self> {
         let const_ = a.is_const();
-        Rc::new(Self::new(OpKind::Extendu(a), const_))
+        let sym    = a.is_sym();
+        Rc::new(Self::new(OpKind::Extendu(a), const_, sym))
     }
 
     pub fn select(a: Rc<Self>, b: Rc<Self>, c: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const() && c.is_const();
-        Rc::new(Self::new(OpKind::Select(a, b, c), const_))
+        let sym    = a.is_sym()   || b.is_sym()   || c.is_sym();
+        Rc::new(Self::new(OpKind::Select(a, b, c), const_, sym))
     }
 
     pub fn eqz(a: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const();
-        Rc::new(Self::new(OpKind::Eqz(a), const_))
+        let sym    = a.is_sym();
+        Rc::new(Self::new(OpKind::Eqz(a), const_, sym))
     }
 
     pub fn eq(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Eq(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Eq(a, b), const_, sym))
     }
 
     pub fn ne(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Ne(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Ne(a, b), const_, sym))
     }
 
     pub fn lts(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Lts(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Lts(a, b), const_, sym))
     }
 
     pub fn ltu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Ltu(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Ltu(a, b), const_, sym))
     }
 
     pub fn gts(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Gts(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Gts(a, b), const_, sym))
     }
 
     pub fn gtu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Gtu(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Gtu(a, b), const_, sym))
     }
 
     pub fn les(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Les(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Les(a, b), const_, sym))
     }
 
     pub fn leu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Leu(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Leu(a, b), const_, sym))
     }
 
     pub fn ges(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Ges(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Ges(a, b), const_, sym))
     }
 
     pub fn geu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Geu(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Geu(a, b), const_, sym))
     }
 
     pub fn clz(a: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const();
-        Rc::new(Self::new(OpKind::Clz(a), const_))
+        let sym    = a.is_sym();
+        Rc::new(Self::new(OpKind::Clz(a), const_, sym))
     }
 
     pub fn ctz(a: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const();
-        Rc::new(Self::new(OpKind::Ctz(a), const_))
+        let sym    = a.is_sym();
+        Rc::new(Self::new(OpKind::Ctz(a), const_, sym))
     }
 
     pub fn popcnt(a: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const();
-        Rc::new(Self::new(OpKind::Popcnt(a), const_))
+        let sym    = a.is_sym();
+        Rc::new(Self::new(OpKind::Popcnt(a), const_, sym))
     }
 
     pub fn add(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Add(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Add(a, b), const_, sym))
     }
 
     pub fn sub(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Sub(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Sub(a, b), const_, sym))
     }
 
     pub fn mul(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Mul(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Mul(a, b), const_, sym))
     }
 
     pub fn divs(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Divs(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Divs(a, b), const_, sym))
     }
 
     pub fn divu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Divu(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Divu(a, b), const_, sym))
     }
 
     pub fn rems(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Rems(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Rems(a, b), const_, sym))
     }
 
     pub fn remu(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Remu(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Remu(a, b), const_, sym))
     }
 
     pub fn and(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::And(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::And(a, b), const_, sym))
     }
 
     pub fn or(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Or(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Or(a, b), const_, sym))
     }
 
     pub fn xor(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Xor(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Xor(a, b), const_, sym))
     }
 
     pub fn shl(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Shl(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Shl(a, b), const_, sym))
     }
 
     pub fn shrs(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Shrs(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Shrs(a, b), const_, sym))
     }
 
     pub fn shru(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Shru(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Shru(a, b), const_, sym))
     }
 
     pub fn rotl(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Rotl(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Rotl(a, b), const_, sym))
     }
 
     pub fn rotr(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
         let const_ = a.is_const() && b.is_const();
-        Rc::new(Self::new(OpKind::Rotr(a, b), const_))
+        let sym    = a.is_sym()   || b.is_sym();
+        Rc::new(Self::new(OpKind::Rotr(a, b), const_, sym))
     }
 
     /// Downcast a generic OpTree, panicing if types do not match
@@ -877,7 +912,13 @@ impl<T: OpType> OpTree<T> {
 
     /// Assuming we are Sym, patch the stack during a call
     pub fn patch(&self, v: T, stack: &mut [u8]) {
-        assert!(self.is_sym(), "patching non-sym?");
+        assert!(
+            match self.kind {
+                OpKind::Sym(_) => true,
+                _              => false,
+            },
+            "patching non-sym?"
+        );
 
         let slot = self.slot.get().expect("patching with no slot?");
         let mut slice = &mut stack[
@@ -1000,10 +1041,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
     }
 
     fn is_sym(&self) -> bool {
-        match self.kind {
-            OpKind::Sym(_) => true,
-            _ => false,
-        }
+        self.sym
     }
 
     fn is_const(&self) -> bool {
@@ -1995,5 +2033,37 @@ mod tests {
         assert_eq!(stack.len(), 6*4);
     }
 
-// TODO test constant folding
+    #[test]
+    fn constant_folding() {
+        let a = OpTree::const_(3u32.to_le_bytes());
+        let b = OpTree::const_(4u32.to_le_bytes());
+        let c = OpTree::const_(5u32.to_le_bytes());
+        let example = OpTree::eq(
+            OpTree::add(
+                OpTree::mul(a.clone(), a),
+                OpTree::mul(b.clone(), b)
+            ),
+            OpTree::mul(c.clone(), c)
+        );
+
+        println!();
+        println!("input: {}", example);
+        let (bytecode, stack) = example.compile(true);
+        print!("  bytecode:");
+        for i in (0..bytecode.len()).step_by(2) {
+            print!(" {:04x}", u16::from_le_bytes(
+                <[u8; 2]>::try_from(&bytecode[i..i+2]).unwrap()
+            ));
+        }
+        println!();
+        disas(&bytecode, &mut io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..stack.len() {
+            print!(" {:02x}", stack[i]);
+        }
+        println!();
+
+        assert_eq!(bytecode.len(), 2*2);
+        assert_eq!(stack.len(), 2*4);
+    }
 }

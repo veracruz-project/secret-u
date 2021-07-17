@@ -2,6 +2,7 @@
 
 use secret_u::bitslice::static_bitslice;
 use secret_u::int::*;
+use secret_u::compile;
 
 // lookup tables for log and exp of polynomials in GF(256)
 
@@ -130,12 +131,19 @@ fn gf256_div(a: SecretU8, b: SecretU8) -> SecretU8 {
 /// find f(0) using Lagrange interpolation
 fn gf256_interpolate(xs: &[SecretU8], ys: &[SecretU8]) -> SecretU8 {
     assert!(xs.len() == ys.len());
+
+    let gf256_interpolate_single = compile!(
+        |li: SecretU8, x0: SecretU8, x1: SecretU8| -> SecretU8 {
+            gf256_mul(li, gf256_div(x1.clone(), x0 ^ x1))
+        }
+    );
+
     let mut y = SecretU8::zero();
     for (i, (x0, y0)) in xs.iter().zip(ys).enumerate() {
         let mut li = SecretU8::one();
         for (j, (x1, _y1)) in xs.iter().zip(ys).enumerate() {
             if i != j {
-                li = gf256_mul(li, gf256_div(x1.clone(), x0.clone() ^ x1.clone()));
+                li = gf256_interpolate_single(li, x0.clone(), x1.clone());
             }
         }
 

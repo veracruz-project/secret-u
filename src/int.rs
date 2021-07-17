@@ -169,6 +169,10 @@ impl SecretType for SecretBool {
     }
 
     fn try_declassify(self) -> Result<bool, Error> {
+        if self.0.is_sym() {
+            return Err(Error::DeclassifyInCompile);
+        }
+
         Ok(self.truncated_tree::<[u8;1]>().eval()?[0] != 0)
     }
 
@@ -370,11 +374,11 @@ macro_rules! secret_impl {
                 }}
             }
 
-            fn declassify(self) -> $u {
-                self.try_declassify().unwrap()
-            }
-
             fn try_declassify(self) -> Result<$u, Error> {
+                if self.0.is_sym() {
+                    return Err(Error::DeclassifyInCompile);
+                }
+
                 match_arr! { $s {
                     _ => {
                         Ok(<$u>::from_le_bytes(self.0.eval()?))

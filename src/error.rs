@@ -16,4 +16,6 @@ pub enum Error {
     OutOfBounds,
     #[error("Divide by zero")]
     DivideByZero,
+    #[error("Attempted to declassify in compile block")]
+    DeclassifyInCompile,
 }

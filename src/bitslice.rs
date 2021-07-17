@@ -41,7 +41,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..4 {
-            a.push(f.call(i));
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -83,7 +83,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..16 {
-            a.push(f.call(i));
+            a.push(f.call(SecretU32::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -125,7 +125,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..2 {
-            a.push(f.call(i));
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -166,7 +166,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..12 {
-            a.push(f.call(i));
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -208,7 +208,12 @@ mod tests {
         }
         println!();
 
-        let a = f.call(0, 1, 2, 3);
+        let a = f.call(
+            SecretU8::new(0),
+            SecretU8::new(1),
+            SecretU8::new(2),
+            SecretU8::new(3)
+        ).declassify();
         println!("{:?}", a);
         assert_eq!(a, 0x12345678);
     }
