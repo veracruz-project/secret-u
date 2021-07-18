@@ -18,4 +18,6 @@ pub enum Error {
     DivideByZero,
     #[error("Attempted to declassify in compile block")]
     DeclassifyInCompile,
+    #[error("Exceeded 256 slots for u{}", 8 << _0)]
+    OutOfSlots(u8),
 }

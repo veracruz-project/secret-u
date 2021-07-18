@@ -5,11 +5,7 @@ authors = ["Christopher Haster <christopher.haster@arm.com>"]
 edition = "2018"
 
 [features]
-default = ["opt-register-coloring", "opt-const-folding", "bitslice-simplify-bdd"]
-# color registers to minimize memory consumption, note this,
-# somewhat ironically, requires memory allocations during
-# compilation
-opt-register-coloring = []
+default = ["opt-const-folding", "bitslice-simplify-bdd"]
 # perform constant folding during compilation, note this run
 # small chunks of bytecode in the vm to do the folding
 opt-const-folding = []
