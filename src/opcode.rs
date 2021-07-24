@@ -10,6 +10,7 @@ use std::mem::transmute;
 use crate::error::Error;
 use std::cell::Cell;
 use crate::vm::exec;
+use crate::vm::exec_;
 use std::cmp::max;
 use std::cmp::min;
 use std::collections::HashMap;
@@ -856,6 +857,15 @@ pub trait OpType: Copy + Clone + Debug + 'static {
     /// Test if self is ones
     fn is_ones(&self) -> bool;
 
+    /// Can we compress into an extend_const_u instruction?
+    fn is_extend_u_compressable(&self, npw2: u8) -> bool;
+
+    /// Can we compress into an extend_const_s instruction?
+    fn is_extend_s_compressable(&self, npw2: u8) -> bool;
+
+    /// Can we compress into a splat_const instruction?
+    fn is_splat_compressable(&self, npw2: u8) -> bool;
+
     /// Display as hex, used for debugging
     fn hex(&self) -> String;
 }
@@ -980,7 +990,25 @@ macro_rules! optype_impl {
                 self == &Self::ones_()
             }
 
-            /// Display as hex, used for debugging
+            fn is_extend_u_compressable(&self, npw2: u8) -> bool {
+                let width = 1usize << npw2;
+                self[width..].iter().all(|b| *b == 0)
+            }
+
+            fn is_extend_s_compressable(&self, npw2: u8) -> bool {
+                let width = 1usize << npw2;
+                if self[width-1] & 0x80 == 0x80 {
+                    self[width..].iter().all(|b| *b == 0xff)
+                } else {
+                    self[width..].iter().all(|b| *b == 0x00)
+                }
+            }
+
+            fn is_splat_compressable(&self, npw2: u8) -> bool {
+                let width = 1usize << npw2;
+                (width..$n).step_by(width).all(|i| &self[i..i+width] == &self[..width])
+            }
+
             fn hex(&self) -> String {
                 let mut buf = vec![b'0', b'x'];
                 for b in self.iter().rev() {
@@ -1109,7 +1137,7 @@ pub struct OpTree<T: OpType> {
     slot: Cell<Option<u8>>,
     const_: bool,
     sym: bool,
-    #[cfg(feature="opt-const-folding")]
+    #[cfg(feature="opt-fold-consts")]
     folded: RefCell<Option<Option<Rc<OpTree<T>>>>>,
 }
 
@@ -1122,7 +1150,7 @@ pub struct OpTree_<T: OpType> {
     slot: Cell<Option<u8>>,
     const_: bool,
     sym: bool,
-    #[cfg(feature="opt-const-folding")]
+    #[cfg(feature="opt-fold-consts")]
     folded: RefCell<Option<Option<Rc<OpTree_<T>>>>>,
 }
 
@@ -1284,6 +1312,8 @@ pub struct OpCompile_ {
     bytecode: Vec<u32>,
     slots: Vec<u8>,
 
+    #[allow(dead_code)]
+    opt: bool,
     slot_pool: SlotPool,
 }
 
@@ -1353,10 +1383,12 @@ impl OpCompile {
 }
 
 impl OpCompile_ {
-    fn new() -> OpCompile_ {
+    fn new(opt: bool) -> OpCompile_ {
         OpCompile_ {
             bytecode: Vec::new(),
             slots: Vec::new(),
+
+            opt: opt,
             slot_pool: SlotPool::new(),
         }
     }
@@ -1371,7 +1403,7 @@ impl<T: OpType> OpTree<T> {
             slot: Cell::new(None),
             const_: const_,
             sym: sym,
-            #[cfg(feature="opt-const-folding")]
+            #[cfg(feature="opt-fold-consts")]
             folded: RefCell::new(None),
         }
     }
@@ -1637,7 +1669,7 @@ impl<T: OpType> OpTree<T> {
     /// high-level compile into bytecode, stack, and initial stack pointer
     pub fn compile(&self, #[allow(unused)] opt: bool) -> (AlignedBytes, AlignedBytes) {
         // should we do a constant folding pass?
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if opt {
             self.fold_consts();
         }
@@ -1706,6 +1738,7 @@ impl<T: OpType> OpTree<T> {
             _ => {
                 let (bytecode, mut stack) = self.compile(false);
                 let mut res = exec(&bytecode, &mut stack)?;
+                // TODO use decode?
                 let v = T::decode(&mut res).map_err(|_| Error::InvalidReturn)?;
                 Ok(v)
             }
@@ -1740,7 +1773,7 @@ impl<T: OpType> OpTree_<T> {
             slot: Cell::new(None),
             const_: const_,
             sym: sym,
-            #[cfg(feature="opt-const-folding")]
+            #[cfg(feature="opt-fold-consts")]
             folded: RefCell::new(None),
         }
     }
@@ -2058,9 +2091,9 @@ impl<T: OpType> OpTree_<T> {
     }
 
     /// high-level compile into bytecode, stack, and initial stack pointer
-    pub fn compile(&self, #[allow(unused)] opt: bool) -> (Vec<u32>, AlignedBytes) {
+    pub fn compile(&self, opt: bool) -> (Vec<u32>, AlignedBytes) {
         // should we do a constant folding pass?
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if opt {
             self.fold_consts();
         }
@@ -2077,7 +2110,7 @@ impl<T: OpType> OpTree_<T> {
         // we can't interrupt between passes without needing to reset all
         // internal reference counts
 
-        let mut state = OpCompile_::new();
+        let mut state = OpCompile_::new(opt);
 
         // first pass to find number of immediates and deduplicate branches
         self.compile_pass1(&mut state);
@@ -2129,11 +2162,10 @@ impl<T: OpType> OpTree_<T> {
         match self.kind {
             OpKind_::Imm(v) => Ok(v),
             _ => {
-                todo!()
-//                let (bytecode, mut stack) = self.compile(false);
-//                let mut res = exec(&bytecode, &mut stack)?;
-//                let v = T::decode(&mut res).map_err(|_| Error::InvalidReturn)?;
-//                Ok(v)
+                let (bytecode, mut stack) = self.compile(false);
+                let mut res = exec_(&bytecode, &mut stack)?;
+                let v = T::decode(&mut res).map_err(|_| Error::InvalidReturn)?;
+                Ok(v)
             }
         }
     }
@@ -2201,7 +2233,7 @@ pub trait DynOpTree: Debug {
     ) -> Result<String, io::Error>;
 
     /// An optional pass to fold consts in the tree
-    #[cfg(feature="opt-const-folding")]
+    #[cfg(feature="opt-fold-consts")]
     fn fold_consts(&self);
 
     /// First compile pass, used to find the number of immediates
@@ -2263,7 +2295,7 @@ pub trait DynOpTree_: Debug {
     ) -> Result<String, io::Error>;
 
     /// An optional pass to fold consts in the tree
-    #[cfg(feature="opt-const-folding")]
+    #[cfg(feature="opt-fold-consts")]
     fn fold_consts(&self);
 
     /// First compile pass, used to find the number of immediates
@@ -2306,13 +2338,13 @@ impl<T: OpType> DynOpTree for OpTree<T> {
     }
 
     fn is_zero(&self) -> bool {
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
             (true, OpKind::Imm(v), _            ) => v.is_zero(),
             (true, _,              Some(Some(x))) => x.is_zero(),
             _                                     => false,
         }
-        #[cfg(not(feature="opt-const-folding"))]
+        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind::Imm(v)) => v.is_zero(),
             _                      => false,
@@ -2320,13 +2352,13 @@ impl<T: OpType> DynOpTree for OpTree<T> {
     }
 
     fn is_one(&self) -> bool {
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
             (true, OpKind::Imm(v), _            ) => v.is_one(),
             (true, _,              Some(Some(x))) => x.is_one(),
             _                                     => false,
         }
-        #[cfg(not(feature="opt-const-folding"))]
+        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind::Imm(v)) => v.is_one(),
             _                      => false,
@@ -2334,13 +2366,13 @@ impl<T: OpType> DynOpTree for OpTree<T> {
     }
 
     fn is_ones(&self) -> bool {
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
             (true, OpKind::Imm(v), _            ) => v.is_ones(),
             (true, _,              Some(Some(x))) => x.is_ones(),
             _                                     => false,
         }
-        #[cfg(not(feature="opt-const-folding"))]
+        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind::Imm(v)) => v.is_ones(),
             _                      => false,
@@ -2358,7 +2390,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
     fn disas_pass1(&self) {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.disas_pass1();
         }
@@ -2543,7 +2575,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         stmts: &mut dyn io::Write,
     ) -> Result<String, io::Error> {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.disas_pass2(names, arbitrary_names, stmts);
         }
@@ -2735,7 +2767,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         }
     }
 
-    #[cfg(feature="opt-const-folding")]
+    #[cfg(feature="opt-fold-consts")]
     fn fold_consts(&self) {
         // already folded?
         if self.folded.borrow().is_some() {
@@ -2973,7 +3005,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
     fn compile_pass1(&self, state: &mut OpCompile) {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.compile_pass1(state);
         }
@@ -3186,7 +3218,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
 
     fn compile_pass2(&self, state: &mut OpCompile) {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.compile_pass2(state);
         }
@@ -3509,13 +3541,13 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
     }
 
     fn is_zero(&self) -> bool {
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
             (true, OpKind_::Imm(v), _            ) => v.is_zero(),
             (true, _,               Some(Some(x))) => x.is_zero(),
             _                                     => false,
         }
-        #[cfg(not(feature="opt-const-folding"))]
+        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind_::Imm(v)) => v.is_zero(),
             _                       => false,
@@ -3523,13 +3555,13 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
     }
 
     fn is_one(&self) -> bool {
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
             (true, OpKind_::Imm(v), _            ) => v.is_one(),
             (true, _,               Some(Some(x))) => x.is_one(),
             _                                     => false,
         }
-        #[cfg(not(feature="opt-const-folding"))]
+        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind_::Imm(v)) => v.is_zero(),
             _                       => false,
@@ -3537,13 +3569,13 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
     }
 
     fn is_ones(&self) -> bool {
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
             (true, OpKind_::Imm(v), _            ) => v.is_ones(),
             (true, _,               Some(Some(x))) => x.is_ones(),
             _                                      => false,
         }
-        #[cfg(not(feature="opt-const-folding"))]
+        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind_::Imm(v)) => v.is_zero(),
             _                       => false,
@@ -3570,7 +3602,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
 
     fn disas_pass1(&self) {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.disas_pass1();
         }
@@ -3756,7 +3788,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         stmts: &mut dyn io::Write,
     ) -> Result<String, io::Error> {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.disas_pass2(names, arbitrary_names, stmts);
         }
@@ -3991,14 +4023,257 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
     }
 
-    #[cfg(feature="opt-const-folding")]
+    #[cfg(feature="opt-fold-consts")]
     fn fold_consts(&self) {
-        todo!()
+        // already folded?
+        if self.folded.borrow().is_some() {
+            return;
+        }
+        self.folded.replace(Some(None));
+        
+        if !self.is_imm() && self.is_const() {
+            // oh hey, we're const
+            //
+            // note this recursively triggers another compilation
+            // + execution, so be careful
+            //
+            // if this fails we just bail on the const folding so the error
+            // can be reported at runtime
+            if let Ok(v) = self.eval() {
+                self.folded.replace(Some(Some(Self::const_(v))));
+                return;
+            }
+        }
+
+        match &self.kind {
+            OpKind_::Imm(_) => {},
+            OpKind_::Sym(_) => {},
+
+            OpKind_::Select(_, p, a, b) => {
+                p.fold_consts();
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::Extract(_, a) => {
+                a.fold_consts();
+            }
+            OpKind_::Replace(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind_::ExtendU(a) => {
+                a.fold_consts();
+            }
+            OpKind_::ExtendS(a) => {
+                a.fold_consts();
+            }
+            OpKind_::Splat(a) => {
+                a.fold_consts();
+            }
+            OpKind_::Shuffle(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind_::None(a) => {
+                a.fold_consts();
+            }
+            OpKind_::Any(a) => {
+                a.fold_consts();
+            }
+            OpKind_::All(_, a) => {
+                a.fold_consts();
+            }
+            OpKind_::Eq(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::Ne(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::LtU(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::LtS(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::GtU(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::GtS(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::LeU(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::LeS(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::GeU(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::GeS(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::MinU(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::MinS(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::MaxU(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+            OpKind_::MaxS(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
+
+            OpKind_::Neg(_, a) => {
+                a.fold_consts();
+            }
+            OpKind_::Abs(_, a) => {
+                a.fold_consts();
+            }
+            OpKind_::Not(a) => {
+                a.fold_consts();
+            }
+            OpKind_::Clz(_, a) => {
+                a.fold_consts();
+            }
+            OpKind_::Ctz(_, a) => {
+                a.fold_consts();
+            }
+            OpKind_::Popcnt(_, a) => {
+                a.fold_consts();
+            }
+            OpKind_::Add(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if a.is_zero() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Sub(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Mul(x, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if *x == 0 && a.is_one() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if *x == 0 && b.is_one() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::And(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if a.is_ones() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_ones() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Andnot(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if a.is_ones() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Or(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if a.is_zero() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Xor(a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if a.is_zero() {
+                    self.folded.replace(Some(Some(b.clone())));
+                } else if b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Shl(x, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if *x == 0 && b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::ShrU(x, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if *x == 0 && b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::ShrS(x, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if *x == 0 && b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Rotl(x, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if *x == 0 && b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+            OpKind_::Rotr(x, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+                #[cfg(feature="opt-fold-nops")]
+                if *x == 0 && b.is_zero() {
+                    self.folded.replace(Some(Some(a.clone())));
+                }
+            }
+        }
     }
 
     fn compile_pass1(&self, state: &mut OpCompile_) {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.compile_pass1(state);
         }
@@ -4228,7 +4503,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
 
     fn compile_pass2(&self, state: &mut OpCompile_) -> (u8, u8, bool) {
         // prefer folded tree
-        #[cfg(feature="opt-const-folding")]
+        #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.compile_pass2(state);
         }
@@ -4248,28 +4523,59 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 assert!(self.const_);
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                if T::NPW2 == 0 {
+                #[allow(unused_mut)] let mut best_npw2 = T::NPW2;
+                #[allow(unused_mut)] let mut best_ins8 = OpCode_::ExtendConst8U;
+                #[allow(unused_mut)] let mut best_ins = OpCode_::ExtendConstU;
+
+                // can we use a smaller encoding?
+                #[cfg(feature="opt-compress-consts")]
+                {
+                    if state.opt {
+                        for npw2 in 0..T::NPW2 {
+                            if v.is_extend_u_compressable(npw2) {
+                                best_npw2 = npw2;
+                                best_ins8 = OpCode_::ExtendConst8U;
+                                best_ins  = OpCode_::ExtendConstU;
+                                break;
+                            } else if v.is_extend_s_compressable(npw2) {
+                                best_npw2 = npw2;
+                                best_ins8 = OpCode_::ExtendConst8S;
+                                best_ins  = OpCode_::ExtendConstS;
+                                break;
+                            } else if v.is_splat_compressable(npw2) {
+                                best_npw2 = npw2;
+                                best_ins8 = OpCode_::SplatConst8;
+                                best_ins  = OpCode_::SplatConst;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // fall back to uncompressed encodings
+                if best_npw2 == 0 {
                     // u8s can fit directly in instruction
-                    // TODO compressed encoding schemes?
 
                     // TODO can this be more efficient (and less ugly)
                     let mut buf = Vec::new();
                     v.encode(&mut buf).unwrap();
+                    buf.truncate(1 << best_npw2);
                     debug_assert!(buf.len() == 1);
 
                     state.bytecode.push(u32::from(OpIns_::new(
-                        T::NPW2, 0, OpCode_::ExtendConst8U, 0, slot, buf[0]
+                        T::NPW2, 0, best_ins8, 0, slot, buf[0]
                     )));
                 } else {
                     // encode const into bytecode stream
                     // TODO compressed encoding schemes?
                     state.bytecode.push(u32::from(OpIns_::new(
-                        T::NPW2, T::NPW2, OpCode_::ExtendConstU, 0, slot, 0
+                        T::NPW2, best_npw2, best_ins, 0, slot, 0
                     )));
 
                     // TODO can this be more efficient
                     let mut buf = Vec::new();
                     v.encode(&mut buf).unwrap();
+                    buf.truncate(1 << best_npw2);
                     buf.resize(max(4, buf.len()), 0);
                     for i in (0..buf.len()).step_by(4) {
                         state.bytecode.push(u32::from_le_bytes(
@@ -5372,9 +5678,8 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 4);
+        assert_eq!(stack.len(), 12);
     }
 
     #[test]
@@ -5396,11 +5701,9 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 4);
+        assert_eq!(stack.len(), 12);
     }
-
 
     #[test]
     fn compile_alignment() {
@@ -5425,9 +5728,8 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 6);
+        assert_eq!(stack.len(), 8);
     }
 
     #[test]
@@ -5463,9 +5765,8 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 12);
+        assert_eq!(stack.len(), 5*4);
     }
 
     #[test]
@@ -5493,9 +5794,8 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 9);
+        assert_eq!(stack.len(), 16);
     }
 
     #[test]
@@ -5535,9 +5835,8 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 23);
+        assert_eq!(stack.len(), 80);
     }
 
     #[test]
@@ -5565,9 +5864,8 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 2);
+        assert_eq!(stack.len(), 8);
     }
 
     #[test]
@@ -5607,9 +5905,8 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 2);
+        assert_eq!(stack.len(), 1);
     }
 
     #[test]
@@ -5662,8 +5959,39 @@ mod tests {
         }
         println!();
 
-        // TODO
-        //assert_eq!(bytecode.len(), 4*2);
-        //assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 27);
+        assert_eq!(stack.len(), 36);
+    }
+
+    #[test]
+    fn compile_compressed_consts() {
+        let a = OpTree_::imm([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]);
+        let b = OpTree_::const_([1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+        let a = OpTree_::add(0, a, b);
+        let b = OpTree_::const_([0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]);
+        let a = OpTree_::add(0, a, b);
+        let b = OpTree_::const_([0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab]);
+        let a = OpTree_::add(0, a, b);
+        let b = OpTree_::const_([2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+        let a = OpTree_::add(0, a, b);
+        let b = OpTree_::const_([0xfd,0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]);
+        let a = OpTree_::add(0, a, b);
+        let b = OpTree_::const_([0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd]);
+        let example = OpTree_::add(0, a, b);
+
+        println!();
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
+        let (bytecode, stack) = example.compile(true);
+        println!("  bytecode:");
+        disas_(&bytecode, io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..stack.len() {
+            print!(" {:02x}", stack[i]);
+        }
+        println!();
+
+        assert_eq!(bytecode.len(), 17);
+        assert_eq!(stack.len(), 48);
     }
 }

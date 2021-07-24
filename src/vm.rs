@@ -4347,14 +4347,14 @@ mod tests {
             }
         };
         (
-            $name:ident { $op:ident($($l:expr)?; $($a:expr),+) => $expected:expr }
+            $name:ident { $op:ident($($x:expr)?; $($a:expr),+) => $expected:expr }
             $($rest:tt)*
         ) => {
             #[test]
             fn $name() {
                 let input = OpTree_::$op(
                     $(
-                        $l,
+                        $x,
                     )?
                     $(
                         OpTree_::imm($a)

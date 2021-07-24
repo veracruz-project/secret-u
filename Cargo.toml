@@ -4,11 +4,26 @@ version = "0.1.0"
 authors = ["Christopher Haster <christopher.haster@arm.com>"]
 edition = "2018"
 
+
 [features]
-default = ["opt-const-folding", "bitslice-simplify-bdd"]
+default = [
+    "opt-fold-consts",
+    "opt-fold-nops",
+    "opt-compress-consts",
+    "bitslice-simplify-bdd"
+]
+
 # perform constant folding during compilation, note this run
 # small chunks of bytecode in the vm to do the folding
-opt-const-folding = []
+opt-fold-consts = []
+# fold simple nops as a part of constant folding, these are
+# expressions such as x+0, x-0, x<<0, x*1, etc
+opt-fold-nops = ["opt-fold-consts"]
+# find compressed const representations, such as `u8x16.extend_const8_s 0xfe`
+# instead of `u128.move_const_s 0xfffffffffffffffffffffffffffffffe`, this
+# reduces bytecode size and may result in faster code
+opt-compress-consts = []
+
 # show trees before compilation
 debug-trees = []
 # show bytecode output by compilation
@@ -17,10 +32,12 @@ debug-bytecode = []
 debug-trace = []
 # show proc macro generation
 debug-proc-macro = ["secret-u-macros/debug-proc-macro"]
+
 # simplify by DeMorgan identities
 bitslice-simplify-identities = []
 # simplify by BDD (use this if you want compilation to take forever
 bitslice-simplify-bdd = []
+
 
 [dependencies]
 secret-u-macros = { path = "secret-u-macros", default-features = false }
