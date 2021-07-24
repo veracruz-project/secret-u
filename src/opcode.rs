@@ -14,6 +14,7 @@ use crate::vm::exec_;
 use std::cmp::max;
 use std::cmp::min;
 use std::collections::HashMap;
+#[cfg(feature="opt-color-slots")]
 use std::collections::BTreeSet;
 use std::cell::RefCell;
 use std::io::Write;
@@ -665,20 +666,18 @@ impl fmt::Display for OpIns_ {
 
             // special format for moves because they are so common
             OpCode_::ExtendConst8U if self.width() == self.xwidth() => {
-                write!(fmt, "u{}.move_const8 r{}, 0x{:02x}",
+                write!(fmt, "u{}.move_const8 r{}",
                     self.width(),
-                    self.a(),
-                    self.b()
+                    self.a()
                 )
             }
 
             OpCode_::ExtendConst8U | OpCode_::ExtendConst8S | OpCode_::SplatConst8 => {
-                write!(fmt, "u{}u{}.{} r{}, 0x{:02x}",
+                write!(fmt, "u{}u{}.{} r{}",
                     self.width(),
                     self.xwidth(),
                     self.opcode(),
-                    self.a(),
-                    self.b()
+                    self.a()
                 )
             }
 
@@ -777,6 +776,9 @@ pub fn disas_<W: io::Write>(
                             writeln!(out, "    {:08x}", bytecode[i])?;
                             i += 1;
                         }
+                    }
+                    OpCode_::ExtendConst8U | OpCode_::ExtendConst8S | OpCode_::SplatConst8 => {
+                        writeln!(out, "    {:08x} {}, 0x{:02x}", u32::from(ins), ins, ins.b())?;
                     }
                     _ => {
                         writeln!(out, "    {:08x} {}", u32::from(ins), ins)?;
@@ -1160,6 +1162,7 @@ struct SlotPool {
     // pool of deallocated slots, note the reversed
     // order so that we are sorted first by slot size,
     // and second by decreasing slot numbers
+    #[cfg(feature="opt-color-slots")]
     pool: BTreeSet<(u8, i16)>,
     //              ^   ^- negative slot number
     //              '----- slot npw2
@@ -1175,6 +1178,7 @@ impl SlotPool {
     /// Create a new empty slot pool
     fn new() -> SlotPool {
         SlotPool {
+            #[cfg(feature="opt-color-slots")]
             pool: BTreeSet::new(),
             size: 0,
             max_npw2: 9,
@@ -1211,18 +1215,20 @@ impl SlotPool {
         // 2. Limiting slot 0 to u8 slots
         //
 
-        // find smallest slot where size >= npw2 but slot*size < 256
-        let best_slot = self.pool.range((npw2, i16::MIN)..)
-            .copied()
-            .filter(|(best_npw2, best_islot)| {
-                // fits in slot number?
-                u8::try_from(
-                    (usize::try_from(-best_islot).unwrap() << best_npw2) >> npw2
-                ).is_ok()
-            })
-            .next();
-        match best_slot {
-            Some((mut best_npw2, best_islot)) => {
+        #[cfg(feature="opt-color-slots")]
+        {
+            // find smallest slot where size >= npw2 but slot*size < 256
+            let best_slot = self.pool.range((npw2, i16::MIN)..)
+                .copied()
+                .filter(|(best_npw2, best_islot)| {
+                    // fits in slot number?
+                    u8::try_from(
+                        (usize::try_from(-best_islot).unwrap() << best_npw2)
+                            >> npw2
+                    ).is_ok()
+                })
+                .next();
+            if let Some((mut best_npw2, best_islot)) = best_slot {
                 // remove from pool
                 self.pool.remove(&(best_npw2, best_islot));
                 let mut best_slot = u8::try_from(-best_islot).unwrap();
@@ -1239,59 +1245,69 @@ impl SlotPool {
 
                 debug_assert!(best_npw2 == npw2);
                 self.max_npw2 = max(self.max_npw2, npw2);
-                Ok(best_slot)
+                return Ok(best_slot)
             }
-            None => {
-                // skip slot 0?
-                if self.size == 0 && npw2 != 0 {
-                    self.size += 1;
-                    self.dealloc(0, 0);
-                }
+        }
 
-                // allocate new slot
-                while self.size % (1 << npw2) != 0 {
-                    let padding_npw2 = self.size.trailing_zeros();
-                    let padding_slot = self.size >> padding_npw2;
-                    self.size += 1 << padding_npw2;
-                    if let Ok(padding_slot) = u8::try_from(padding_slot) {
-                        self.dealloc(padding_slot, u8::try_from(padding_npw2).unwrap());
-                    }
-                }
 
-                match u8::try_from(self.size >> npw2) {
-                    Ok(slot) => {
-                        self.size += 1 << npw2;
-                        self.max_npw2 = max(self.max_npw2, npw2);
-                        Ok(slot)
-                    }
-                    _ => {
-                        Err(Error::OutOfSlots(npw2))
-                    }
-                }
+        // no slot found? fallback to increasing size of our slot pool
+
+        // skip slot 0?
+        if self.size == 0 && npw2 != 0 {
+            self.size += 1;
+            self.dealloc(0, 0);
+        }
+
+        // allocate new slot
+        while self.size % (1 << npw2) != 0 {
+            let padding_npw2 = self.size.trailing_zeros();
+            let padding_slot = self.size >> padding_npw2;
+            self.size += 1 << padding_npw2;
+            if let Ok(padding_slot) = u8::try_from(padding_slot) {
+                self.dealloc(padding_slot, u8::try_from(padding_npw2).unwrap());
+            }
+        }
+
+        match u8::try_from(self.size >> npw2) {
+            Ok(slot) => {
+                self.size += 1 << npw2;
+                self.max_npw2 = max(self.max_npw2, npw2);
+                Ok(slot)
+            }
+            _ => {
+                Err(Error::OutOfSlots(npw2))
             }
         }
     }
 
     /// Return a slot to the pool
-    fn dealloc(&mut self, mut slot: u8, mut npw2: u8) {
-        // don't defragment slot 0! reserved for a u8, this
-        // intentionally fragments the front of our pool, which
-        // helps keep us from clobbering smaller slots with one
-        // big one
-        if slot & !1 != 0 {
-            // try to defragment?
-            while self.pool.remove(&(npw2, -i16::from(slot ^ 1))) {
-                slot /= 2;
-                npw2 += 1;
+    fn dealloc(
+        &mut self,
+        #[allow(unused)] mut slot: u8,
+        #[allow(unused)] mut npw2: u8
+    ) {
+        // do nothing here if we aren't reusing slots
+        #[cfg(feature="opt-color-slots")]
+        {
+            // don't defragment slot 0! reserved for a u8, this
+            // intentionally fragments the front of our pool, which
+            // helps keep us from clobbering smaller slots with one
+            // big one
+            if slot & !1 != 0 {
+                // try to defragment?
+                while self.pool.remove(&(npw2, -i16::from(slot ^ 1))) {
+                    slot /= 2;
+                    npw2 += 1;
+                }
             }
-        }
 
-        assert!(
-            self.pool.insert((npw2, -i16::from(slot))),
-            "Found duplicate slot in pool!? ({}, {})\n{:?}",
-            slot, npw2,
-            self.pool
-        )
+            assert!(
+                self.pool.insert((npw2, -i16::from(slot))),
+                "Found duplicate slot in pool!? ({}, {})\n{:?}",
+                slot, npw2,
+                self.pool
+            )
+        }
     }
 }
 
@@ -2100,7 +2116,7 @@ impl<T: OpType> OpTree_<T> {
 
         // debug?
         #[cfg(feature="debug-trees")]
-        {
+        if opt {
             println!("tree:");
             self.disas(io::stdout()).unwrap();
         }
@@ -2117,7 +2133,12 @@ impl<T: OpType> OpTree_<T> {
 
         // second pass now to compile the bytecode and stack, note sp now points
         // to end of immediates
-        let (slot, _, _) = self.compile_pass2(&mut state);
+        let (slot, _) = self.compile_pass2(&mut state);
+
+        // to make lifetimes work in order to figure out slot reuse, reference
+        // counting for is left up to the caller
+        let refs = self.dec_refs();
+        debug_assert_eq!(refs, 0);
 
         // add required return instruction
         state.bytecode.push(u32::from(OpIns_::new(
@@ -2141,7 +2162,7 @@ impl<T: OpType> OpTree_<T> {
         aligned_slots[..state.slots.len()].copy_from_slice(&state.slots);
 
         #[cfg(feature="debug-bytecode")]
-        {
+        if opt {
             println!("slots:");
             print!("   ");
             for b in aligned_slots.iter() {
@@ -2150,7 +2171,7 @@ impl<T: OpType> OpTree_<T> {
             println!();
 
             println!("bytecode:");
-            disas_(&aligned_bytecode, io::stdout()).unwrap();
+            disas_(&state.bytecode, io::stdout()).unwrap();
         }
 
         // imms is now the initial stack pointer
@@ -2278,10 +2299,19 @@ pub trait DynOpTree_: Debug {
     fn is_ones(&self) -> bool;
 
     /// hook to enable none without known type
+    fn dyn_not(&self) -> &'static dyn Fn(Rc<dyn DynOpTree_>) -> Rc<dyn DynOpTree_>;
+
+    /// hook to enable none without known type
     fn dyn_none(&self) -> &'static dyn Fn(Rc<dyn DynOpTree_>) -> Rc<dyn DynOpTree_>;
 
     /// hook to enable any without known type
     fn dyn_any(&self) -> &'static dyn Fn(Rc<dyn DynOpTree_>) -> Rc<dyn DynOpTree_>;
+
+    /// Increment tree-internal reference count
+    fn inc_refs(&self) -> u32;
+
+    /// Decrement tree-internal reference count
+    fn dec_refs(&self) -> u32;
 
     /// First pass for debug output
     fn disas_pass1(&self);
@@ -2304,9 +2334,8 @@ pub trait DynOpTree_: Debug {
     fn compile_pass1(&self, state: &mut OpCompile_);
 
     /// Second compile pass, used to actually compile both the
-    /// immediates and bytecode. Returns the resulting slot + npw2
-    /// and whether or not we are the last dependent.
-    fn compile_pass2(&self, state: &mut OpCompile_) -> (u8, u8, bool);
+    /// immediates and bytecode. Returns the resulting slot + npw2.
+    fn compile_pass2(&self, state: &mut OpCompile_) -> (u8, u8);
 }
 
 impl<T: OpType> DynOpTree for OpTree<T> {
@@ -3582,6 +3611,16 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
     }
 
+    fn dyn_not(&self) -> &'static dyn Fn(Rc<dyn DynOpTree_>) -> Rc<dyn DynOpTree_> {
+        // bit messy but this works
+        // unfortunately this only works when there is a single argument
+        fn not<T: OpType>(tree: Rc<dyn DynOpTree_>) -> Rc<dyn DynOpTree_> {
+            OpTree_::not(OpTree_::<T>::downcast(tree))
+        }
+        &not::<T>
+    }
+
+    // TODO do we still need these? should we have these for all unops?
     fn dyn_none(&self) -> &'static dyn Fn(Rc<dyn DynOpTree_>) -> Rc<dyn DynOpTree_> {
         // bit messy but this works
         // unfortunately this only works when there is a single argument
@@ -3600,6 +3639,30 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         &any::<T>
     }
 
+    fn inc_refs(&self) -> u32 {
+        // prefer folded tree
+        #[cfg(feature="opt-fold-consts")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.inc_refs();
+        }
+
+        let refs = self.refs.get() + 1;
+        self.refs.set(refs);
+        refs
+    }
+
+    fn dec_refs(&self) -> u32 {
+        // prefer folded tree
+        #[cfg(feature="opt-fold-consts")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.dec_refs();
+        }
+
+        let refs = self.refs.get() - 1;
+        self.refs.set(refs);
+        refs
+    }
+
     fn disas_pass1(&self) {
         // prefer folded tree
         #[cfg(feature="opt-fold-consts")]
@@ -3608,9 +3671,8 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
 
         // mark node as seen
-        let prefs = self.refs.get();
-        self.refs.set(prefs + 1);
-        if prefs > 0 {
+        let refs = self.inc_refs();
+        if refs > 1 {
             // already visited?
             return;
         }
@@ -3794,8 +3856,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
 
         // is node shared?
-        let prefs = self.refs.get();
-        self.refs.set(prefs - 1);
+        let refs = self.dec_refs();
 
         // already computed?
         let name = names.get(&((self as *const _) as usize));
@@ -3804,8 +3865,18 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
 
         let expr = match &self.kind {
-            OpKind_::Imm(v) => format!("(u{}.imm {})", T::WIDTH, v.hex()),
-            OpKind_::Sym(s) => format!("(u{}.sym {:?})", T::WIDTH, s),
+            OpKind_::Imm(v) if self.is_const() => format!("(u{}.const {})",
+                T::WIDTH,
+                v.hex()
+            ),
+            OpKind_::Imm(v) => format!("(u{}.imm {})",
+                T::WIDTH,
+                v.hex()
+            ),
+            OpKind_::Sym(s) => format!("(u{}.sym {:?})",
+                T::WIDTH,
+                s
+            ),
 
             OpKind_::Select(lnpw2, p, a, b) => format!("(u{}.select {} {} {})",
                 prefix(T::NPW2, *lnpw2),
@@ -4013,7 +4084,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         };
 
         // used later? save as stmt?
-        if prefs > 1 {
+        if refs > 0 {
             let name = arbitrary_names.next().unwrap();
             names.insert((self as *const _) as usize, name.clone());
             write!(stmts, "    {} = {}\n", name, expr)?;
@@ -4279,9 +4350,8 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
 
         // mark node as seen
-        let prefs = self.refs.get();
-        self.refs.set(prefs + 1);
-        if prefs > 0 {
+        let refs = self.inc_refs();
+        if refs > 1 {
             // already visited?
             return;
         }
@@ -4501,20 +4571,16 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
     }
 
-    fn compile_pass2(&self, state: &mut OpCompile_) -> (u8, u8, bool) {
+    fn compile_pass2(&self, state: &mut OpCompile_) -> (u8, u8) {
         // prefer folded tree
         #[cfg(feature="opt-fold-consts")]
         if let Some(Some(folded)) = &*self.folded.borrow() {
             return folded.compile_pass2(state);
         }
 
-        // is node shared?
-        let prefs = self.refs.get();
-        self.refs.set(prefs - 1);
-
         // already computed?
         if let Some(slot) = self.slot.get() {
-            return (slot, T::NPW2, prefs == 1);
+            return (slot, T::NPW2);
         }
 
         match &self.kind {
@@ -4584,7 +4650,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     }
                 }
 
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Sym(_) => {
                 // should be entirely handled in first pass
@@ -4592,31 +4658,22 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
             }
 
             OpKind_::Select(lnpw2, p, a, b) => {
-                let (p_slot, p_npw2, p_fin) = p.compile_pass2(state);
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (p_slot, p_npw2) = p.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let p_refs = p.dec_refs();
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Select, p_slot, a_slot, b_slot
                     )));
-                    if p_fin { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
-                    // we can use b_slot if we invert p
-                    state.bytecode.push(u32::from(OpIns_::new(
-                        T::NPW2, 0, OpCode_::None, 0, p_slot, p_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns_::new(
-                        T::NPW2, *lnpw2, OpCode_::Select, p_slot, b_slot, a_slot
-                    )));
-                    if p_fin { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4625,38 +4682,41 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Select, p_slot, slot, b_slot
                     )));
-                    if p_fin { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Extract(lane, a) => {
                 assert!(T::NPW2 <= a.npw2());
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     a_npw2, a_npw2-T::NPW2, OpCode_::Extract, *lane, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Replace(lane, a, b) => {
                 assert!(T::NPW2 >= b.npw2());
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, T::NPW2-b_npw2, OpCode_::Replace, *lane, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4665,61 +4725,66 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, T::NPW2-b_npw2, OpCode_::Replace, *lane, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
 
             OpKind_::ExtendU(a) => {
                 assert!(T::NPW2 >= a.npw2());
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, a_npw2, OpCode_::ExtendU, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::ExtendS(a) => {
                 assert!(T::NPW2 >= a.npw2());
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, a_npw2, OpCode_::ExtendS, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Splat(a) => {
                 assert!(T::NPW2 >= a.npw2());
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, a_npw2, OpCode_::Splat, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Shuffle(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Shuffle, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4728,65 +4793,70 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Shuffle, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
 
             OpKind_::None(a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, 0, OpCode_::None, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Any(a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, 0, OpCode_::Any, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::All(lnpw2, a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, *lnpw2, OpCode_::All, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Eq(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Eq, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Eq, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4795,31 +4865,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Eq, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Ne(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Ne, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Ne, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4828,31 +4900,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Ne, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::LtU(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LtU, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GtU, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4861,31 +4935,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LtU, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::LtS(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LtS, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GtS, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4894,31 +4970,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LtS, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::GtU(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GtU, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LtU, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4927,31 +5005,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GtU, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::GtS(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GtS, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LtS, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4960,31 +5040,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GtS, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::LeU(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LeU, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GeU, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -4993,31 +5075,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LeU, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::LeS(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LeS, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GeS, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5026,31 +5110,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LeS, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::GeU(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GeU, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LeU, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5059,31 +5145,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GeU, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::GeS(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GeS, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::LeS, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5092,31 +5180,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::GeS, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::MinU(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MinU, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MinU, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5125,31 +5215,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MinU, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::MinS(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MinS, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MinS, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5158,31 +5250,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MinS, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::MaxU(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MaxU, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MaxU, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5191,31 +5285,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MaxU, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::MaxS(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MaxS, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MaxS, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5224,97 +5320,105 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::MaxS, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Neg(lnpw2, a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, *lnpw2, OpCode_::Neg, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Abs(lnpw2, a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, *lnpw2, OpCode_::Abs, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Not(a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, 0, OpCode_::Not, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Clz(lnpw2, a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, *lnpw2, OpCode_::Clz, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Ctz(lnpw2, a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, *lnpw2, OpCode_::Ctz, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Popcnt(lnpw2, a) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns_::new(
                     T::NPW2, *lnpw2, OpCode_::Popcnt, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2, prefs == 1)
+                (slot, T::NPW2)
             }
             OpKind_::Add(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Add, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Add, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5323,24 +5427,26 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Add, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Sub(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Sub, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5349,31 +5455,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Sub, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Mul(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Mul, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Mul, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5382,64 +5490,73 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Mul, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::And(a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::And, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::And, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                    let slot = state.slot_pool.alloc(T::NPW2)
+                        .map_err(|e| {
+                            disas_(&state.bytecode, io::stdout());
+                            e
+                        })
+                        .unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Extract, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::And, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Andnot(a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Andnot, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Andnot, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5448,31 +5565,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Andnot, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Or(a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Or, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Or, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5481,31 +5600,33 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Or, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Xor(a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Xor, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
-                } else if b_fin {
+                    (a_slot, T::NPW2)
+                } else if b_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Xor, 0, b_slot, a_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2, prefs == 1)
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5514,24 +5635,26 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Xor, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Shl(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Shl, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5540,24 +5663,26 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Shl, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::ShrU(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::ShrU, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5566,24 +5691,26 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::ShrU, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::ShrS(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::ShrS, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5592,24 +5719,26 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::ShrS, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Rotl(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Rotl, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5618,24 +5747,26 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Rotl, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
             OpKind_::Rotr(lnpw2, a, b) => {
-                let (a_slot, a_npw2, a_fin) = a.compile_pass2(state);
-                let (b_slot, b_npw2, b_fin) = b.compile_pass2(state);
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (b_slot, b_npw2) = b.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_fin {
+                if a_refs == 0 {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Rotr, 0, a_slot, b_slot
                     )));
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2, prefs == 1)
+                    (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
@@ -5644,10 +5775,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, *lnpw2, OpCode_::Rotr, 0, slot, b_slot
                     )));
-                    if a_fin { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_fin { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2, prefs == 1)
+                    (slot, T::NPW2)
                 }
             }
         }

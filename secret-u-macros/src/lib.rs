@@ -497,7 +497,7 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
             if mid_ty.width() > index_ty.width() {
                 parse_quote! { #secret_ty::from(#a) }
             } else if mid_ty.width() < index_ty.width() {
-                parse_quote! { #secret_ty::truncate(#a) }
+                parse_quote! { #secret_ty::cast(#a) }
             } else {
                 parse_quote! { #a }
             }
@@ -523,7 +523,7 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
             } else if ret_ty.width() > mid_ty.width() {
                 parse_quote! { #ret_secret_ty::from(#ret) }
             } else if ret_ty.width() < mid_ty.width() {
-                parse_quote! { #ret_secret_ty::truncate(#ret) }
+                parse_quote! { #ret_secret_ty::cast(#ret) }
             } else {
                 parse_quote! { #ret }
             }
@@ -550,7 +550,7 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     let q = quote! {
         #[allow(non_snake_case)]
         #vis fn #name(#(#arg_tys),*) -> (#(#ret_tys),*) {
-            use #crate_::int::SecretTruncate;
+            use #crate_::int::Cast;
             use #crate_::int::SecretEq;
 
             let mut a: [#secret_ty; #a_width] = [

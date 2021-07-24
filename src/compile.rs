@@ -21,14 +21,15 @@ macro_rules! compile_object {
     (@ident $a:ident) => { $a };
     (@ident $_:ident $($a:ident)+) => { compile_object!(@ident $($a)+) };
 
-    (@str $($a:ident)+) => { stringify!(compile_object!(@ident $($a)+)) };
+    (@str $a:ident) => { stringify!($a) };
+    (@str $_:ident $($a:ident)+) => { compile_object!(@str $($a)+) };
 
-    (@tree $t:ty) => { Rc<OpTree<<$t as SecretType>::TreeType>> };
+    (@tree $t:ty) => { Rc<OpTree_<<$t as SecretType>::TreeType>> };
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
         $crate::compile::paste! {
             use $crate::int::SecretType;
-            use $crate::opcode::OpTree;
+            use $crate::opcode::OpTree_;
             use std::rc::Rc;
             use std::io;
 
@@ -40,7 +41,7 @@ macro_rules! compile_object {
                 )*
 
                 // bytecode and stack
-                __bytecode: $crate::compile::AlignedBytes,
+                __bytecode: Vec<u32>,
                 __stack: $crate::compile::AlignedBytes,
             }
 
@@ -51,7 +52,7 @@ macro_rules! compile_object {
                 {
                     // create symbols
                     $(
-                        let [<__sym_$($a)+>] = OpTree::sym(
+                        let [<__sym_$($a)+>] = OpTree_::sym(
                             compile_object!(@str $($a)+)
                         );
                     )*
@@ -78,7 +79,7 @@ macro_rules! compile_object {
 
                 /// Access to the underlying bytecode
                 #[allow(dead_code)]
-                pub fn bytecode<'a>(&'a self) -> &'a [u8] {
+                pub fn bytecode<'a>(&'a self) -> &'a [u32] {
                     &self.__bytecode
                 }
 
@@ -99,7 +100,7 @@ macro_rules! compile_object {
                     writeln!(out)?;
 
                     writeln!(out, "bytecode:")?;
-                    $crate::opcode::disas(&self.__bytecode, out)?;
+                    $crate::opcode::disas_(&self.__bytecode, out)?;
                     Ok(())
                 }
 
@@ -240,7 +241,7 @@ mod tests {
             // each round determines one bit, so only need log(x) rounds
             for _ in 0..32 {
                 // test mid
-                let mid = (lo.clone() + hi.clone()) / SecretU32::const_(2);
+                let mid = (lo.clone() + hi.clone()) >> SecretU32::const_(1);
                 let mid_sq = mid.clone()*mid.clone();
 
                 // find new lo/hi using select to preserve const-time

@@ -8,7 +8,6 @@ pub use secret_u_macros::static_bitslice;
 mod tests {
     use super::*;
     use std::io;
-    use std::convert::TryFrom;
     use crate::compile_object;
 
     #[static_bitslice]
@@ -25,19 +24,7 @@ mod tests {
             abcd(x)
         });
 
-        print!("  bytecode:");
-        for i in (0..f.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&f.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         f.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..f.stack().len() {
-            print!(" {:02x}", f.stack()[i]);
-        }
-        println!();
 
         let mut a = Vec::new();
         for i in 0..4 {
@@ -67,19 +54,7 @@ mod tests {
             div3(x)
         });
 
-        print!("  bytecode:");
-        for i in (0..f.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&f.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         f.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..f.stack().len() {
-            print!(" {:02x}", f.stack()[i]);
-        }
-        println!();
 
         let mut a = Vec::new();
         for i in 0..16 {
@@ -109,19 +84,7 @@ mod tests {
             big(x)
         });
 
-        print!("  bytecode:");
-        for i in (0..f.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&f.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         f.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..f.stack().len() {
-            print!(" {:02x}", f.stack()[i]);
-        }
-        println!();
 
         let mut a = Vec::new();
         for i in 0..2 {
@@ -150,19 +113,7 @@ mod tests {
             hello(x)
         });
 
-        print!("  bytecode:");
-        for i in (0..f.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&f.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         f.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..f.stack().len() {
-            print!(" {:02x}", f.stack()[i]);
-        }
-        println!();
 
         let mut a = Vec::new();
         for i in 0..12 {
@@ -194,19 +145,7 @@ mod tests {
                 | (SecretU32::from(d) << SecretU32::const_(0))
         });
 
-        print!("  bytecode:");
-        for i in (0..f.bytecode().len()).step_by(2) {
-            print!(" {:04x}", u16::from_le_bytes(
-                <[u8; 2]>::try_from(&f.bytecode()[i..i+2]).unwrap()
-            ));
-        }
-        println!();
         f.disas(io::stdout()).unwrap();
-        print!("  stack:");
-        for i in 0..f.stack().len() {
-            print!(" {:02x}", f.stack()[i]);
-        }
-        println!();
 
         let a = f.call(
             SecretU8::new(0),

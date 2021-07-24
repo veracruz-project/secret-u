@@ -7,12 +7,16 @@ edition = "2018"
 
 [features]
 default = [
+    "opt-color-slots",
     "opt-fold-consts",
     "opt-fold-nops",
     "opt-compress-consts",
     "bitslice-simplify-bdd"
 ]
 
+# color slots in order to reuse slots, you probably want this
+# enabled, but it can be disabled for debugging
+opt-color-slots = []
 # perform constant folding during compilation, note this run
 # small chunks of bytecode in the vm to do the folding
 opt-fold-consts = []
