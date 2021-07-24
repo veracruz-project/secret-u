@@ -1150,8 +1150,8 @@ pub struct OpTree_<T: OpType> {
     kind: OpKind_<T>,
     refs: Cell<u32>,
     slot: Cell<Option<u8>>,
-    const_: bool,
-    sym: bool,
+    flags: u8,
+    depth: u32,
     #[cfg(feature="opt-fold-consts")]
     folded: RefCell<Option<Option<Rc<OpTree_<T>>>>>,
 }
@@ -1782,13 +1782,16 @@ impl<T: OpType> OpTree<T> {
 
 /// Core OpTree type
 impl<T: OpType> OpTree_<T> {
-    fn new(kind: OpKind_<T>, const_: bool, sym: bool) -> OpTree_<T> {
+    const SECRET: u8 = 0x1;
+    const SYM: u8    = 0x2;
+
+    fn new(kind: OpKind_<T>, flags: u8, depth: u32) -> OpTree_<T> {
         OpTree_ {
             kind: kind,
             refs: Cell::new(0),
             slot: Cell::new(None),
-            const_: const_,
-            sym: sym,
+            flags: flags,
+            depth: depth,
             #[cfg(feature="opt-fold-consts")]
             folded: RefCell::new(None),
         }
@@ -1796,12 +1799,12 @@ impl<T: OpType> OpTree_<T> {
 
     /// Create an immediate, secret value
     pub fn imm(v: T) -> Rc<Self> {
-        Rc::new(Self::new(OpKind_::Imm(v), false, false))
+        Rc::new(Self::new(OpKind_::Imm(v), Self::SECRET, 1))
     }
 
     /// Create a const susceptable to compiler optimizations
     pub fn const_(v: T) -> Rc<Self> {
-        Rc::new(Self::new(OpKind_::Imm(v), true, false))
+        Rc::new(Self::new(OpKind_::Imm(v), 0, 1))
     }
 
     /// A constant 0
@@ -1822,259 +1825,259 @@ impl<T: OpType> OpTree_<T> {
     // Constructors for other tree nodes, note that
     // constant-ness is propogated
     pub fn sym(name: &'static str) -> Rc<Self> {
-        Rc::new(Self::new(OpKind_::Sym(name), false, true))
+        Rc::new(Self::new(OpKind_::Sym(name), Self::SECRET | Self::SYM, 1))
     }
 
     pub fn select(lnpw2: u8, p: Rc<Self>, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = p.is_const() && a.is_const() && b.is_const();
-        let sym    = p.is_sym()   || a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Select(lnpw2, p, a, b), const_, sym))
+        let flags = p.flags() | a.flags() | b.flags();
+        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Select(lnpw2, p, a, b), flags, depth))
     }
 
     pub fn extract(x: u8, a: Rc<dyn DynOpTree_>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Extract(x, a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Extract(x, a), flags, depth))
     }
 
     pub fn replace(x: u8, a: Rc<Self>, b: Rc<dyn DynOpTree_>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || a.is_sym();
-        Rc::new(Self::new(OpKind_::Replace(x, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Replace(x, a, b), flags, depth))
     }
 
     pub fn extend_u(a: Rc<dyn DynOpTree_>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::ExtendU(a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::ExtendU(a), flags, depth))
     }
 
     pub fn extend_s(a: Rc<dyn DynOpTree_>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::ExtendS(a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::ExtendS(a), flags, depth))
     }
 
     pub fn splat(a: Rc<dyn DynOpTree_>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Splat(a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Splat(a), flags, depth))
     }
 
     pub fn shuffle(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Shuffle(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Shuffle(lnpw2, a, b), flags, depth))
     }
 
     pub fn none(a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::None(a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::None(a), flags, depth))
     }
 
     pub fn any(a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Any(a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Any(a), flags, depth))
     }
 
     pub fn all(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::All(lnpw2, a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::All(lnpw2, a), flags, depth))
     }
 
     pub fn eq(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Eq(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Eq(lnpw2, a, b), flags, depth))
     }
 
     pub fn ne(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Ne(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Ne(lnpw2, a, b), flags, depth))
     }
 
     pub fn lt_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::LtU(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::LtU(lnpw2, a, b), flags, depth))
     }
 
     pub fn lt_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::LtS(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::LtS(lnpw2, a, b), flags, depth))
     }
 
     pub fn gt_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::GtU(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::GtU(lnpw2, a, b), flags, depth))
     }
 
     pub fn gt_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::GtS(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::GtS(lnpw2, a, b), flags, depth))
     }
 
     pub fn le_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::LeU(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::LeU(lnpw2, a, b), flags, depth))
     }
 
     pub fn le_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::LeS(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::LeS(lnpw2, a, b), flags, depth))
     }
 
     pub fn ge_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::GeU(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::GeU(lnpw2, a, b), flags, depth))
     }
 
     pub fn ge_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::GeS(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::GeS(lnpw2, a, b), flags, depth))
     }
 
     pub fn min_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::MinU(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::MinU(lnpw2, a, b), flags, depth))
     }
 
     pub fn min_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::MinS(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::MinS(lnpw2, a, b), flags, depth))
     }
 
     pub fn max_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::MaxU(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::MaxU(lnpw2, a, b), flags, depth))
     }
 
     pub fn max_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::MaxS(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::MaxS(lnpw2, a, b), flags, depth))
     }
 
     pub fn neg(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Neg(lnpw2, a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Neg(lnpw2, a), flags, depth))
     }
 
     pub fn abs(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Abs(lnpw2, a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Abs(lnpw2, a), flags, depth))
     }
 
     pub fn not(a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Not(a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Not(a), flags, depth))
     }
 
     pub fn clz(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Clz(lnpw2, a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Clz(lnpw2, a), flags, depth))
     }
 
     pub fn ctz(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Ctz(lnpw2, a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Ctz(lnpw2, a), flags, depth))
     }
 
     pub fn popcnt(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const();
-        let sym    = a.is_sym();
-        Rc::new(Self::new(OpKind_::Popcnt(lnpw2, a), const_, sym))
+        let flags = a.flags();
+        let depth = a.depth();
+        Rc::new(Self::new(OpKind_::Popcnt(lnpw2, a), flags, depth))
     }
 
     pub fn add(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Add(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Add(lnpw2, a, b), flags, depth))
     }
 
     pub fn sub(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Sub(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Sub(lnpw2, a, b), flags, depth))
     }
 
     pub fn mul(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Mul(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Mul(lnpw2, a, b), flags, depth))
     }
 
     pub fn and(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::And(a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::And(a, b), flags, depth))
     }
 
     pub fn andnot(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Andnot(a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Andnot(a, b), flags, depth))
     }
 
     pub fn or(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Or(a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Or(a, b), flags, depth))
     }
 
     pub fn xor(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Xor(a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Xor(a, b), flags, depth))
     }
 
     pub fn shl(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Shl(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Shl(lnpw2, a, b), flags, depth))
     }
 
     pub fn shr_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::ShrU(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::ShrU(lnpw2, a, b), flags, depth))
     }
 
     pub fn shr_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::ShrS(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::ShrS(lnpw2, a, b), flags, depth))
     }
 
     pub fn rotl(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Rotl(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Rotl(lnpw2, a, b), flags, depth))
     }
 
     pub fn rotr(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let const_ = a.is_const() && b.is_const();
-        let sym    = a.is_sym()   || b.is_sym();
-        Rc::new(Self::new(OpKind_::Rotr(lnpw2, a, b), const_, sym))
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Rc::new(Self::new(OpKind_::Rotr(lnpw2, a, b), flags, depth))
     }
 
     /// Downcast a generic OpTree, panicing if types do not match
@@ -2279,6 +2282,12 @@ pub trait DynOpTree_: Debug {
 
     /// type's width in bits
     fn width(&self) -> usize;
+
+    /// bitwised-or flags from all branches
+    fn flags(&self) -> u8;
+
+    /// saturating depth of tree for heuristic purposes
+    fn depth(&self) -> u32;
 
     /// is expression an immediate?
     fn is_imm(&self) -> bool;
@@ -3541,6 +3550,71 @@ impl<T: OpType> DynOpTree for OpTree<T> {
     }
 }
 
+
+// schedule branches in operations in order to minimize slot usage, note this
+// macro is only designed for compile_pass2 and if I could put the macro in
+// a different scope I would
+//
+// we don't know the actual slot usage until compilation, so instead we use the
+// saturated depth as a heuristic, most of the branches with registers we can save
+// are quite small anyways
+//
+#[cfg(feature="opt-schedule-slots")]
+macro_rules! schedule {
+    (
+        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
+    ) => {
+        let a_tuple;
+        let b_tuple;
+        println!("comparing {} {}", $a.depth(), $b.depth());
+        if $a.depth() > $b.depth() {
+            a_tuple = $a.compile_pass2($a_state);
+            b_tuple = $b.compile_pass2($b_state);
+        } else {
+            b_tuple = $b.compile_pass2($b_state);
+            a_tuple = $a.compile_pass2($a_state);
+        }
+        let ($a_slot, $a_npw2) = a_tuple;
+        let ($b_slot, $b_npw2) = b_tuple;
+    };
+    (
+        let ($p_slot:ident, $p_npw2:ident) = $p:ident.compile_pass2($p_state:ident);
+        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
+    ) => {
+        let mut p_tuple = (0, 0);
+        let mut a_tuple = (0, 0);
+        let mut b_tuple = (0, 0);
+        let mut tuples = [
+            (&$p, &mut p_tuple),
+            (&$a, &mut a_tuple),
+            (&$b, &mut b_tuple),
+        ];
+        tuples.sort_by_key(|(a, _)| !a.depth());
+
+        for (a, tuple) in tuples {
+            *tuple = a.compile_pass2($a_state)
+        }
+
+        let ($p_slot, $p_npw2) = p_tuple;
+        let ($a_slot, $a_npw2) = a_tuple;
+        let ($b_slot, $b_npw2) = b_tuple;
+    };
+}
+#[cfg(not(feature="opt-schedule-slots"))]
+macro_rules! schedule {
+    (
+        $(
+            let ($slot:ident, $npw2:ident) = $a:ident.compile_pass2($state:ident);
+        )+
+    ) => {
+        $(
+            let ($slot, $npw2) = $a.compile_pass2($state);
+        )+
+    }
+}
+
 impl<T: OpType> DynOpTree_ for OpTree_<T> {
     fn npw2(&self) -> u8 {
         T::NPW2
@@ -3554,6 +3628,21 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         T::WIDTH
     }
 
+    fn flags(&self) -> u8 {
+        self.flags
+    }
+
+    fn depth(&self) -> u32 {
+        // TODO ok we need a different way to handle this
+        // prefer folded tree
+        #[cfg(feature="opt-fold-consts")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.depth();
+        }
+
+        self.depth
+    }
+
     fn is_imm(&self) -> bool {
         match self.kind {
             OpKind_::Imm(_) => true,
@@ -3562,11 +3651,11 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
     }
 
     fn is_sym(&self) -> bool {
-        self.sym
+        self.flags & Self::SYM == Self::SYM
     }
 
     fn is_const(&self) -> bool {
-        self.const_
+        self.flags & Self::SECRET != Self::SECRET
     }
 
     fn is_zero(&self) -> bool {
@@ -4361,7 +4450,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
 
         match &self.kind {
             OpKind_::Imm(v) => {
-                if self.const_ {
+                if self.is_const() {
                     // handle consts later
                     return;
                 }
@@ -4386,7 +4475,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 )));
             }
             OpKind_::Sym(_) => {
-                assert!(!self.const_);
+                assert!(!self.is_const());
 
                 // allocate slot
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
@@ -4586,7 +4675,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         match &self.kind {
             OpKind_::Imm(v) => {
                 // variable imms handled on first pass
-                assert!(self.const_);
+                assert!(self.is_const());
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 #[allow(unused_mut)] let mut best_npw2 = T::NPW2;
@@ -4658,9 +4747,11 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
             }
 
             OpKind_::Select(lnpw2, p, a, b) => {
-                let (p_slot, p_npw2) = p.compile_pass2(state);
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (p_slot, p_npw2) = p.compile_pass2(state);
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let p_refs = p.dec_refs();
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
@@ -4704,8 +4795,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
             }
             OpKind_::Replace(lane, a, b) => {
                 assert!(T::NPW2 >= b.npw2());
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -4772,8 +4865,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 (slot, T::NPW2)
             }
             OpKind_::Shuffle(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -4837,8 +4932,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 (slot, T::NPW2)
             }
             OpKind_::Eq(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -4872,8 +4969,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Ne(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -4907,8 +5006,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::LtU(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -4942,8 +5043,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::LtS(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -4977,8 +5080,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::GtU(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5012,8 +5117,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::GtS(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5047,8 +5154,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::LeU(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5082,8 +5191,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::LeS(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5117,8 +5228,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::GeU(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5152,8 +5265,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::GeS(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5187,8 +5302,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::MinU(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5222,8 +5339,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::MinS(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5257,8 +5376,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::MaxU(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5292,8 +5413,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::MaxS(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5399,8 +5522,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 (slot, T::NPW2)
             }
             OpKind_::Add(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5434,8 +5559,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Sub(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5462,8 +5589,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Mul(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5497,8 +5626,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::And(a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5518,12 +5649,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     self.slot.set(Some(b_slot));
                     (b_slot, T::NPW2)
                 } else {
-                    let slot = state.slot_pool.alloc(T::NPW2)
-                        .map_err(|e| {
-                            disas_(&state.bytecode, io::stdout());
-                            e
-                        })
-                        .unwrap();
+                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns_::new(
                         T::NPW2, 0, OpCode_::Extract, 0, slot, a_slot
                     )));
@@ -5537,8 +5663,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Andnot(a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5572,8 +5700,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Or(a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5607,8 +5737,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Xor(a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5642,8 +5774,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Shl(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5670,8 +5804,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::ShrU(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5698,8 +5834,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::ShrS(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5726,8 +5864,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Rotl(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -5754,8 +5894,10 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                 }
             }
             OpKind_::Rotr(lnpw2, a, b) => {
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let (b_slot, b_npw2) = b.compile_pass2(state);
+                schedule! {
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
 
@@ -6091,7 +6233,7 @@ mod tests {
         println!();
 
         assert_eq!(bytecode.len(), 27);
-        assert_eq!(stack.len(), 36);
+        assert_eq!(stack.len(), 16);
     }
 
     #[test]

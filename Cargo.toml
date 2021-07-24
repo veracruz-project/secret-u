@@ -8,6 +8,7 @@ edition = "2018"
 [features]
 default = [
     "opt-color-slots",
+    "opt-schedule-slots",
     "opt-fold-consts",
     "opt-fold-nops",
     "opt-compress-consts",
@@ -17,6 +18,9 @@ default = [
 # color slots in order to reuse slots, you probably want this
 # enabled, but it can be disabled for debugging
 opt-color-slots = []
+# reorder branches of instruction sequences to minimize register
+# pressure
+opt-schedule-slots = []
 # perform constant folding during compilation, note this run
 # small chunks of bytecode in the vm to do the folding
 opt-fold-consts = []

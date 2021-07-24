@@ -132,6 +132,16 @@ fn gf256_div(a: SecretU8, b: SecretU8) -> SecretU8 {
 fn gf256_interpolate(xs: &[SecretU8], ys: &[SecretU8]) -> SecretU8 {
     assert!(xs.len() == ys.len());
 
+    // TODO rm me, testing bitslice compilation
+    println!("hi a");
+    compile!(|x: SecretU8| -> SecretU8 { GF256_LOG(x) });
+    println!("hi b");
+    compile!(|x: SecretU16| -> SecretU8 { GF256_EXP(x) });
+    println!("hi c");
+    compile!(|a: SecretU8, b: SecretU8| -> SecretU8 { gf256_mul(a, b) });
+    println!("hi d");
+    compile!(|a: SecretU8, b: SecretU8| -> SecretU8 { gf256_div(a, b) });
+
     let gf256_interpolate_single = compile!(
         |li: SecretU8, x0: SecretU8, x1: SecretU8| -> SecretU8 {
             gf256_mul(li, gf256_div(x1.clone(), x0 ^ x1))
