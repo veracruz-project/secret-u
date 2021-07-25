@@ -10,7 +10,7 @@ proc-macro = true
 
 [features]
 default = ["bitslice-simplify-identities"]
-debug-proc-macro = []
+debug-proc-macros = []
 # simplify by DeMorgan identities
 bitslice-simplify-identities = []
 # simplify by BDD (use this if you want compilation to take forever

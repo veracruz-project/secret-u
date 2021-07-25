@@ -367,7 +367,7 @@ fn build_bitexpr(
 ///
 #[proc_macro_attribute]
 pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
-    if cfg!(feature = "debug-proc-macro") {
+    if cfg!(feature = "debug-proc-macros") {
         println!("proc-macro static_bitslice <= {}", args);
         println!("proc-macro static_bitslice <= {}", input);
     }
@@ -539,7 +539,7 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
         let expr = find_bitexpr(&elems, a_width, i);
         let expr = simplify_bitexpr(expr);
         
-//        if cfg!(feature = "debug-proc-macro") {
+//        if cfg!(feature = "debug-proc-macros") {
 //            println!("bit({}) = {:?}", i, expr);
 //        }
 
@@ -569,7 +569,7 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    if cfg!(feature = "debug-proc-macro") {
+    if cfg!(feature = "debug-proc-macros") {
         println!("proc-macro static_bitslice => {}", q);
     }
 

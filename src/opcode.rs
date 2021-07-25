@@ -2105,6 +2105,9 @@ impl<T: OpType> OpTree_<T> {
             &mut out
         )?;
 
+        #[cfg(feature="debug-check-refs")]
+        self.check_refs();
+
         // cleanup last expression
         write!(out, "    {}\n", expr)
     }
@@ -2142,6 +2145,9 @@ impl<T: OpType> OpTree_<T> {
         // counting for is left up to the caller
         let refs = self.dec_refs();
         debug_assert_eq!(refs, 0);
+
+        #[cfg(feature="debug-check-refs")]
+        self.check_refs();
 
         // add required return instruction
         state.bytecode.push(u32::from(OpIns_::new(
@@ -2332,6 +2338,12 @@ pub trait DynOpTree_: Debug {
         arbitrary_names: &mut dyn Iterator<Item=String>,
         stmts: &mut dyn io::Write,
     ) -> Result<String, io::Error>;
+
+    /// Optional pass to check that refs return to 0
+    ///
+    /// Note this is very expensive
+    #[cfg(feature="debug-check-refs")]
+    fn check_refs(&self);
 
     /// An optional pass to fold consts in the tree
     #[cfg(feature="opt-fold-consts")]
@@ -3567,7 +3579,6 @@ macro_rules! schedule {
     ) => {
         let a_tuple;
         let b_tuple;
-        println!("comparing {} {}", $a.depth(), $b.depth());
         if $a.depth() > $b.depth() {
             a_tuple = $a.compile_pass2($a_state);
             b_tuple = $b.compile_pass2($b_state);
@@ -3583,36 +3594,41 @@ macro_rules! schedule {
         let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
         let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
     ) => {
-        let mut p_tuple = (0, 0);
-        let mut a_tuple = (0, 0);
-        let mut b_tuple = (0, 0);
-        let mut tuples = [
-            (&$p, &mut p_tuple),
-            (&$a, &mut a_tuple),
-            (&$b, &mut b_tuple),
-        ];
-        tuples.sort_by_key(|(a, _)| !a.depth());
-
-        for (a, tuple) in tuples {
-            *tuple = a.compile_pass2($a_state)
+        // this isn't perfect, but more efficient than fully sorting
+        let a_tuple;
+        let b_tuple;
+        if $a.depth() > $b.depth() {
+            a_tuple = $a.compile_pass2($a_state);
+            b_tuple = $b.compile_pass2($b_state);
+        } else {
+            b_tuple = $b.compile_pass2($b_state);
+            a_tuple = $a.compile_pass2($a_state);
         }
-
-        let ($p_slot, $p_npw2) = p_tuple;
         let ($a_slot, $a_npw2) = a_tuple;
         let ($b_slot, $b_npw2) = b_tuple;
+        // we're guessing predicates are usually more short lived
+        let ($p_slot, $p_npw2) = $p.compile_pass2($p_state);
     };
 }
 #[cfg(not(feature="opt-schedule-slots"))]
 macro_rules! schedule {
     (
-        $(
-            let ($slot:ident, $npw2:ident) = $a:ident.compile_pass2($state:ident);
-        )+
+        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
     ) => {
-        $(
-            let ($slot, $npw2) = $a.compile_pass2($state);
-        )+
-    }
+        let ($a_slot, $a_npw2) = $a.compile_pass2($a_state);
+        let ($b_slot, $b_npw2) = $b.compile_pass2($b_state);
+    };
+    (
+        let ($p_slot:ident, $p_npw2:ident) = $p:ident.compile_pass2($p_state:ident);
+        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
+    ) => {
+        let ($a_slot, $a_npw2) = $a.compile_pass2($a_state);
+        let ($b_slot, $b_npw2) = $b.compile_pass2($b_state);
+        // we're guessing predicates are usually more short lived
+        let ($p_slot, $p_npw2) = $p.compile_pass2($p_state);
+    };
 }
 
 impl<T: OpType> DynOpTree_ for OpTree_<T> {
@@ -4183,6 +4199,184 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
         }
     }
 
+    #[cfg(feature="debug-check-refs")]
+    fn check_refs(&self) {
+        // prefer folded tree
+        #[cfg(feature="opt-fold-consts")]
+        if let Some(Some(folded)) = &*self.folded.borrow() {
+            return folded.check_refs();
+        }
+
+        // refs must equal 0 between multi-pass traversals
+        assert_eq!(self.refs.get(), 0);
+
+        match &self.kind {
+            OpKind_::Imm(_) => {},
+            OpKind_::Sym(_) => {},
+
+            OpKind_::Select(_, p, a, b) => {
+                p.check_refs();
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Extract(_, a) => {
+                a.check_refs();
+            }
+            OpKind_::Replace(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+
+            OpKind_::ExtendU(a) => {
+                a.check_refs();
+            }
+            OpKind_::ExtendS(a) => {
+                a.check_refs();
+            }
+            OpKind_::Splat(a) => {
+                a.check_refs();
+            }
+            OpKind_::Shuffle(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+
+            OpKind_::None(a) => {
+                a.check_refs();
+            }
+            OpKind_::Any(a) => {
+                a.check_refs();
+            }
+            OpKind_::All(_, a) => {
+                a.check_refs();
+            }
+            OpKind_::Eq(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Ne(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::LtU(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::LtS(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::GtU(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::GtS(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::LeU(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::LeS(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::GeU(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::GeS(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::MinU(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::MinS(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::MaxU(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::MaxS(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+
+            OpKind_::Neg(_, a) => {
+                a.check_refs();
+            }
+            OpKind_::Abs(_, a) => {
+                a.check_refs();
+            }
+            OpKind_::Not(a) => {
+                a.check_refs();
+            }
+            OpKind_::Clz(_, a) => {
+                a.check_refs();
+            }
+            OpKind_::Ctz(_, a) => {
+                a.check_refs();
+            }
+            OpKind_::Popcnt(_, a) => {
+                a.check_refs();
+            }
+            OpKind_::Add(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Sub(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Mul(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::And(a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Andnot(a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Or(a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Xor(a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Shl(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::ShrU(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::ShrS(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Rotl(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+            OpKind_::Rotr(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
+        }
+    }
+
+
     #[cfg(feature="opt-fold-consts")]
     fn fold_consts(&self) {
         // already folded?
@@ -4739,6 +4933,7 @@ impl<T: OpType> DynOpTree_ for OpTree_<T> {
                     }
                 }
 
+                self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
             OpKind_::Sym(_) => {
@@ -6233,7 +6428,10 @@ mod tests {
         println!();
 
         assert_eq!(bytecode.len(), 27);
+        #[cfg(feature="opt-schedule-slots")]
         assert_eq!(stack.len(), 16);
+        #[cfg(not(feature="opt-schedule-slots"))]
+        assert_eq!(stack.len(), 36);
     }
 
     #[test]

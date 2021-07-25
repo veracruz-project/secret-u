@@ -122,7 +122,30 @@ mod tests {
         println!("{:?}", a);
         assert_eq!(
             a,
-            format!("Hello World!").into_bytes()
+            b"Hello World!"
+        );
+    }
+
+    #[test]
+    fn bitslice_multi() {
+        use crate::int::*;
+        println!();
+
+        println!("hi b");
+        let f = compile_object!(|x: SecretU8, y: SecretU8| -> SecretU8 {
+            (hello(x) + hello(y)) & SecretU8::const_(0x7f)
+        });
+
+        f.disas(io::stdout()).unwrap();
+
+        let mut a = Vec::new();
+        for i in 0..12 {
+            a.push(f.call(SecretU8::new(i), SecretU8::new((i+1)%12)).declassify());
+        }
+        println!("{:?}", String::from_utf8_lossy(&a));
+        assert_eq!(
+            a,
+            b"-QX[\x0fwFa^P\x05i"
         );
     }
 

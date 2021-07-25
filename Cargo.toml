@@ -8,7 +8,6 @@ edition = "2018"
 [features]
 default = [
     "opt-color-slots",
-    "opt-schedule-slots",
     "opt-fold-consts",
     "opt-fold-nops",
     "opt-compress-consts",
@@ -19,7 +18,8 @@ default = [
 # enabled, but it can be disabled for debugging
 opt-color-slots = []
 # reorder branches of instruction sequences to minimize register
-# pressure
+# pressure, note this also has the unfortunately side-effect of
+# creating the deepeset possible recursion for a given tree...
 opt-schedule-slots = []
 # perform constant folding during compilation, note this run
 # small chunks of bytecode in the vm to do the folding
@@ -39,7 +39,9 @@ debug-bytecode = []
 # show VM execution
 debug-trace = []
 # show proc macro generation
-debug-proc-macro = ["secret-u-macros/debug-proc-macro"]
+debug-proc-macros = ["secret-u-macros/debug-proc-macros"]
+# check internal refs correctly return to 0, note this is very expensive
+debug-check-refs = []
 
 # simplify by DeMorgan identities
 bitslice-simplify-identities = []
