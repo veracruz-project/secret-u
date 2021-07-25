@@ -24,12 +24,12 @@ macro_rules! compile_object {
     (@str $a:ident) => { stringify!($a) };
     (@str $_:ident $($a:ident)+) => { compile_object!(@str $($a)+) };
 
-    (@tree $t:ty) => { Rc<OpTree_<<$t as SecretType>::TreeType>> };
+    (@tree $t:ty) => { Rc<OpTree<<$t as SecretType>::TreeType>> };
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
-        $crate::compile::paste! {
+        $crate::lambda::paste! {
             use $crate::int::SecretType;
-            use $crate::opcode::OpTree_;
+            use $crate::opcode::OpTree;
             use std::rc::Rc;
             use std::io;
 
@@ -42,7 +42,7 @@ macro_rules! compile_object {
 
                 // bytecode and stack
                 __bytecode: Vec<u32>,
-                __stack: $crate::compile::AlignedBytes,
+                __stack: $crate::lambda::AlignedBytes,
             }
 
             impl SecretClosure {
@@ -52,7 +52,7 @@ macro_rules! compile_object {
                 {
                     // create symbols
                     $(
-                        let [<__sym_$($a)+>] = OpTree_::sym(
+                        let [<__sym_$($a)+>] = OpTree::sym(
                             compile_object!(@str $($a)+)
                         );
                     )*
@@ -100,7 +100,7 @@ macro_rules! compile_object {
                     writeln!(out)?;
 
                     writeln!(out, "bytecode:")?;
-                    $crate::opcode::disas_(&self.__bytecode, out)?;
+                    $crate::opcode::disas(&self.__bytecode, out)?;
                     Ok(())
                 }
 
