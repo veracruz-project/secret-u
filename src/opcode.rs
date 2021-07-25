@@ -261,16 +261,6 @@ impl OpIns {
     }
 
     #[inline]
-    pub fn xsize(&self) -> usize {
-        1usize << self.lnpw2()
-    }
-
-    #[inline]
-    pub fn xwidth(&self) -> usize {
-        8*self.xsize()
-    }
-
-    #[inline]
     pub fn p(&self) -> u8 {
         (self.0 >> 16) as u8
     }
@@ -373,15 +363,6 @@ impl fmt::Display for OpIns {
                 )
             }
 
-            // special format for moves because they are so common
-            OpCode::Extract if self.lnpw2() == 0 && self.p() == 0 => {
-                write!(fmt, "u{}.move r{}, r{}",
-                    prefix(self.npw2(), self.lnpw2()),
-                    self.a(),
-                    self.b()
-                )
-            }
-
             OpCode::Extract => {
                 write!(fmt, "u{}.{} r{}, r{}[{}]",
                     prefix(self.npw2(), self.lnpw2()),
@@ -403,7 +384,7 @@ impl fmt::Display for OpIns {
             }
 
             // special format for moves because they are so common
-            OpCode::ExtendConstU if self.width() == self.xwidth() => {
+            OpCode::ExtendConstU if self.lnpw2() == 0 => {
                 write!(fmt, "u{}.move_const r{}",
                     self.width(),
                     self.a()
@@ -411,16 +392,15 @@ impl fmt::Display for OpIns {
             }
 
             OpCode::ExtendConstU | OpCode::ExtendConstS | OpCode::SplatConst => {
-                write!(fmt, "u{}u{}.{} r{}",
-                    self.width(),
-                    self.xwidth(),
+                write!(fmt, "u{}.{} r{}",
+                    prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
                     self.a()
                 )
             }
 
             // special format for moves because they are so common
-            OpCode::ExtendConst8U if self.width() == self.xwidth() => {
+            OpCode::ExtendConst8U if self.lnpw2() == 0 => {
                 write!(fmt, "u{}.move_const8 r{}",
                     self.width(),
                     self.a()
@@ -428,19 +408,17 @@ impl fmt::Display for OpIns {
             }
 
             OpCode::ExtendConst8U | OpCode::ExtendConst8S | OpCode::SplatConst8 => {
-                write!(fmt, "u{}u{}.{} r{}",
-                    self.width(),
-                    self.xwidth(),
+                write!(fmt, "u{}.{} r{}",
+                    prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
                     self.a()
                 )
             }
 
-            OpCode::ExtendU | OpCode::ExtendS | OpCode::Splat => {
-                write!(fmt, "u{}u{}.{} r{}, r{}",
+            // special format for moves because they are so common
+            OpCode::ExtendU if self.lnpw2() == 0 => {
+                write!(fmt, "u{}.move r{}, r{}",
                     self.width(),
-                    self.xwidth(),
-                    self.opcode(),
                     self.a(),
                     self.b()
                 )
@@ -495,12 +473,12 @@ pub fn disas<W: io::Write>(
             Ok(ins) => {
                 match ins.opcode() {
                     OpCode::ExtendConstU | OpCode::ExtendConstS | OpCode::SplatConst => {
-                        let const_size = max(1, ins.xsize()/4);
+                        let const_size = max(1, ins.lsize()/4);
                         write!(out, "    {:08x} {}, 0x", u32::from(ins), ins)?;
                         for j in (0..const_size).rev() {
                             write!(out, "{:0w$x}",
                                 &bytecode[i+j],
-                                w=2*min(4, ins.xsize())
+                                w=2*min(4, ins.lsize())
                             )?;
                         }
                         writeln!(out)?;
@@ -1277,7 +1255,7 @@ impl<T: OpU> OpTree<T> {
 
         // debug?
         #[cfg(feature="debug-trees")]
-        if opt {
+        {
             println!("tree:");
             self.disas(io::stdout()).unwrap();
         }
@@ -1317,7 +1295,7 @@ impl<T: OpU> OpTree<T> {
         aligned_slots[..state.slots.len()].copy_from_slice(&state.slots);
 
         #[cfg(feature="debug-bytecode")]
-        if opt {
+        {
             println!("slots:");
             print!("   ");
             for b in aligned_slots.iter() {
@@ -2758,12 +2736,12 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                     buf.truncate(1);
 
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, best_ins8, 0, slot, buf[0]
+                        T::NPW2, T::NPW2, best_ins8, 0, slot, buf[0]
                     )));
                 } else {
                     // encode const into bytecode stream
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, best_npw2, best_ins, 0, slot, 0
+                        T::NPW2, T::NPW2 - best_npw2, best_ins, 0, slot, 0
                     )));
 
                     let mut buf = Vec::from(v.to_le_bytes().as_ref());
@@ -2806,7 +2784,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Select, p_slot, slot, b_slot
@@ -2851,7 +2829,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, T::NPW2-b_npw2, OpCode::Replace, *lane, slot, b_slot
@@ -2871,7 +2849,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, a_npw2, OpCode::ExtendU, 0, slot, a_slot
+                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendU, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -2884,7 +2862,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, a_npw2, OpCode::ExtendS, 0, slot, a_slot
+                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendS, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -2897,7 +2875,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, a_npw2, OpCode::Splat, 0, slot, a_slot
+                    T::NPW2, T::NPW2-a_npw2, OpCode::Splat, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -2921,7 +2899,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Shuffle, 0, slot, b_slot
@@ -2995,7 +2973,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Eq, 0, slot, b_slot
@@ -3032,7 +3010,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Ne, 0, slot, b_slot
@@ -3069,7 +3047,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::LtU, 0, slot, b_slot
@@ -3106,7 +3084,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::LtS, 0, slot, b_slot
@@ -3143,7 +3121,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::GtU, 0, slot, b_slot
@@ -3180,7 +3158,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::GtS, 0, slot, b_slot
@@ -3217,7 +3195,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::LeU, 0, slot, b_slot
@@ -3254,7 +3232,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::LeS, 0, slot, b_slot
@@ -3291,7 +3269,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::GeU, 0, slot, b_slot
@@ -3328,7 +3306,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::GeS, 0, slot, b_slot
@@ -3365,7 +3343,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::MinU, 0, slot, b_slot
@@ -3402,7 +3380,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::MinS, 0, slot, b_slot
@@ -3439,7 +3417,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::MaxU, 0, slot, b_slot
@@ -3476,7 +3454,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::MaxS, 0, slot, b_slot
@@ -3585,7 +3563,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Add, 0, slot, b_slot
@@ -3615,7 +3593,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Sub, 0, slot, b_slot
@@ -3652,7 +3630,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Mul, 0, slot, b_slot
@@ -3689,7 +3667,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, 0, OpCode::And, 0, slot, b_slot
@@ -3726,7 +3704,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, 0, OpCode::Andnot, 0, slot, b_slot
@@ -3763,7 +3741,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, 0, OpCode::Or, 0, slot, b_slot
@@ -3800,7 +3778,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, 0, OpCode::Xor, 0, slot, b_slot
@@ -3830,7 +3808,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Shl, 0, slot, b_slot
@@ -3860,7 +3838,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::ShrU, 0, slot, b_slot
@@ -3890,7 +3868,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::ShrS, 0, slot, b_slot
@@ -3920,7 +3898,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Rotl, 0, slot, b_slot
@@ -3950,7 +3928,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Extract, 0, slot, a_slot
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
                     )));
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Rotr, 0, slot, b_slot
