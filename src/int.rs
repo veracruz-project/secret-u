@@ -1,12 +1,12 @@
 //! Definitions of secret integers
 
-use crate::opcode::OpTree;
-use crate::opcode::OpType;
-use crate::opcode::DynOpTree;
+use crate::opcode::*;
 use crate::engine::exec;
 use crate::error::Error;
 use std::rc::Rc;
 use std::convert::TryFrom;
+
+use aligned_utils::bytes::AlignedBytes;
 
 use std::ops::Not;
 use std::ops::BitAnd;
@@ -28,67 +28,6 @@ use std::ops::Shr;
 use std::ops::ShrAssign;
 
 
-/// A trait to facilitate type-unaware movement between OpTrees
-pub trait SecretType
-where
-    Self: Sized,
-    Self::TreeType: OpType
-{
-    /// Declassified representation
-    type PrimType;
-
-    /// In-tree representation
-    type TreeType;
-
-    /// Wraps a non-secret value as a secret value
-    fn classify(n: Self::PrimType) -> Self;
-
-    /// Extracts the secret value into a non-secret value, this
-    /// effectively "leaks" the secret value, but is necessary
-    /// to actually do anything
-    fn declassify(self) -> Self::PrimType {
-        self.try_declassify().unwrap()
-    }
-
-    /// Same as declassify but propagating internal VM errors
-    ///
-    /// Useful for catching things like divide-by-zero
-    fn try_declassify(self) -> Result<Self::PrimType, Error>;
-
-    /// Evaluate to immediate form
-    ///
-    /// Normally eval is internally called by declassify,
-    /// but this can be useful for flattening the internal
-    /// tree manually to avoid growing too larger during a
-    /// computation
-    fn eval(self) -> Self {
-        self.try_eval().unwrap()
-    }
-
-    /// Same as eval but propagating internal VM errors
-    ///
-    /// Useful for catching things like divide-by-zero
-    fn try_eval(self) -> Result<Self, Error> {
-        Ok(Self::from_tree(OpTree::imm(self.tree().eval()?)))
-    }
-
-    /// Evaluate precompiled-bytecode to immediate form
-    fn eval_bytecode(bytecode: &[u32], stack: &mut [u8]) -> Self::PrimType {
-        Self::try_eval_bytecode(bytecode, stack).unwrap()
-    }
-
-    /// Same as eval_bytecode but propagating internal VM errors
-    ///
-    /// Useful for catching things like divide-by-zero
-    fn try_eval_bytecode(bytecode: &[u32], stack: &mut [u8]) -> Result<Self::PrimType, Error>;
-
-    /// Build from tree
-    fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self;
-
-    /// Get underlying tree
-    fn tree(self) -> Rc<OpTree<Self::TreeType>>;
-}
-
 /// A trait for types that can eq as long as the result remains secret
 pub trait SecretEq {
     fn eq(self, other: Self) -> SecretBool;
@@ -103,26 +42,56 @@ pub trait SecretOrd {
     fn ge(self, other: Self) -> SecretBool;
 
     // convenience functions
-    fn max(self, other: Self) -> Self
-    where
-        Self: Clone + SecretType + From<SecretBool>
-    {
-        self.clone().gt(other.clone()).select(self, other)
-    }
-
-    fn min(self, other: Self) -> Self
-    where
-        Self: Clone + SecretType + From<SecretBool>
-    {
-        self.clone().lt(other.clone()).select(self, other)
-    }
+    fn max(self, other: Self) -> Self;
+    fn min(self, other: Self) -> Self;
 
     fn clamp(self, min: Self, max: Self) -> Self
     where
-        Self: Clone + SecretType + From<SecretBool>
+        Self: Sized
     {
         self.max(min).min(max)
     }
+}
+
+/// A trait for objects that can be selected between
+pub trait SecretSelect<T> {
+    fn select(pred: T, a: Self, b: Self) -> Self;
+}
+
+/// A trait for objects that can be flattened to reduce tree size
+pub trait SecretEval: Sized {
+    /// Evaluate to immediate form
+    ///
+    /// Normally eval is internally called by declassify,
+    /// but this can be useful for flattening the internal
+    /// tree manually to avoid growing too larger during a
+    /// computation
+    fn eval(self) -> Self {
+        self.try_eval().unwrap()
+    }
+
+    /// Same as eval but propagating internal VM errors
+    fn try_eval(self) -> Result<Self, Error>;
+}
+
+/// A trait for objects backed by an internal OpTree, this is used
+/// for compiling down to bytecode
+pub trait SecretTree: Sized {
+    /// Internal tree representation
+    type Tree;
+
+    /// Build from internal tree
+    fn from_tree(tree: Rc<Self::Tree>) -> Self;
+
+    /// Get internal tree, we can do this without worry
+    /// since we internally ensure the value is only ever zeros or ones
+    fn tree(self) -> Rc<Self::Tree>;
+
+    /// Compile down to bytecode
+    fn tree_compile(self, opt: bool) -> (Vec<u32>, AlignedBytes);
+    
+    /// Execute bytecode, used internally for lambdas
+    fn tree_exec(bytecode: &[u32], stack: &mut [u8]) -> Result<Self, Error>;
 }
 
 /// A trait that capture potentially-truncating conversions
@@ -146,7 +115,7 @@ where
 
 /// A secret bool who's value is ensured to not be leaked by Rust's type-system
 ///
-/// Secret bool is a bit different than other SecretTypes, dynamically
+/// Secret bool is a bit different than other secret types, dynamically
 /// preserving the original type until needed as this reduces unnecessary
 /// casting
 ///
@@ -154,39 +123,6 @@ where
 /// not a bytewise copy, which means we can't implement the Copy trait
 #[derive(Clone)]
 pub struct SecretBool(Rc<dyn DynOpTree>);
-
-impl SecretType for SecretBool {
-    type PrimType = bool;
-    type TreeType = [u8;1];
-
-    fn classify(v: bool) -> SecretBool {
-        SecretBool(OpTree::imm([v as u8]))
-    }
-
-    fn try_declassify(self) -> Result<bool, Error> {
-        if self.0.is_sym() {
-            return Err(Error::DeclassifyInCompile);
-        }
-
-        Ok(self.truncated_tree::<[u8;1]>().eval()?[0] != 0)
-    }
-
-    fn try_eval_bytecode(bytecode: &[u32], stack: &mut [u8]) -> Result<bool, Error> {
-        let res = exec(bytecode, stack)?;
-        let v = <u8>::from_le_bytes(
-            <[u8;1]>::try_from(res).map_err(|_| Error::InvalidReturn)?
-        );
-        Ok(v != 0)
-    }
-
-    fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {
-        Self(tree)
-    }
-
-    fn tree(self) -> Rc<OpTree<Self::TreeType>> {
-        self.truncated_tree()
-    }
-}
 
 impl From<bool> for SecretBool {
     fn from(v: bool) -> SecretBool {
@@ -202,6 +138,27 @@ impl Default for SecretBool {
 
 impl SecretBool {
     /// Wraps a non-secret value as a secret value
+    pub fn classify(v: bool) -> SecretBool {
+        Self(OpTree::<U8>::imm(if v { 0xffu8 } else { 0x00u8 }))
+    }
+
+    /// Extracts the secret value into a non-secret value, this
+    /// effectively "leaks" the secret value, but is necessary
+    /// to actually do anything
+    pub fn declassify(self) -> bool {
+        self.try_declassify().unwrap()
+    }
+
+    /// Same as declassify but propagating internal VM errors
+    pub fn try_declassify(self) -> Result<bool, Error> {
+        if self.0.is_sym() {
+            return Err(Error::DeclassifyInCompile);
+        }
+
+        Ok(u8::from(self.tree::<U8>().eval()?) != 0)
+    }
+
+    /// Wraps a non-secret value as a secret value
     pub fn new(v: bool) -> SecretBool {
         Self::classify(v)
     }
@@ -209,19 +166,20 @@ impl SecretBool {
     /// Create a non-secret constant value, these are available for
     /// more optimizations than secret values
     pub fn const_(v: bool) -> SecretBool {
-        Self(if v {
-            OpTree::<[u8;1]>::one()
-        } else {
-            OpTree::<[u8;1]>::zero()
-        })
+        Self(if v { OpTree::<U8>::ones() } else { OpTree::<U8>::zero() })
     }
 
-    /// Helper to convert to any type, we can do this without worry
-    /// since we internally ensure the value is only ever zero or one
-    fn truncated_tree<T: OpType>(self) -> Rc<OpTree<T>> {
-        if T::SIZE > self.0.size() {
+    /// Build from internal tree
+    pub fn from_tree<T: OpU>(tree: Rc<OpTree<T>>) -> Self {
+        Self(tree)
+    }
+
+    /// Get internal tree, we can do this without worry
+    /// since we internally ensure the value is only ever zeros or ones
+    pub fn tree<T: OpU>(self) -> Rc<OpTree<T>> {
+        if T::NPW2 > self.0.npw2() {
             OpTree::extend_s(self.0)
-        } else if T::SIZE < self.0.size() {
+        } else if T::NPW2 < self.0.npw2() {
             OpTree::extract(0, self.0)
         } else {
             OpTree::downcast(self.0)
@@ -231,13 +189,37 @@ impl SecretBool {
     /// Select operation for secrecy-preserving conditionals
     pub fn select<T>(self, a: T, b: T) -> T
     where
-        T: SecretType + From<SecretBool>
+        T: SecretSelect<SecretBool>
     {
-        T::from_tree(OpTree::select(0,
-            T::from(self).tree(),
-            a.tree(),
-            b.tree()
-        ))
+        T::select(self, a, b)
+    }
+}
+
+impl SecretEval for SecretBool {
+    fn try_eval(self) -> Result<Self, Error> {
+        Ok(Self::from_tree(OpTree::<U8>::imm(self.tree::<U8>().eval()?)))
+    }
+}
+
+impl SecretTree for SecretBool {
+    type Tree = OpTree<U8>;
+
+    fn from_tree(tree: Rc<OpTree<U8>>) -> Self {
+        Self::from_tree::<U8>(tree)
+    }
+
+    fn tree(self) -> Rc<OpTree<U8>> {
+        self.tree::<U8>()
+    }
+
+    fn tree_compile(self, opt: bool) -> (Vec<u32>, AlignedBytes) {
+        self.tree::<U8>().compile(opt)
+    }
+    
+    fn tree_exec(bytecode: &[u32], stack: &mut [u8]) -> Result<Self, Error> {
+        let res = exec(bytecode, stack)?;
+        let v = <[u8;1]>::try_from(res).map_err(|_| Error::InvalidReturn)?;
+        Ok(Self::classify(v[0] != 0))
     }
 }
 
@@ -252,8 +234,8 @@ impl BitAnd for SecretBool {
     type Output = SecretBool;
     fn bitand(self, other: SecretBool) -> SecretBool {
         Self(OpTree::and(
-            self.truncated_tree::<[u8;1]>(),
-            other.truncated_tree::<[u8;1]>()
+            self.tree::<U8>(),
+            other.tree::<U8>()
         ))
     }
 }
@@ -268,8 +250,8 @@ impl BitOr for SecretBool {
     type Output = SecretBool;
     fn bitor(self, other: SecretBool) -> SecretBool {
         Self(OpTree::or(
-            self.truncated_tree::<[u8;1]>(),
-            other.truncated_tree::<[u8;1]>()
+            self.tree::<U8>(),
+            other.tree::<U8>()
         ))
     }
 }
@@ -284,8 +266,8 @@ impl BitXor for SecretBool {
     type Output = SecretBool;
     fn bitxor(self, other: SecretBool) -> SecretBool {
         Self(OpTree::xor(
-            self.truncated_tree::<[u8;1]>(),
-            other.truncated_tree::<[u8;1]>()
+            self.tree::<U8>(),
+            other.tree::<U8>()
         ))
     }
 }
@@ -299,15 +281,25 @@ impl BitXorAssign for SecretBool {
 impl SecretEq for SecretBool {
     fn eq(self, other: Self) -> SecretBool {
         SecretBool(OpTree::eq(0,
-            self.truncated_tree::<[u8;1]>(),
-            other.truncated_tree::<[u8;1]>()
+            self.tree::<U8>(),
+            other.tree::<U8>()
         ))
     }
 
     fn ne(self, other: Self) -> SecretBool {
         SecretBool(OpTree::ne(0,
-            self.truncated_tree::<[u8;1]>(),
-            other.truncated_tree::<[u8;1]>()
+            self.tree::<U8>(),
+            other.tree::<U8>()
+        ))
+    }
+}
+
+impl SecretSelect<SecretBool> for SecretBool {
+    fn select(p: SecretBool, a: Self, b: Self) -> Self {
+        Self(OpTree::select(0,
+            p.tree::<U8>(),
+            a.tree::<U8>(),
+            b.tree::<U8>()
         ))
     }
 }
@@ -315,105 +307,22 @@ impl SecretEq for SecretBool {
 
 //// SecretU* ////
 
-macro_rules! match_sig {
-    (s { s => {$($a:tt)*} u => {$($b:tt)*} }) => {
-        $($a)*
-    };
-    (u { s => {$($a:tt)*} u => {$($b:tt)*} }) => {
-        $($b)*
-    };
-    (sa { s => {$($a:tt)*} u => {$($b:tt)*} }) => {
-        $($a)*
-    };
-    (ua { s => {$($a:tt)*} u => {$($b:tt)*} }) => {
-        $($b)*
-    };
-}
-
-macro_rules! match_arr {
-    (s { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
-        $($a)*
-    };
-    (u { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
-        $($a)*
-    };
-    (sa { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
-        $($b)*
-    };
-    (ua { _ => {$($a:tt)*} a => {$($b:tt)*} }) => {
-        $($b)*
-    };
-}
-
 macro_rules! secret_impl {
-    ($t:ident, $u:ty, $n:literal, $s:ident) => {
+    ($t:ident($U:ty; [u8; $n:literal]; $($p:ty)?, $($u:ty)?, $($i:ty)?)) => {
         /// A secret integer who's value is ensured to not be leaked by Rust's type-system
         ///
         /// Note, like the underlying Rc type, clone is relatively cheap, but
         /// not a bytewise copy, which means we can't implement the Copy trait
         #[derive(Clone)]
-        pub struct $t(Rc<OpTree<[u8;$n]>>);
+        pub struct $t(Rc<OpTree<$U>>);
 
-        impl SecretType for $t {
-            type TreeType = [u8;$n];
-            type PrimType = $u;
-
-            fn classify(n: $u) -> Self {
-                match_arr! { $s {
-                    _ => {
-                        Self(OpTree::imm(n.to_le_bytes()))
-                    }
-                    a => {
-                        Self(OpTree::imm(n))
-                    }
-                }}
-            }
-
-            fn try_declassify(self) -> Result<$u, Error> {
-                if self.0.is_sym() {
-                    return Err(Error::DeclassifyInCompile);
+        $(
+            impl From<$p> for $t {
+                fn from(v: $p) -> $t {
+                    Self::classify(v)
                 }
-
-                match_arr! { $s {
-                    _ => {
-                        Ok(<$u>::from_le_bytes(self.0.eval()?))
-                    }
-                    a => {
-                        Ok(self.0.eval()?)
-                    }
-                }}
             }
-
-            fn try_eval_bytecode(bytecode: &[u32], stack: &mut [u8]) -> Result<$u, Error> {
-                let res = exec(bytecode, stack)?;
-                match_arr! { $s {
-                    _ => {
-                        Ok(<$u>::from_le_bytes(
-                            <[u8;$n]>::try_from(res).map_err(|_| Error::InvalidReturn)?
-                        ))
-                    }
-                    a => {
-                        Ok(
-                            <[u8;$n]>::try_from(res).map_err(|_| Error::InvalidReturn)?
-                        )
-                    }
-                }}
-            }
-
-            fn from_tree(tree: Rc<OpTree<Self::TreeType>>) -> Self {
-                Self(tree)
-            }
-
-            fn tree(self) -> Rc<OpTree<Self::TreeType>> {
-                self.0
-            }
-        }
-
-        impl From<$u> for $t {
-            fn from(v: $u) -> $t {
-                Self::classify(v)
-            }
-        }
+        )?
 
         impl Default for $t {
             fn default() -> Self {
@@ -423,9 +332,66 @@ macro_rules! secret_impl {
 
         impl $t {
             /// Wraps a non-secret value as a secret value
-            pub fn new(v: $u) -> Self {
-                Self::classify(v)
+            pub fn classify_le_bytes(v: [u8; $n]) -> Self {
+                Self(OpTree::imm(v))
             }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything
+            pub fn declassify_le_bytes(self) -> [u8; $n] {
+                self.try_declassify_le_bytes().unwrap()
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            pub fn try_declassify_le_bytes(self) -> Result<[u8; $n], Error> {
+                if self.0.is_sym() {
+                    return Err(Error::DeclassifyInCompile);
+                }
+
+                Ok(self.0.eval()?.to_le_bytes())
+            }
+
+            /// Wraps a non-secret value as a secret value
+            pub fn from_le_bytes(v: [u8; $n]) -> Self {
+                Self::classify_le_bytes(v)
+            }
+
+            /// Create a non-secret constant value, these are available
+            /// for more optimizations than secret values
+            pub fn const_le_bytes(v: [u8; $n]) -> Self {
+                Self(OpTree::const_(v))
+            }
+
+            $(
+                /// Wraps a non-secret value as a secret value
+                pub fn classify(v: $p) -> Self {
+                    Self(OpTree::imm(v.to_le_bytes()))
+                }
+
+                /// Extracts the secret value into a non-secret value, this
+                /// effectively "leaks" the secret value, but is necessary
+                /// to actually do anything
+                pub fn declassify(self) -> $p {
+                    self.try_declassify().unwrap()
+                }
+
+                /// Same as declassify but propagating internal VM errors
+                pub fn try_declassify(self) -> Result<$p, Error> {
+                    Ok(<$p>::from_le_bytes(self.try_declassify_le_bytes()?))
+                }
+
+                /// Wraps a non-secret value as a secret value
+                pub fn new(v: $p) -> Self {
+                    Self::classify(v)
+                }
+
+                /// Create a non-secret constant value, these are available
+                /// for more optimizations than secret values
+                pub fn const_(v: $p) -> Self {
+                    Self::const_le_bytes(v.to_le_bytes())
+                }
+            )?
 
             /// A constant, non-secret 0
             pub fn zero() -> Self {
@@ -442,28 +408,13 @@ macro_rules! secret_impl {
                 Self(OpTree::ones())
             }
 
-            /// Create a non-secret constant value, these are available for
-            /// more optimizations than secret values
-            pub fn const_(v: $u) -> Self {
-                match_arr! { $s {
-                    _ => {
-                        Self(OpTree::const_(v.to_le_bytes()))
-                    }
-                    a => {
-                        Self(OpTree::const_(v))
-                    }
-                }
-            }}
-
             // abs only available on signed types
-            match_sig! { $s {
-                s => {
-                    pub fn abs(self) -> Self {
-                        Self(OpTree::abs(0, self.0))
-                    }
+            $(
+                pub fn abs(self) -> Self {
+                    let _: $i;
+                    Self(OpTree::abs(0, self.0))
                 }
-                u => {}
-            }}
+            )?
 
             // other non-trait operations
             pub fn trailing_zeros(self) -> $t {
@@ -491,24 +442,23 @@ macro_rules! secret_impl {
             }
 
             // ipw2/npw2 only available on unsigned types
-            match_sig! { $s {
-                s => {}
-                u => {
-                    pub fn is_power_of_two(self) -> SecretBool {
-                        self.count_ones().eq(Self::one())
-                    }
-
-                    pub fn next_power_of_two(self) -> $t {
-                        // based on implementation in rust core
-                        self.clone().le(Self::one()).select(
-                            // special case if <= 1
-                            Self::zero(),
-                            // next_power_of_two_minus_1
-                            Self::ones() >> (self - Self::one()).leading_zeros()
-                        ) + Self::one()
-                    }
+            $(
+                pub fn is_power_of_two(self) -> SecretBool {
+                    let _: $u;
+                    self.count_ones().eq(Self::one())
                 }
-            }}
+
+                pub fn next_power_of_two(self) -> $t {
+                    let _: $u;
+                    // based on implementation in rust core
+                    self.clone().le(Self::one()).select(
+                        // special case if <= 1
+                        Self::zero(),
+                        // next_power_of_two_minus_1
+                        Self::ones() >> (self - Self::one()).leading_zeros()
+                    ) + Self::one()
+                }
+            )?
 
             pub fn rotate_left(self, other: $t) -> $t {
                 Self(OpTree::rotl(0, self.0, other.0))
@@ -516,6 +466,34 @@ macro_rules! secret_impl {
 
             pub fn rotate_right(self, other: $t) -> $t {
                 Self(OpTree::rotr(0, self.0, other.0))
+            }
+        }
+
+        impl SecretEval for $t {
+            fn try_eval(self) -> Result<Self, Error> {
+                Ok(Self::from_tree(OpTree::imm(self.tree().eval()?)))
+            }
+        }
+
+        impl SecretTree for $t {
+            type Tree = OpTree<$U>;
+
+            fn from_tree(tree: Rc<OpTree<$U>>) -> Self {
+                Self(tree)
+            }
+
+            fn tree(self) -> Rc<OpTree<$U>> {
+                self.0
+            }
+
+            fn tree_compile(self, opt: bool) -> (Vec<u32>, AlignedBytes) {
+                self.0.compile(opt)
+            }
+            
+            fn tree_exec(bytecode: &[u32], stack: &mut [u8]) -> Result<Self, Error> {
+                let res = exec(bytecode, stack)?;
+                let v = <[u8; $n]>::try_from(res).map_err(|_| Error::InvalidReturn)?;
+                Ok(Self::classify_le_bytes(v))
             }
         }
 
@@ -566,17 +544,15 @@ macro_rules! secret_impl {
         }
 
         // negate only available for signed types
-        match_sig! { $s {
-            s => {
-                impl Neg for $t {
-                    type Output = $t;
-                    fn neg(self) -> $t {
-                        Self(OpTree::neg(0, self.0))
-                    }
+        $(
+            impl Neg for $t {
+                type Output = $t;
+                fn neg(self) -> $t {
+                    let _: $i;
+                    Self(OpTree::neg(0, self.0))
                 }
             }
-            u => {}
-        }}
+        )?
 
         impl Add for $t {
             type Output = $t;
@@ -632,18 +608,16 @@ macro_rules! secret_impl {
 
         impl Shr for $t {
             type Output = $t;
-            match_sig! { $s {
-                s => {
-                    fn shr(self, other: $t) -> $t {
-                        Self(OpTree::shr_s(0, self.0, other.0))
-                    }
-                }
-                u => {
-                    fn shr(self, other: $t) -> $t {
-                        Self(OpTree::shr_u(0, self.0, other.0))
-                    }
-                }
-            }}
+            fn shr(self, other: $t) -> $t {
+                $(
+                    let _: $u;
+                    Self(OpTree::shr_u(0, self.0, other.0))
+                )?
+                $(
+                    let _: $i;
+                    Self(OpTree::shr_s(0, self.0, other.0))
+                )?
+            }
         }
 
         impl ShrAssign for $t {
@@ -663,158 +637,203 @@ macro_rules! secret_impl {
         }
 
         impl SecretOrd for $t {
-            match_sig! { $s {
-                s => {
-                    fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::lt_s(0, self.0, other.0))
-                    }
-
-                    fn le(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::le_s(0, self.0, other.0))
-                    }
-
-                    fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::gt_s(0, self.0, other.0))
-                    }
-
-                    fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::ge_s(0, self.0, other.0))
-                    }
+            $(
+                fn lt(self, other: Self) -> SecretBool {
+                    let _: $u;
+                    SecretBool(OpTree::lt_u(0, self.0, other.0))
                 }
-                u => {
-                    fn lt(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::lt_u(0, self.0, other.0))
-                    }
 
-                    fn le(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::le_u(0, self.0, other.0))
-                    }
-
-                    fn gt(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::gt_u(0, self.0, other.0))
-                    }
-
-                    fn ge(self, other: Self) -> SecretBool {
-                        SecretBool(OpTree::ge_u(0, self.0, other.0))
-                    }
+                fn le(self, other: Self) -> SecretBool {
+                    let _: $u;
+                    SecretBool(OpTree::le_u(0, self.0, other.0))
                 }
-            }}
+
+                fn gt(self, other: Self) -> SecretBool {
+                    let _: $u;
+                    SecretBool(OpTree::gt_u(0, self.0, other.0))
+                }
+
+                fn ge(self, other: Self) -> SecretBool {
+                    let _: $u;
+                    SecretBool(OpTree::ge_u(0, self.0, other.0))
+                }
+
+                fn min(self, other: Self) -> Self {
+                    let _: $u;
+                    Self(OpTree::min_u(0, self.0, other.0))
+                }
+
+                fn max(self, other: Self) -> Self {
+                    let _: $u;
+                    Self(OpTree::max_u(0, self.0, other.0))
+                }
+            )?
+            $(
+                fn lt(self, other: Self) -> SecretBool {
+                    let _: $i;
+                    SecretBool(OpTree::lt_s(0, self.0, other.0))
+                }
+
+                fn le(self, other: Self) -> SecretBool {
+                    let _: $i;
+                    SecretBool(OpTree::le_s(0, self.0, other.0))
+                }
+
+                fn gt(self, other: Self) -> SecretBool {
+                    let _: $i;
+                    SecretBool(OpTree::gt_s(0, self.0, other.0))
+                }
+
+                fn ge(self, other: Self) -> SecretBool {
+                    let _: $i;
+                    SecretBool(OpTree::ge_s(0, self.0, other.0))
+                }
+
+                fn min(self, other: Self) -> Self {
+                    let _: $i;
+                    Self(OpTree::min_s(0, self.0, other.0))
+                }
+
+                fn max(self, other: Self) -> Self {
+                    let _: $i;
+                    Self(OpTree::max_s(0, self.0, other.0))
+                }
+            )?
+        }
+
+        impl SecretSelect<SecretBool> for $t {
+            fn select(p: SecretBool, a: Self, b: Self) -> Self {
+                Self(OpTree::select(0,
+                    p.tree(),
+                    a.0,
+                    b.0
+                ))
+            }
         }
     }
 }
 
-secret_impl! { SecretU8,    u8,       1,   u  }
-secret_impl! { SecretU16,   u16,      2,   u  }
-secret_impl! { SecretU32,   u32,      4,   u  }
-secret_impl! { SecretU64,   u64,      8,   u  }
-secret_impl! { SecretU128,  u128,     16,  u  }
-secret_impl! { SecretU256,  [u8;32],  32,  ua }
-secret_impl! { SecretU512,  [u8;64],  64,  ua }
-secret_impl! { SecretI8,    i8,       1,   s  }
-secret_impl! { SecretI16,   i16,      2,   s  }
-secret_impl! { SecretI32,   i32,      4,   s  }
-secret_impl! { SecretI64,   i64,      8,   s  }
-secret_impl! { SecretI128,  i128,     16,  s  }
-secret_impl! { SecretI256,  [u8;32],  32,  sa }
-secret_impl! { SecretI512,  [u8;64],  64,  sa }
+secret_impl! { SecretU8  (U8;   [u8;  1]; u8,   u8,       ) }
+secret_impl! { SecretU16 (U16;  [u8;  2]; u16,  u16,      ) }
+secret_impl! { SecretU32 (U32;  [u8;  4]; u32,  u32,      ) }
+secret_impl! { SecretU64 (U64;  [u8;  8]; u64,  u64,      ) }
+secret_impl! { SecretU128(U128; [u8; 16]; u128, u128,     ) }
+secret_impl! { SecretU256(U256; [u8; 32]; ,     (),       ) }
+secret_impl! { SecretU512(U512; [u8; 64]; ,     (),       ) }
+secret_impl! { SecretI8  (U8;   [u8;  1]; i8,   ,     i8  ) }
+secret_impl! { SecretI16 (U16;  [u8;  2]; i16,  ,     i16 ) }
+secret_impl! { SecretI32 (U32;  [u8;  4]; i32,  ,     i32 ) }
+secret_impl! { SecretI64 (U64;  [u8;  8]; i64,  ,     i64 ) }
+secret_impl! { SecretI128(U128; [u8; 16]; i128, ,     i128) }
+secret_impl! { SecretI256(U256; [u8; 32]; ,     ,     ()  ) }
+secret_impl! { SecretI512(U512; [u8; 64]; ,     ,     ()  ) }
 
 
 //// Conversions U* <-> U* ////
 
 // these are really tedius, so we use a really heavy-weight macro here
-macro_rules! secret_from_impl {
+macro_rules! from_impl {
     // bool extending (bool -> u32)
-    ($from:ty => FB($to:ty), $($rest:tt)*) => {
+    (@from FB $from:ident for $to:ident) => {
         impl From<$from> for $to {
             fn from(v: $from) -> $to {
-                Self(v.truncated_tree())
+                v.select(<$to>::one(), <$to>::zero())
             }
         }
-        secret_from_impl! { $from => $($rest)* }
-    };
-    // cast sign (i32 -> u32)
-    ($from:ty => CS($to:ty), $($rest:tt)*) => {
-        impl Cast<$from> for $to {
-            fn cast(v: $from) -> $to {
-                Self(v.0)
-            }
-        }
-        secret_from_impl! { $from => $($rest)* }
-    };
-    // cast truncating (u32 -> u8)
-    ($from:ty => CT($to:ty), $($rest:tt)*) => {
-        impl Cast<$from> for $to {
-            fn cast(v: $from) -> $to {
-                Self(OpTree::extract(0, v.0))
-            }
-        }
-        secret_from_impl! { $from => $($rest)* }
     };
     // unsigned extending (u8 -> u32)
-    ($from:ty => FU($to:ty), $($rest:tt)*) => {
+    (@from FU $from:ident for $to:ident) => {
         impl From<$from> for $to {
             fn from(v: $from) -> $to {
                 Self(OpTree::extend_u(v.0))
             }
         }
-        secret_from_impl! { $from => $($rest)* }
     };
     // signed extending (i8 -> i32)
-    ($from:ty => FS($to:ty), $($rest:tt)*) => {
+    (@from FS $from:ident for $to:ident) => {
         impl From<$from> for $to {
             fn from(v: $from) -> $to {
                 Self(OpTree::extend_s(v.0))
             }
         }
-        secret_from_impl! { $from => $($rest)* }
     };
-    // base cases
-    ($from:ty => ) => {};
-    ($_:ty => $from:ty => $($rest:tt)*) => {
-        secret_from_impl! { $from => $($rest)* }
+    // truncating (i32 -> i8)
+    (@from CT $from:ident for $to:ident) => {
+        impl Cast<$from> for $to {
+            fn cast(v: $from) -> $to {
+                Self(OpTree::extract(0, v.0))
+            }
+        }
+    };
+    // sign conversion (u32 -> i32)
+    (@from CS $from:ident for $to:ident) => {
+        impl Cast<$from> for $to {
+            fn cast(v: $from) -> $to {
+                Self(v.0)
+            }
+        }
+    };
+    // base case
+    ($to:ident($($op:ident $from:ident),*$(,)?)) => {
+        $(
+            from_impl! { @from $op $from for $to }
+        )*
     };
 }
 
-secret_from_impl! {
-    SecretBool  => FB(SecretU8), FB(SecretU16), FB(SecretU32), FB(SecretU64), FB(SecretU128), FB(SecretU256), FB(SecretU512),
-    SecretBool  => FB(SecretI8), FB(SecretI16), FB(SecretI32), FB(SecretI64), FB(SecretI128), FB(SecretI256), FB(SecretI512),
-}
+// unsigned from bools
+from_impl! { SecretU8  (FB SecretBool) }
+from_impl! { SecretU16 (FB SecretBool) }
+from_impl! { SecretU32 (FB SecretBool) }
+from_impl! { SecretU64 (FB SecretBool) }
+from_impl! { SecretU128(FB SecretBool) }
+from_impl! { SecretU256(FB SecretBool) }
+from_impl! { SecretU512(FB SecretBool) }
 
-secret_from_impl! {
-    SecretU8    =>               FU(SecretU16), FU(SecretU32), FU(SecretU64), FU(SecretU128), FU(SecretU256), FU(SecretU512),
-    SecretU16   => CT(SecretU8),                FU(SecretU32), FU(SecretU64), FU(SecretU128), FU(SecretU256), FU(SecretU512),
-    SecretU32   => CT(SecretU8), CT(SecretU16),                FU(SecretU64), FU(SecretU128), FU(SecretU256), FU(SecretU512),
-    SecretU64   => CT(SecretU8), CT(SecretU16), CT(SecretU32),                FU(SecretU128), FU(SecretU256), FU(SecretU512),
-    SecretU128  => CT(SecretU8), CT(SecretU16), CT(SecretU32), CT(SecretU64),                 FU(SecretU256), FU(SecretU512),
-    SecretU256  => CT(SecretU8), CT(SecretU16), CT(SecretU32), CT(SecretU64), CT(SecretU128),                 FU(SecretU512),
-    SecretU512  => CT(SecretU8), CT(SecretU16), CT(SecretU32), CT(SecretU64), CT(SecretU128), CT(SecretU256),
+// signed from bools
+from_impl! { SecretI8  (FB SecretBool) }
+from_impl! { SecretI16 (FB SecretBool) }
+from_impl! { SecretI32 (FB SecretBool) }
+from_impl! { SecretI64 (FB SecretBool) }
+from_impl! { SecretI128(FB SecretBool) }
+from_impl! { SecretI256(FB SecretBool) }
+from_impl! { SecretI512(FB SecretBool) }
 
-    SecretU8    => CS(SecretI8), FU(SecretI16), FU(SecretI32), FU(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512),
-    SecretU16   =>               CS(SecretI16), FU(SecretI32), FU(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512),
-    SecretU32   =>                              CS(SecretI32), FU(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512),
-    SecretU64   =>                                             CS(SecretI64), FU(SecretI128), FU(SecretI256), FU(SecretI512),
-    SecretU128  =>                                                            CS(SecretI128), FU(SecretI256), FU(SecretI512),
-    SecretU256  =>                                                                            CS(SecretI256), FU(SecretI512),
-    SecretU512  =>                                                                                            CS(SecretI512),
-}
+// unsigned from unsigned
+from_impl! { SecretU8  (             CT SecretU16, CT SecretU32, CT SecretU64, CT SecretU128, CT SecretU256, CT SecretU512) }
+from_impl! { SecretU16 (FU SecretU8,               CT SecretU32, CT SecretU64, CT SecretU128, CT SecretU256, CT SecretU512) }
+from_impl! { SecretU32 (FU SecretU8, FU SecretU16,               CT SecretU64, CT SecretU128, CT SecretU256, CT SecretU512) }
+from_impl! { SecretU64 (FU SecretU8, FU SecretU16, FU SecretU32,               CT SecretU128, CT SecretU256, CT SecretU512) }
+from_impl! { SecretU128(FU SecretU8, FU SecretU16, FU SecretU32, FU SecretU64,                CT SecretU256, CT SecretU512) }
+from_impl! { SecretU256(FU SecretU8, FU SecretU16, FU SecretU32, FU SecretU64, FU SecretU128,                CT SecretU512) }
+from_impl! { SecretU512(FU SecretU8, FU SecretU16, FU SecretU32, FU SecretU64, FU SecretU128, FU SecretU256,              ) }
 
-secret_from_impl! {
-    SecretI8    => CS(SecretU8),
-    SecretI16   =>               CS(SecretU16),
-    SecretI32   =>                              CS(SecretU32),
-    SecretI64   =>                                             CS(SecretU64),
-    SecretI128  =>                                                            CS(SecretU128),
-    SecretI256  =>                                                                            CS(SecretU256),
-    SecretI512  =>                                                                                            CS(SecretU512),
+// unsigned from signed
+from_impl! { SecretU8  (CS SecretI8,                                                                                      ) }
+from_impl! { SecretU16 (             CS SecretI16,                                                                        ) }
+from_impl! { SecretU32 (                           CS SecretI32,                                                          ) }
+from_impl! { SecretU64 (                                         CS SecretI64,                                            ) }
+from_impl! { SecretU128(                                                       CS SecretI128,                             ) }
+from_impl! { SecretU256(                                                                      CS SecretI256,              ) }
+from_impl! { SecretU512(                                                                                     CS SecretI512) }
 
-    SecretI8    =>               FS(SecretI16), FS(SecretI32), FS(SecretI64), FS(SecretI128), FS(SecretI256), FS(SecretI512),
-    SecretI16   => CT(SecretI8),                FS(SecretI32), FS(SecretI64), FS(SecretI128), FS(SecretI256), FS(SecretI512),
-    SecretI32   => CT(SecretI8), CT(SecretI16),                FS(SecretI64), FS(SecretI128), FS(SecretI256), FS(SecretI512),
-    SecretI64   => CT(SecretI8), CT(SecretI16), CT(SecretI32),                FS(SecretI128), FS(SecretI256), FS(SecretI512),
-    SecretI128  => CT(SecretI8), CT(SecretI16), CT(SecretI32), CT(SecretI64),                 FS(SecretI256), FS(SecretI512),
-    SecretI256  => CT(SecretI8), CT(SecretI16), CT(SecretI32), CT(SecretI64), CT(SecretI128),                 FS(SecretI512),
-    SecretI512  => CT(SecretI8), CT(SecretI16), CT(SecretI32), CT(SecretI64), CT(SecretI128), CT(SecretI256),
-}
+// signed from signed
+from_impl! { SecretI8  (             CT SecretI16, CT SecretI32, CT SecretI64, CT SecretI128, CT SecretI256, CT SecretI512) }
+from_impl! { SecretI16 (FS SecretI8,               CT SecretI32, CT SecretI64, CT SecretI128, CT SecretI256, CT SecretI512) }
+from_impl! { SecretI32 (FS SecretI8, FS SecretI16,               CT SecretI64, CT SecretI128, CT SecretI256, CT SecretI512) }
+from_impl! { SecretI64 (FS SecretI8, FS SecretI16, FS SecretI32,               CT SecretI128, CT SecretI256, CT SecretI512) }
+from_impl! { SecretI128(FS SecretI8, FS SecretI16, FS SecretI32, FS SecretI64,                CT SecretI256, CT SecretI512) }
+from_impl! { SecretI256(FS SecretI8, FS SecretI16, FS SecretI32, FS SecretI64, FS SecretI128,                CT SecretI512) }
+from_impl! { SecretI512(FS SecretI8, FS SecretI16, FS SecretI32, FS SecretI64, FS SecretI128, FS SecretI256,              ) }
+
+// signed from unsigned
+from_impl! { SecretI8  (CS SecretU8,                                                                                      ) }
+from_impl! { SecretI16 (FU SecretU8, CS SecretU16,                                                                        ) }
+from_impl! { SecretI32 (FU SecretU8, FU SecretU16, CS SecretU32,                                                          ) }
+from_impl! { SecretI64 (FU SecretU8, FU SecretU16, FU SecretU32, CS SecretU64,                                            ) }
+from_impl! { SecretI128(FU SecretU8, FU SecretU16, FU SecretU32, FU SecretU64, CS SecretU128,                             ) }
+from_impl! { SecretI256(FU SecretU8, FU SecretU16, FU SecretU32, FU SecretU64, FU SecretU128, CS SecretU256,              ) }
+from_impl! { SecretI512(FU SecretU8, FU SecretU16, FU SecretU32, FU SecretU64, FU SecretU128, FU SecretU256, CS SecretU512) }
 
 
 #[cfg(test)]
@@ -828,7 +847,7 @@ mod tests {
         let a = SecretBool::new(true);
         let b = SecretBool::new(true);
         let x = (a.clone() & b.clone()).eq(a | b);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.clone().tree::<U8>().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, true);
@@ -840,7 +859,7 @@ mod tests {
         let a = SecretBool::new(true);
         let b = SecretBool::new(false);
         let x = (a.clone() | b.clone()).select(a, b);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.clone().tree::<U8>().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, true);
@@ -852,7 +871,7 @@ mod tests {
         let a = SecretU32::new(100);
         let b = SecretU32::new(10);
         let x = !a.clone().gt(b.clone());
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.clone().tree::<U8>().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, false);
@@ -910,7 +929,7 @@ mod tests {
             let sb = SecretU32::new(b);
             let sc = SecretU32::new(c);
             let x = sb.clone().lt(sc.clone());
-            x.clone().tree().disas(io::stdout()).unwrap();
+            x.clone().tree::<U8>().disas(io::stdout()).unwrap();
             let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, b < c);
@@ -940,7 +959,7 @@ mod tests {
             assert_eq!(v, n.leading_zeros());
 
             let x = a.clone().is_power_of_two();
-            x.clone().tree().disas(io::stdout()).unwrap();
+            x.clone().tree::<U8>().disas(io::stdout()).unwrap();
             let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, n.is_power_of_two());

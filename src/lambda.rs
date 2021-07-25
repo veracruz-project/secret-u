@@ -24,11 +24,9 @@ macro_rules! compile_object {
     (@str $a:ident) => { stringify!($a) };
     (@str $_:ident $($a:ident)+) => { compile_object!(@str $($a)+) };
 
-    (@tree $t:ty) => { Rc<OpTree<<$t as SecretType>::TreeType>> };
-
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
         $crate::lambda::paste! {
-            use $crate::int::SecretType;
+            use $crate::int::SecretTree;
             use $crate::opcode::OpTree;
             use std::rc::Rc;
             use std::io;
@@ -37,7 +35,7 @@ macro_rules! compile_object {
             struct SecretClosure {
                 // any arguments that may need patching
                 $(
-                    [<__sym_$($a)+>]: compile_object!(@tree $t),
+                    [<__sym_$($a)+>]: Rc<<$t as SecretTree>::Tree>,
                 )*
 
                 // bytecode and stack
@@ -60,12 +58,12 @@ macro_rules! compile_object {
                     // call user function with symbols
                     let v = f(
                         $(
-                            <$t>::from_tree([<__sym_$($a)+>].clone())
+                            <$t as SecretTree>::from_tree([<__sym_$($a)+>].clone())
                         ),*
                     );
 
                     // compile tree
-                    let (bytecode, stack) = v.tree().compile(true);
+                    let (bytecode, stack) = v.tree_compile(true);
 
                     // return closure
                     SecretClosure {
@@ -116,16 +114,14 @@ macro_rules! compile_object {
                     // patch arguments
                     $(
                         self.[<__sym_$($a)+>].patch(
+                            &mut stack,
                             compile_object!(@ident $($a)+)
-                                .declassify()
-                                .to_le_bytes(),
-                            &mut stack
+                                .declassify_le_bytes()
                         );
                     )*
 
                     // execute
-                    <$r>::try_eval_bytecode(&self.__bytecode, &mut stack)
-                        .map(|r| <$r>::classify(r))
+                    <$r>::tree_exec(&self.__bytecode, &mut stack)
                 }
 
                 /// Call underlying bytecode

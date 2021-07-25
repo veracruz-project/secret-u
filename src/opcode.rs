@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 use std::fmt::Debug;
+use std::fmt::LowerHex;
 use std::io;
 use std::convert::TryFrom;
 use std::fmt;
@@ -11,12 +12,12 @@ use std::cell::Cell;
 use crate::engine::exec;
 use std::cmp::max;
 use std::cmp::min;
+use std::mem::size_of;
 use std::collections::HashMap;
 #[cfg(feature="opt-color-slots")]
 use std::collections::BTreeSet;
 #[cfg(feature="opt-fold-consts")]
 use std::cell::RefCell;
-use std::io::Write;
 
 use aligned_utils::bytes::AlignedBytes;
 
@@ -528,25 +529,19 @@ pub fn disas<W: io::Write>(
     Ok(())
 }
 
-/// Trait for types that can be compiled
-pub trait OpType: Copy + Clone + Debug + 'static {
-    /// size in bytes
-    const SIZE: usize;
-
-    /// width in bits
-    const WIDTH: usize;
-
-    /// npw2(size), used in instruction encoding
+/// Trait for the underlying types
+pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static {
+    /// npw2(size)
     const NPW2: u8;
 
-    /// workaround for lack of array default impls
-    fn default() -> Self;
+    /// raw byte representation
+    type Bytes: AsRef<[u8]> + AsMut<[u8]> + for<'a> TryFrom<&'a [u8]>;
 
-    /// write into stack as bytes
-    fn encode(&self, stack: &mut dyn io::Write) -> Result<(), io::Error>;
+    /// to raw byte representation
+    fn to_le_bytes(self) -> Self::Bytes;
 
-    /// read from stack
-    fn decode(stack: &mut dyn io::Read) -> Result<Self, io::Error>;
+    /// from raw byte representation
+    fn from_le_bytes(bytes: Self::Bytes) -> Self;
 
     /// Zero
     fn zero() -> Self;
@@ -558,126 +553,146 @@ pub trait OpType: Copy + Clone + Debug + 'static {
     fn ones() -> Self;
 
     /// Test if self is zero
-    fn is_zero(&self) -> bool;
+    fn is_zero(&self) -> bool {
+        self == &Self::ones()
+    }
 
     /// Test if self is one
-    fn is_one(&self) -> bool;
+    fn is_one(&self) -> bool {
+        self == &Self::one()
+    }
 
     /// Test if self is ones
-    fn is_ones(&self) -> bool;
+    fn is_ones(&self) -> bool {
+        self == &Self::ones()
+    }
 
     /// Can we compress into an extend_const_u instruction?
-    fn is_extend_u_compressable(&self, npw2: u8) -> bool;
+    fn is_extend_u_compressable(&self, npw2: u8) -> bool {
+        let bytes = self.to_le_bytes();
+        let bytes = bytes.as_ref();
+        let width = 1usize << npw2;
+        bytes[width..].iter().all(|b| *b == 0)
+    }
 
     /// Can we compress into an extend_const_s instruction?
-    fn is_extend_s_compressable(&self, npw2: u8) -> bool;
+    fn is_extend_s_compressable(&self, npw2: u8) -> bool {
+        let bytes = self.to_le_bytes();
+        let bytes = bytes.as_ref();
+        let width = 1usize << npw2;
+        if bytes[width-1] & 0x80 == 0x80 {
+            bytes[width..].iter().all(|b| *b == 0xff)
+        } else {
+            bytes[width..].iter().all(|b| *b == 0x00)
+        }
+    }
 
     /// Can we compress into a splat_const instruction?
-    fn is_splat_compressable(&self, npw2: u8) -> bool;
-
-    /// Display as hex, used for debugging
-    fn hex(&self) -> String;
+    fn is_splat_compressable(&self, npw2: u8) -> bool {
+        let bytes = self.to_le_bytes();
+        let bytes = bytes.as_ref();
+        let width = 1usize << npw2;
+        (width..bytes.len())
+            .step_by(width)
+            .all(|i| &bytes[i..i+width] == &bytes[..width])
+    }
 }
 
-macro_rules! optype_impl {
-    ([u8; $n:literal ($p:literal)]) => {
-        impl OpType for [u8;$n] {
-            const SIZE: usize = $n;
-            const WIDTH: usize = 8*$n;
-            const NPW2: u8 = $p;
+macro_rules! opu_impl {
+    ($u:ident([u8; $n:expr]; $npw2:expr $(; $($prim:ty),*)?)) => {
+        #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+        pub struct $u([u8; $n]);
 
-            fn default() -> Self {
-                [0; $n]
+        impl From<[u8; $n]> for $u {
+            fn from(v: [u8; $n]) -> Self {
+                Self::from_le_bytes(v)
+            }
+        }
+
+        impl From<$u> for [u8; $n] {
+            fn from(v: $u) -> [u8; $n] {
+                v.to_le_bytes()
+            }
+        }
+
+        $($(
+            impl From<$prim> for $u {
+                fn from(v: $prim) -> Self {
+                    Self::from_le_bytes(v.to_le_bytes())
+                }
             }
 
-            fn encode(
-                &self,
-                stack: &mut dyn io::Write
-            ) -> Result<(), io::Error> {
-                stack.write_all(self)
+            impl From<$u> for $prim {
+                fn from(v: $u) -> $prim {
+                    <$prim>::from_le_bytes(v.to_le_bytes())
+                }
+            }
+        )*)?
+
+        impl OpU for $u {
+            const NPW2: u8 = $npw2;
+
+            /// raw byte representation
+            type Bytes = [u8; $n];
+
+            /// to raw byte representation
+            fn to_le_bytes(self) -> Self::Bytes {
+                self.0
             }
 
-            fn decode(
-                stack: &mut dyn io::Read
-            ) -> Result<Self, io::Error> {
-                let mut buf = [0; $n];
-                stack.read_exact(&mut buf)?;
-                Ok(buf)
+            /// from raw byte representation
+            fn from_le_bytes(bytes: Self::Bytes) -> Self {
+                Self(bytes)
             }
 
+            /// Zero
             fn zero() -> Self {
-                [0; $n]
+                Self([0; $n])
             }
 
+            /// One
             fn one() -> Self {
                 let mut one = [0; $n];
                 one[0] = 1;
                 Self::try_from(one).unwrap()
             }
 
+            /// All bits set to one
             fn ones() -> Self {
-                [0xff; $n]
-            }
-
-            fn is_zero(&self) -> bool {
-                self == &Self::zero()
-            }
-
-            fn is_one(&self) -> bool {
-                // don't know an easier way to build this
-                let mut one = [0; $n];
-                one[0] = 1;
-                self == &Self::one()
-            }
-
-            fn is_ones(&self) -> bool {
-                self == &Self::ones()
-            }
-
-            fn is_extend_u_compressable(&self, npw2: u8) -> bool {
-                let width = 1usize << npw2;
-                self[width..].iter().all(|b| *b == 0)
-            }
-
-            fn is_extend_s_compressable(&self, npw2: u8) -> bool {
-                let width = 1usize << npw2;
-                if self[width-1] & 0x80 == 0x80 {
-                    self[width..].iter().all(|b| *b == 0xff)
-                } else {
-                    self[width..].iter().all(|b| *b == 0x00)
-                }
-            }
-
-            fn is_splat_compressable(&self, npw2: u8) -> bool {
-                let width = 1usize << npw2;
-                (width..$n).step_by(width).all(|i| &self[i..i+width] == &self[..width])
-            }
-
-            fn hex(&self) -> String {
-                let mut buf = vec![b'0', b'x'];
-                for b in self.iter().rev() {
-                    write!(buf, "{:02x}", b).unwrap();
-                }
-                String::from_utf8(buf).unwrap()
+                Self([0xff; $n])
             }
         }
-    };
 
+        impl Default for $u {
+            fn default() -> Self {
+                Self::zero()
+            }
+        }
+
+        impl LowerHex for $u {
+            fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+                write!(fmt, "0x")?;
+                for b in self.0.iter().rev() {
+                    write!(fmt, "{:02x}", b)?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
-optype_impl! { [u8; 1   (0)] }
-optype_impl! { [u8; 2   (1)] }
-optype_impl! { [u8; 4   (2)] }
-optype_impl! { [u8; 8   (3)] }
-optype_impl! { [u8; 16  (4)] }
-optype_impl! { [u8; 32  (5)] }
-optype_impl! { [u8; 64  (6)] }
-optype_impl! { [u8; 128 (7)] }
+opu_impl! { U8  ([u8;  1]; 0; u8,   i8  ) }
+opu_impl! { U16 ([u8;  2]; 1; u16,  i16 ) }
+opu_impl! { U32 ([u8;  4]; 2; u32,  i32 ) }
+opu_impl! { U64 ([u8;  8]; 3; u64,  i64 ) }
+opu_impl! { U128([u8; 16]; 4; u128, i128) }
+opu_impl! { U256([u8; 32]; 5)             }
+opu_impl! { U512([u8; 64]; 6)             }
 
 
 /// Kinds of operations in tree
 #[derive(Debug)]
-pub enum OpKind<T: OpType> {
+pub enum OpKind<T: OpU> {
     Imm(T),
     Sym(&'static str),
 
@@ -732,7 +747,7 @@ pub enum OpKind<T: OpType> {
 /// Tree of operations, including metadata to deduplicate
 /// common branches
 #[derive(Debug)]
-pub struct OpTree<T: OpType> {
+pub struct OpTree<T: OpU> {
     kind: OpKind<T>,
     refs: Cell<u32>,
     slot: Cell<Option<u8>>,
@@ -915,7 +930,7 @@ impl OpCompile {
 }
 
 /// Core OpTree type
-impl<T: OpType> OpTree<T> {
+impl<T: OpU> OpTree<T> {
     const SECRET: u8 = 0x1;
     const SYM: u8    = 0x2;
 
@@ -932,13 +947,19 @@ impl<T: OpType> OpTree<T> {
     }
 
     /// Create an immediate, secret value
-    pub fn imm(v: T) -> Rc<Self> {
-        Rc::new(Self::new(OpKind::Imm(v), Self::SECRET, 1))
+    pub fn imm<U>(v: U) -> Rc<Self>
+    where
+        T: From<U>
+    {
+        Rc::new(Self::new(OpKind::Imm(T::from(v)), Self::SECRET, 1))
     }
 
     /// Create a const susceptable to compiler optimizations
-    pub fn const_(v: T) -> Rc<Self> {
-        Rc::new(Self::new(OpKind::Imm(v), 0, 1))
+    pub fn const_<U>(v: U) -> Rc<Self>
+    where
+        T: From<U>
+    {
+        Rc::new(Self::new(OpKind::Imm(T::from(v)), 0, 1))
     }
 
     /// A constant 0
@@ -1216,7 +1237,7 @@ impl<T: OpType> OpTree<T> {
 
     /// Downcast a generic OpTree, panicing if types do not match
     pub fn downcast(a: Rc<dyn DynOpTree>) -> Rc<OpTree<T>> {
-        assert!(a.width() == T::WIDTH);
+        assert!(a.npw2() == T::NPW2);
         // based on Rc::downcast impl
         unsafe {
             Rc::from_raw(Rc::into_raw(a) as _)
@@ -1318,15 +1339,20 @@ impl<T: OpType> OpTree<T> {
             OpKind::Imm(v) => Ok(v),
             _ => {
                 let (bytecode, mut stack) = self.compile(false);
-                let mut res = exec(&bytecode, &mut stack)?;
-                let v = T::decode(&mut res).map_err(|_| Error::InvalidReturn)?;
+                let res = exec(&bytecode, &mut stack)?;
+                let v = T::from_le_bytes(
+                    T::Bytes::try_from(res).map_err(|_| Error::InvalidReturn)?
+                );
                 Ok(v)
             }
         }
     }
 
-    /// Assuming we are Sym, patch the stack during a call
-    pub fn patch(&self, v: T, stack: &mut [u8]) {
+    /// Assuming we are Sym, patch the slots during a call
+    pub fn patch<U>(&self, slots: &mut [u8], v: U)
+    where
+        T: From<U>
+    {
         assert!(
             match self.kind {
                 OpKind::Sym(_) => true,
@@ -1336,11 +1362,10 @@ impl<T: OpType> OpTree<T> {
         );
 
         let slot = self.slot.get().expect("patching with no slot?");
-        let mut slice = &mut stack[
-            slot as usize * T::SIZE
-                .. slot as usize * T::SIZE + T::SIZE
-        ];
-        v.encode(&mut slice).expect("slice write resulted in io::error?");
+        slots[
+            slot as usize * size_of::<T>()
+                .. (slot as usize + 1) * size_of::<T>()
+        ].copy_from_slice(T::from(v).to_le_bytes().as_ref());
     }
 }
 
@@ -1348,12 +1373,6 @@ impl<T: OpType> OpTree<T> {
 pub trait DynOpTree: Debug {
     /// npw2(size), used as a part of instruction encoding
     fn npw2(&self) -> u8;
-
-    /// type's size in bytes, needed for determining cast sizes
-    fn size(&self) -> usize;
-
-    /// type's width in bits
-    fn width(&self) -> usize;
 
     /// bitwised-or flags from all branches
     fn flags(&self) -> u8;
@@ -1488,17 +1507,9 @@ macro_rules! schedule {
     };
 }
 
-impl<T: OpType> DynOpTree for OpTree<T> {
+impl<T: OpU> DynOpTree for OpTree<T> {
     fn npw2(&self) -> u8 {
         T::NPW2
-    }
-
-    fn size(&self) -> usize {
-        T::SIZE
-    }
-
-    fn width(&self) -> usize {
-        T::WIDTH
     }
 
     fn flags(&self) -> u8 {
@@ -1576,7 +1587,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
     fn dyn_not(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
         // bit messy but this works
         // unfortunately this only works when there is a single argument
-        fn not<T: OpType>(tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
+        fn not<T: OpU>(tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
             OpTree::not(OpTree::<T>::downcast(tree))
         }
         &not::<T>
@@ -1808,16 +1819,16 @@ impl<T: OpType> DynOpTree for OpTree<T> {
         }
 
         let expr = match &self.kind {
-            OpKind::Imm(v) if self.is_const() => format!("(u{}.const {})",
-                T::WIDTH,
-                v.hex()
+            OpKind::Imm(v) if self.is_const() => format!("(u{}.const {:x})",
+                8 << T::NPW2,
+                v
             ),
-            OpKind::Imm(v) => format!("(u{}.imm {})",
-                T::WIDTH,
-                v.hex()
+            OpKind::Imm(v) => format!("(u{}.imm {:x})",
+                8 << T::NPW2,
+                v
             ),
             OpKind::Sym(s) => format!("(u{}.sym {:?})",
-                T::WIDTH,
+                8 << T::NPW2,
                 s
             ),
 
@@ -1840,15 +1851,15 @@ impl<T: OpType> DynOpTree for OpTree<T> {
             ),
 
             OpKind::ExtendU(a) => format!("(u{}.extend_u {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::ExtendS(a) => format!("(u{}.extend_s {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Splat(a) => format!("(u{}.splat {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Shuffle(lnpw2, a, b) => format!("(u{}.shuffle {} {})",
@@ -1858,11 +1869,11 @@ impl<T: OpType> DynOpTree for OpTree<T> {
             ),
 
             OpKind::None(a) => format!("(u{}.none {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Any(a) => format!("(u{}.any {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::All(lnpw2, a) => format!("(u{}.all {})",
@@ -1949,7 +1960,7 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                 a.disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Not(a) => format!("(u{}.not {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Clz(lnpw2, a) => format!("(u{}.clz {})",
@@ -1980,22 +1991,22 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                 b.disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::And(a, b) => format!("(u{}.and {} {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?,
                 b.disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Andnot(a, b) => format!("(u{}.andnot {} {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?,
                 b.disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Or(a, b) => format!("(u{}.or {} {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?,
                 b.disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Xor(a, b) => format!("(u{}.xor {} {})",
-                T::WIDTH,
+                8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?,
                 b.disas_pass2(names, arbitrary_names, stmts)?,
             ),
@@ -2496,10 +2507,10 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                     state.slots.resize((usize::from(slot)+1) << T::NPW2, 0);
                 }
 
-                v.encode(&mut &mut state.slots[
+                state.slots[
                     usize::from(slot) << T::NPW2
                         .. (usize::from(slot)+1) << T::NPW2
-                ]).unwrap();
+                ].copy_from_slice(v.to_le_bytes().as_ref());
 
                 // initialize arg in bytecode
                 state.bytecode.push(u32::from(OpIns::new(
@@ -2743,25 +2754,19 @@ impl<T: OpType> DynOpTree for OpTree<T> {
                 if best_npw2 == 0 {
                     // u8s can fit directly in instruction
 
-                    // TODO can this be more efficient (and less ugly)
-                    let mut buf = Vec::new();
-                    v.encode(&mut buf).unwrap();
-                    buf.truncate(1 << best_npw2);
-                    debug_assert!(buf.len() == 1);
+                    let mut buf = Vec::from(v.to_le_bytes().as_ref());
+                    buf.truncate(1);
 
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, 0, best_ins8, 0, slot, buf[0]
                     )));
                 } else {
                     // encode const into bytecode stream
-                    // TODO compressed encoding schemes?
                     state.bytecode.push(u32::from(OpIns::new(
                         T::NPW2, best_npw2, best_ins, 0, slot, 0
                     )));
 
-                    // TODO can this be more efficient
-                    let mut buf = Vec::new();
-                    v.encode(&mut buf).unwrap();
+                    let mut buf = Vec::from(v.to_le_bytes().as_ref());
                     buf.truncate(1 << best_npw2);
                     buf.resize(max(4, buf.len()), 0);
                     for i in (0..buf.len()).step_by(4) {
@@ -3968,8 +3973,8 @@ mod tests {
     #[test]
     fn compile_add() {
         let example = OpTree::add(0,
-            OpTree::imm(1u32.to_le_bytes()),
-            OpTree::imm(2u32.to_le_bytes())
+            OpTree::<U32>::imm(1u32),
+            OpTree::<U32>::imm(2u32)
         );
 
         println!();
@@ -3991,8 +3996,8 @@ mod tests {
     #[test]
     fn compile_add_parallel() {
         let example = OpTree::add(2,
-            OpTree::imm(0x01020304u32.to_le_bytes()),
-            OpTree::imm(0x0506fffeu32.to_le_bytes())
+            OpTree::<U32>::imm(0x01020304u32),
+            OpTree::<U32>::imm(0x0506fffeu32)
         );
 
         println!();
@@ -4014,11 +4019,11 @@ mod tests {
     #[test]
     fn compile_alignment() {
         let example = OpTree::add(0,
-            OpTree::<[u8;2]>::extend_s(
-                OpTree::imm(2u8.to_le_bytes())
+            OpTree::<U16>::extend_s(
+                OpTree::<U8>::imm(2u8)
             ),
-            OpTree::<[u8;2]>::extract(0,
-                OpTree::imm(1u32.to_le_bytes()),
+            OpTree::<U16>::extract(0,
+                OpTree::<U32>::imm(1u32),
             ),
         );
 
@@ -4040,10 +4045,10 @@ mod tests {
 
     #[test]
     fn compile_dag() {
-        let two = OpTree::imm(2u32.to_le_bytes());
+        let two = OpTree::<U32>::imm(2u32);
         let a = OpTree::add(0,
-            OpTree::imm(1u32.to_le_bytes()),
-            OpTree::imm(2u32.to_le_bytes())
+            OpTree::<U32>::imm(1u32),
+            OpTree::<U32>::imm(2u32)
         );
         let b = OpTree::shr_s(0,
             a.clone(), two.clone()
@@ -4077,9 +4082,9 @@ mod tests {
 
     #[test]
     fn compile_pythag() {
-        let a = OpTree::imm(3u32.to_le_bytes());
-        let b = OpTree::imm(4u32.to_le_bytes());
-        let c = OpTree::imm(5u32.to_le_bytes());
+        let a = OpTree::<U32>::imm(3u32);
+        let b = OpTree::<U32>::imm(4u32);
+        let c = OpTree::<U32>::imm(5u32);
         let example = OpTree::eq(0,
             OpTree::add(0,
                 OpTree::mul(0, a.clone(), a),
@@ -4107,26 +4112,26 @@ mod tests {
     #[test]
     fn compile_too_many_casts() {
         // this intentionally has an obnoxious amount of casting
-        let a = OpTree::imm(1u8.to_le_bytes());
-        let b = OpTree::imm(1u16.to_le_bytes());
-        let c = OpTree::imm(2u32.to_le_bytes());
-        let d = OpTree::imm(3u64.to_le_bytes());
-        let e = OpTree::imm(5u128.to_le_bytes());
+        let a = OpTree::<U8>::imm(1u8);
+        let b = OpTree::<U16>::imm(1u16);
+        let c = OpTree::<U32>::imm(2u32);
+        let d = OpTree::<U64>::imm(3u64);
+        let e = OpTree::<U128>::imm(5u128);
         let fib_3 = OpTree::add(0,
-            OpTree::<[u8;4]>::extend_u(b.clone()), OpTree::<[u8;4]>::extend_u(a.clone())
+            OpTree::<U32>::extend_u(b.clone()), OpTree::<U32>::extend_u(a.clone())
         );
         let fib_4 = OpTree::add(0,
-            OpTree::<[u8;8]>::extend_u(fib_3.clone()), OpTree::<[u8;8]>::extend_u(b.clone())
+            OpTree::<U64>::extend_u(fib_3.clone()), OpTree::<U64>::extend_u(b.clone())
         );
         let fib_5 = OpTree::add(0,
-            OpTree::<[u8;16]>::extend_u(fib_4.clone()), OpTree::<[u8;16]>::extend_u(fib_3.clone())
+            OpTree::<U128>::extend_u(fib_4.clone()), OpTree::<U128>::extend_u(fib_3.clone())
         );
         let example = OpTree::and(
             OpTree::and(
-                OpTree::<[u8;1]>::extract(0, OpTree::eq(0, fib_3.clone(), c)),
-                OpTree::<[u8;1]>::extract(0, OpTree::eq(0, fib_4.clone(), d))
+                OpTree::<U8>::extract(0, OpTree::eq(0, fib_3.clone(), c)),
+                OpTree::<U8>::extract(0, OpTree::eq(0, fib_4.clone(), d))
             ),
-            OpTree::<[u8;1]>::extract(0, OpTree::eq(0, fib_5.clone(), e))
+            OpTree::<U8>::extract(0, OpTree::eq(0, fib_5.clone(), e))
         );
 
         println!();
@@ -4147,9 +4152,9 @@ mod tests {
 
     #[test]
     fn constant_folding() {
-        let a = OpTree::const_(3u32.to_le_bytes());
-        let b = OpTree::const_(4u32.to_le_bytes());
-        let c = OpTree::const_(5u32.to_le_bytes());
+        let a = OpTree::<U32>::const_(3u32);
+        let b = OpTree::<U32>::const_(4u32);
+        let c = OpTree::<U32>::const_(5u32);
         let example = OpTree::eq(0,
             OpTree::add(0,
                 OpTree::mul(0, a.clone(), a),
@@ -4177,26 +4182,26 @@ mod tests {
     #[test]
     fn constant_more_folding() {
         // this intentionally has an obnoxious amount of casting
-        let a = OpTree::const_(1u8.to_le_bytes());
-        let b = OpTree::const_(1u16.to_le_bytes());
-        let c = OpTree::const_(2u32.to_le_bytes());
-        let d = OpTree::const_(3u64.to_le_bytes());
-        let e = OpTree::const_(5u128.to_le_bytes());
+        let a = OpTree::<U8>::const_(1u8);
+        let b = OpTree::<U16>::const_(1u16);
+        let c = OpTree::<U32>::const_(2u32);
+        let d = OpTree::<U64>::const_(3u64);
+        let e = OpTree::<U128>::const_(5u128);
         let fib_3 = OpTree::add(0,
-            OpTree::<[u8;4]>::extend_u(b.clone()), OpTree::<[u8;4]>::extend_u(a.clone())
+            OpTree::<U32>::extend_u(b.clone()), OpTree::<U32>::extend_u(a.clone())
         );
         let fib_4 = OpTree::add(0,
-            OpTree::<[u8;8]>::extend_u(fib_3.clone()), OpTree::<[u8;8]>::extend_u(b.clone())
+            OpTree::<U64>::extend_u(fib_3.clone()), OpTree::<U64>::extend_u(b.clone())
         );
         let fib_5 = OpTree::add(0,
-            OpTree::<[u8;16]>::extend_u(fib_4.clone()), OpTree::<[u8;16]>::extend_u(fib_3.clone())
+            OpTree::<U128>::extend_u(fib_4.clone()), OpTree::<U128>::extend_u(fib_3.clone())
         );
         let example = OpTree::and(
             OpTree::and(
-                OpTree::<[u8;1]>::extract(0, OpTree::eq(0, fib_3.clone(), c)),
-                OpTree::<[u8;1]>::extract(0, OpTree::eq(0, fib_4.clone(), d))
+                OpTree::<U8>::extract(0, OpTree::eq(0, fib_3.clone(), c)),
+                OpTree::<U8>::extract(0, OpTree::eq(0, fib_4.clone(), d))
             ),
-            OpTree::<[u8;1]>::extract(0, OpTree::eq(0, fib_5.clone(), e))
+            OpTree::<U8>::extract(0, OpTree::eq(0, fib_5.clone(), e))
         );
 
         println!();
@@ -4217,32 +4222,32 @@ mod tests {
 
     #[test]
     fn compile_slot_defragment() {
-        let a = OpTree::imm([1u8; 1]);
-        let b = OpTree::imm([2u8; 1]);
-        let c = OpTree::imm([3u8; 1]);
-        let d = OpTree::imm([4u8; 1]);
-        let e = OpTree::imm([5u8; 1]);
-        let f = OpTree::imm([6u8; 1]);
-        let g = OpTree::imm([7u8; 1]);
-        let h = OpTree::imm([8u8; 1]);
-        let big = OpTree::<[u8;4]>::extend_u(a);
+        let a = OpTree::<U8>::imm(1u8);
+        let b = OpTree::<U8>::imm(2u8);
+        let c = OpTree::<U8>::imm(3u8);
+        let d = OpTree::<U8>::imm(4u8);
+        let e = OpTree::<U8>::imm(5u8);
+        let f = OpTree::<U8>::imm(6u8);
+        let g = OpTree::<U8>::imm(7u8);
+        let h = OpTree::<U8>::imm(8u8);
+        let big = OpTree::<U32>::extend_u(a);
         let i = OpTree::add(0,
             big.clone(),
             OpTree::add(0,
                 big.clone(),
                 OpTree::add(0,
-                    OpTree::<[u8;4]>::extend_u(b),
+                    OpTree::<U32>::extend_u(b),
                     OpTree::add(0,
-                        OpTree::<[u8;4]>::extend_u(c),
+                        OpTree::<U32>::extend_u(c),
                         OpTree::add(0,
-                            OpTree::<[u8;4]>::extend_u(d),
+                            OpTree::<U32>::extend_u(d),
                             OpTree::add(0,
-                                OpTree::<[u8;4]>::extend_u(e),
+                                OpTree::<U32>::extend_u(e),
                                 OpTree::add(0,
-                                    OpTree::<[u8;4]>::extend_u(f),
+                                    OpTree::<U32>::extend_u(f),
                                     OpTree::add(0,
-                                        OpTree::<[u8;4]>::extend_u(g),
-                                        OpTree::<[u8;4]>::extend_u(h)
+                                        OpTree::<U32>::extend_u(g),
+                                        OpTree::<U32>::extend_u(h)
                                     )
                                 )
                             )
@@ -4274,18 +4279,18 @@ mod tests {
 
     #[test]
     fn compile_compressed_consts() {
-        let a = OpTree::imm([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]);
-        let b = OpTree::const_([1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
-        let a = OpTree::add(0, a, b);
-        let b = OpTree::const_([0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]);
-        let a = OpTree::add(0, a, b);
-        let b = OpTree::const_([0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab]);
-        let a = OpTree::add(0, a, b);
-        let b = OpTree::const_([2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
-        let a = OpTree::add(0, a, b);
-        let b = OpTree::const_([0xfd,0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]);
-        let a = OpTree::add(0, a, b);
-        let b = OpTree::const_([0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd]);
+        let a = OpTree::<U128>::imm([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]);
+        let b = OpTree::<U128>::const_([1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+        let a = OpTree::<U128>::add(0, a, b);
+        let b = OpTree::<U128>::const_([0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]);
+        let a = OpTree::<U128>::add(0, a, b);
+        let b = OpTree::<U128>::const_([0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab,0xab]);
+        let a = OpTree::<U128>::add(0, a, b);
+        let b = OpTree::<U128>::const_([2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+        let a = OpTree::<U128>::add(0, a, b);
+        let b = OpTree::<U128>::const_([0xfd,0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]);
+        let a = OpTree::<U128>::add(0, a, b);
+        let b = OpTree::<U128>::const_([0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd,0xab,0xcd]);
         let example = OpTree::add(0, a, b);
 
         println!();
