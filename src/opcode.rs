@@ -43,21 +43,24 @@ use aligned_utils::bytes::AlignedBytes;
 ///   |   '------------------------------- 3-bit npw2(lanes) or npw2(source size)
 ///   '----------------------------------- 3-bit npw2(size)
 ///
-/// However there are 3 special instruction which use a 3-register format
+/// However there are 4 special instruction which use either a 7-bit
+/// immediate or 3-register format:
 ///
-/// select:
-/// [-3-|-3-|01|--  8  --|--  8  --|--  8  --]
-///   ^   ^         ^         ^         ^- 8-bit source slot
-///   |   |         |         '----------- 8-bit destination slot
-///   |   |         '--------------------- 8-bit predicate slot
+/// extract + replace:
+/// [-3-|-3-|01-|-- 7  --|--  8  --|--  8  --]
+///   ^   ^    ^    ^         ^         ^- 8-bit source slot
+///   |   |    |    |         '----------- 8-bit destination slot
+///   |   |    |    '--------------------- 7-bit lane number
+///   |   |    '-------------------------- 1-bit extract or replace
 ///   |   '------------------------------- 3-bit npw2(lanes)
 ///   '----------------------------------- 3-bit npw2(size)
 ///
-/// extract+replace:
-/// [-3-|-3-|1r|--  8  --|--  8  --|--  8  --]
-///   ^   ^         ^         ^         ^- 8-bit source slot
-///   |   |         |         '----------- 8-bit destination slot
-///   |   |         '--------------------- 8-bit lane number
+/// select + shuffle:
+/// [-3-|-3-|1-|--  8  --|--  8  --|--  8  --]
+///   ^   ^   ^     ^         ^         ^- 8-bit source slot
+///   |   |   |     |         '----------- 8-bit destination slot
+///   |   |   |     '--------------------- 8-bit predicate slot
+///   |   |   '--------------------------- 1-bit select or shuffle
 ///   |   '------------------------------- 3-bit npw2(lanes)
 ///   '----------------------------------- 3-bit npw2(size)
 ///
@@ -68,9 +71,10 @@ use aligned_utils::bytes::AlignedBytes;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
 pub enum OpCode {
-    Select        = 0x01000000,
-    Extract       = 0x02000000,
-    Replace       = 0x03000000,
+    Extract       = 0x01000000,
+    Replace       = 0x01800000,
+    Select        = 0x02000000,
+    Shuffle       = 0x03000000,
 
     Arg           = 0x00010000,
     Ret           = 0x00020000,
@@ -84,52 +88,52 @@ pub enum OpCode {
     ExtendU       = 0x00090000,
     ExtendS       = 0x000a0000,
     Splat         = 0x000b0000,
-    Shuffle       = 0x000c0000,
 
-    None          = 0x000d0000,
-    Any           = 0x000e0000,
-    All           = 0x000f0000,
-    Eq            = 0x00100000,
-    Ne            = 0x00110000,
-    LtU           = 0x00120000,
-    LtS           = 0x00130000,
-    GtU           = 0x00140000,
-    GtS           = 0x00150000,
-    LeU           = 0x00160000,
-    LeS           = 0x00170000,
-    GeU           = 0x00180000,
-    GeS           = 0x00190000,
-    MinU          = 0x001a0000,
-    MinS          = 0x001b0000,
-    MaxU          = 0x001c0000,
-    MaxS          = 0x001d0000,
+    None          = 0x000c0000,
+    Any           = 0x000d0000,
+    All           = 0x000e0000,
+    Eq            = 0x000f0000,
+    Ne            = 0x00100000,
+    LtU           = 0x00110000,
+    LtS           = 0x00120000,
+    GtU           = 0x00130000,
+    GtS           = 0x00140000,
+    LeU           = 0x00150000,
+    LeS           = 0x00160000,
+    GeU           = 0x00170000,
+    GeS           = 0x00180000,
+    MinU          = 0x00190000,
+    MinS          = 0x001a0000,
+    MaxU          = 0x001b0000,
+    MaxS          = 0x001c0000,
 
-    Neg           = 0x001e0000,
-    Abs           = 0x001f0000,
-    Not           = 0x00200000,
-    Clz           = 0x00210000,
-    Ctz           = 0x00220000,
-    Popcnt        = 0x00230000,
-    Add           = 0x00240000,
-    Sub           = 0x00250000,
-    Mul           = 0x00260000,
-    And           = 0x00270000,
-    Andnot        = 0x00280000,
-    Or            = 0x00290000,
-    Xor           = 0x002a0000,
-    Shl           = 0x002b0000,
-    ShrU          = 0x002c0000,
-    ShrS          = 0x002d0000,
-    Rotl          = 0x002e0000,
-    Rotr          = 0x002f0000,
+    Neg           = 0x001d0000,
+    Abs           = 0x001e0000,
+    Not           = 0x001f0000,
+    Clz           = 0x00200000,
+    Ctz           = 0x00210000,
+    Popcnt        = 0x00220000,
+    Add           = 0x00230000,
+    Sub           = 0x00240000,
+    Mul           = 0x00250000,
+    And           = 0x00260000,
+    Andnot        = 0x00270000,
+    Or            = 0x00280000,
+    Xor           = 0x00290000,
+    Shl           = 0x002a0000,
+    ShrU          = 0x002b0000,
+    ShrS          = 0x002c0000,
+    Rotl          = 0x002d0000,
+    Rotr          = 0x002e0000,
 }
 
 impl fmt::Display for OpCode {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let name = match self {
-            OpCode::Select        => "select",
             OpCode::Extract       => "extract",
             OpCode::Replace       => "replace",
+            OpCode::Select        => "select",
+            OpCode::Shuffle       => "shuffle",
 
             OpCode::Arg           => "arg",
             OpCode::Ret           => "ret",
@@ -143,7 +147,6 @@ impl fmt::Display for OpCode {
             OpCode::ExtendU       => "extend_u",
             OpCode::ExtendS       => "extend_s",
             OpCode::Splat         => "splat",
-            OpCode::Shuffle       => "shuffle",
 
             OpCode::None          => "none",
             OpCode::Any           => "any",
@@ -214,8 +217,10 @@ impl OpIns {
 
     #[inline]
     pub fn opcode(&self) -> OpCode {
-        let opcode = if self.0 & 0x03000000 != 0 {
+        let opcode = if self.0 & 0x02000000 != 0 {
             self.0 & 0x03000000
+        } else if self.0 & 0x01000000 != 0 {
+            self.0 & 0x03800000
         } else {
             self.0 & 0x03ff0000
         };
@@ -288,9 +293,10 @@ impl TryFrom<u32> for OpIns {
     fn try_from(ins: u32) -> Result<Self, Self::Error> {
         // ensure opcode is valid
         match (ins & 0x03ff0000) >> 16 {
-            0x100..=0x1ff => OpCode::Select,
-            0x200..=0x2ff => OpCode::Extract,
-            0x300..=0x3ff => OpCode::Replace,
+            0x100..=0x17f => OpCode::Extract,
+            0x180..=0x1ff => OpCode::Replace,
+            0x200..=0x2ff => OpCode::Select,
+            0x300..=0x3ff => OpCode::Shuffle,
 
             0x001 => OpCode::Arg,
             0x002 => OpCode::Ret,
@@ -304,44 +310,43 @@ impl TryFrom<u32> for OpIns {
             0x009 => OpCode::ExtendU,
             0x00a => OpCode::ExtendS,
             0x00b => OpCode::Splat,
-            0x00c => OpCode::Shuffle,
 
-            0x00d => OpCode::None,
-            0x00e => OpCode::Any,
-            0x00f => OpCode::All,
-            0x010 => OpCode::Eq,
-            0x011 => OpCode::Ne,
-            0x012 => OpCode::LtU,
-            0x013 => OpCode::LtS,
-            0x014 => OpCode::GtU,
-            0x015 => OpCode::GtS,
-            0x016 => OpCode::LeU,
-            0x017 => OpCode::LeS,
-            0x018 => OpCode::GeU,
-            0x019 => OpCode::GeS,
-            0x01a => OpCode::MinU,
-            0x01b => OpCode::MinS,
-            0x01c => OpCode::MaxU,
-            0x01d => OpCode::MaxS,
+            0x00c => OpCode::None,
+            0x00d => OpCode::Any,
+            0x00e => OpCode::All,
+            0x00f => OpCode::Eq,
+            0x010 => OpCode::Ne,
+            0x011 => OpCode::LtU,
+            0x012 => OpCode::LtS,
+            0x013 => OpCode::GtU,
+            0x014 => OpCode::GtS,
+            0x015 => OpCode::LeU,
+            0x016 => OpCode::LeS,
+            0x017 => OpCode::GeU,
+            0x018 => OpCode::GeS,
+            0x019 => OpCode::MinU,
+            0x01a => OpCode::MinS,
+            0x01b => OpCode::MaxU,
+            0x01c => OpCode::MaxS,
 
-            0x01e => OpCode::Neg,
-            0x020 => OpCode::Abs,
-            0x01f => OpCode::Not,
-            0x021 => OpCode::Clz,
-            0x022 => OpCode::Ctz,
-            0x023 => OpCode::Popcnt,
-            0x024 => OpCode::Add,
-            0x025 => OpCode::Sub,
-            0x026 => OpCode::Mul,
-            0x027 => OpCode::And,
-            0x028 => OpCode::Andnot,
-            0x029 => OpCode::Or,
-            0x02a => OpCode::Xor,
-            0x02b => OpCode::Shl,
-            0x02c => OpCode::ShrU,
-            0x02d => OpCode::ShrS,
-            0x02e => OpCode::Rotl,
-            0x02f => OpCode::Rotr,
+            0x01d => OpCode::Neg,
+            0x01f => OpCode::Abs,
+            0x01e => OpCode::Not,
+            0x020 => OpCode::Clz,
+            0x021 => OpCode::Ctz,
+            0x022 => OpCode::Popcnt,
+            0x023 => OpCode::Add,
+            0x024 => OpCode::Sub,
+            0x025 => OpCode::Mul,
+            0x026 => OpCode::And,
+            0x027 => OpCode::Andnot,
+            0x028 => OpCode::Or,
+            0x029 => OpCode::Xor,
+            0x02a => OpCode::Shl,
+            0x02b => OpCode::ShrU,
+            0x02c => OpCode::ShrS,
+            0x02d => OpCode::Rotl,
+            0x02e => OpCode::Rotr,
 
             _ => Err(Error::InvalidOpcode(ins))?,
         };
@@ -353,16 +358,6 @@ impl TryFrom<u32> for OpIns {
 impl fmt::Display for OpIns {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self.opcode() {
-            OpCode::Select => {
-                write!(fmt, "u{}.{} r{}, r{}, r{}",
-                    prefix(self.npw2(), self.lnpw2()),
-                    self.opcode(),
-                    self.p(),
-                    self.a(),
-                    self.b()
-                )
-            }
-
             OpCode::Extract => {
                 write!(fmt, "u{}.{} r{}, r{}[{}]",
                     prefix(self.npw2(), self.lnpw2()),
@@ -382,6 +377,17 @@ impl fmt::Display for OpIns {
                     self.b()
                 )
             }
+
+            OpCode::Select | OpCode::Shuffle => {
+                write!(fmt, "u{}.{} r{}, r{}, r{}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.opcode(),
+                    self.p(),
+                    self.a(),
+                    self.b()
+                )
+            }
+
 
             // special format for moves because they are so common
             OpCode::ExtendConstU if self.lnpw2() == 0 => {
@@ -674,14 +680,14 @@ pub enum OpKind<T: OpU> {
     Imm(T),
     Sym(&'static str),
 
-    Select(u8, Rc<OpTree<T>>, Rc<OpTree<T>>, Rc<OpTree<T>>),
     Extract(u8, Rc<dyn DynOpTree>),
     Replace(u8, Rc<OpTree<T>>, Rc<dyn DynOpTree>),
+    Select(u8, Rc<OpTree<T>>, Rc<OpTree<T>>, Rc<OpTree<T>>),
+    Shuffle(u8, Rc<OpTree<T>>, Rc<OpTree<T>>, Rc<OpTree<T>>),
 
     ExtendU(Rc<dyn DynOpTree>),
     ExtendS(Rc<dyn DynOpTree>),
     Splat(Rc<dyn DynOpTree>),
-    Shuffle(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
 
     None(Rc<OpTree<T>>),
     Any(Rc<OpTree<T>>),
@@ -961,12 +967,6 @@ impl<T: OpU> OpTree<T> {
         Rc::new(Self::new(OpKind::Sym(name), Self::SECRET | Self::SYM, 1))
     }
 
-    pub fn select(lnpw2: u8, p: Rc<Self>, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = p.flags() | a.flags() | b.flags();
-        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
-        Rc::new(Self::new(OpKind::Select(lnpw2, p, a, b), flags, depth))
-    }
-
     pub fn extract(x: u8, a: Rc<dyn DynOpTree>) -> Rc<Self> {
         let flags = a.flags();
         let depth = a.depth();
@@ -977,6 +977,18 @@ impl<T: OpU> OpTree<T> {
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
         Rc::new(Self::new(OpKind::Replace(x, a, b), flags, depth))
+    }
+
+    pub fn select(lnpw2: u8, p: Rc<Self>, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let flags = p.flags() | a.flags() | b.flags();
+        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
+        Rc::new(Self::new(OpKind::Select(lnpw2, p, a, b), flags, depth))
+    }
+
+    pub fn shuffle(lnpw2: u8, p: Rc<Self>, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
+        let flags = p.flags() | a.flags() | b.flags();
+        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
+        Rc::new(Self::new(OpKind::Shuffle(lnpw2, p, a, b), flags, depth))
     }
 
     pub fn extend_u(a: Rc<dyn DynOpTree>) -> Rc<Self> {
@@ -995,12 +1007,6 @@ impl<T: OpU> OpTree<T> {
         let flags = a.flags();
         let depth = a.depth();
         Rc::new(Self::new(OpKind::Splat(a), flags, depth))
-    }
-
-    pub fn shuffle(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Shuffle(lnpw2, a, b), flags, depth))
     }
 
     pub fn none(a: Rc<Self>) -> Rc<Self> {
@@ -1613,15 +1619,20 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
 
+            OpKind::Extract(_, a) => {
+                a.disas_pass1();
+            }
+            OpKind::Replace(_, a, b) => {
+                a.disas_pass1();
+                b.disas_pass1();
+            }
             OpKind::Select(_, p, a, b) => {
                 p.disas_pass1();
                 a.disas_pass1();
                 b.disas_pass1();
             }
-            OpKind::Extract(_, a) => {
-                a.disas_pass1();
-            }
-            OpKind::Replace(_, a, b) => {
+            OpKind::Shuffle(_, p, a, b) => {
+                p.disas_pass1();
                 a.disas_pass1();
                 b.disas_pass1();
             }
@@ -1634,10 +1645,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             }
             OpKind::Splat(a) => {
                 a.disas_pass1();
-            }
-            OpKind::Shuffle(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
             }
 
             OpKind::None(a) => {
@@ -1810,12 +1817,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 s
             ),
 
-            OpKind::Select(lnpw2, p, a, b) => format!("(u{}.select {} {} {})",
-                prefix(T::NPW2, *lnpw2),
-                p.disas_pass2(names, arbitrary_names, stmts)?,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?
-            ),
             OpKind::Extract(x, a) => format!("(u{}.extract {} {})",
                 prefix(a.npw2(), a.npw2()-T::NPW2),
                 x,
@@ -1824,6 +1825,18 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             OpKind::Replace(x, a, b) => format!("(u{}.replace {} {} {})",
                 prefix(T::NPW2, T::NPW2-b.npw2()),
                 x,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Select(lnpw2, p, a, b) => format!("(u{}.select {} {} {})",
+                prefix(T::NPW2, *lnpw2),
+                p.disas_pass2(names, arbitrary_names, stmts)?,
+                a.disas_pass2(names, arbitrary_names, stmts)?,
+                b.disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Shuffle(lnpw2, p, a, b) => format!("(u{}.shuffle {} {} {})",
+                prefix(T::NPW2, *lnpw2),
+                p.disas_pass2(names, arbitrary_names, stmts)?,
                 a.disas_pass2(names, arbitrary_names, stmts)?,
                 b.disas_pass2(names, arbitrary_names, stmts)?
             ),
@@ -1839,11 +1852,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             OpKind::Splat(a) => format!("(u{}.splat {})",
                 8 << T::NPW2,
                 a.disas_pass2(names, arbitrary_names, stmts)?
-            ),
-            OpKind::Shuffle(lnpw2, a, b) => format!("(u{}.shuffle {} {})",
-                prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?
             ),
 
             OpKind::None(a) => format!("(u{}.none {})",
@@ -2041,15 +2049,20 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
 
+            OpKind::Extract(_, a) => {
+                a.check_refs();
+            }
+            OpKind::Replace(_, a, b) => {
+                a.check_refs();
+                b.check_refs();
+            }
             OpKind::Select(_, p, a, b) => {
                 p.check_refs();
                 a.check_refs();
                 b.check_refs();
             }
-            OpKind::Extract(_, a) => {
-                a.check_refs();
-            }
-            OpKind::Replace(_, a, b) => {
+            OpKind::Shuffle(_, p, a, b) => {
+                p.check_refs();
                 a.check_refs();
                 b.check_refs();
             }
@@ -2062,10 +2075,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             }
             OpKind::Splat(a) => {
                 a.check_refs();
-            }
-            OpKind::Shuffle(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
             }
 
             OpKind::None(a) => {
@@ -2230,15 +2239,20 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
 
+            OpKind::Extract(_, a) => {
+                a.fold_consts();
+            }
+            OpKind::Replace(_, a, b) => {
+                a.fold_consts();
+                b.fold_consts();
+            }
             OpKind::Select(_, p, a, b) => {
                 p.fold_consts();
                 a.fold_consts();
                 b.fold_consts();
             }
-            OpKind::Extract(_, a) => {
-                a.fold_consts();
-            }
-            OpKind::Replace(_, a, b) => {
+            OpKind::Shuffle(_, p, a, b) => {
+                p.fold_consts();
                 a.fold_consts();
                 b.fold_consts();
             }
@@ -2251,10 +2265,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             }
             OpKind::Splat(a) => {
                 a.fold_consts();
-            }
-            OpKind::Shuffle(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
             }
 
             OpKind::None(a) => {
@@ -2519,15 +2529,20 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 )));
             }
 
+            OpKind::Extract(_, a) => {
+                a.compile_pass1(state);
+            }
+            OpKind::Replace(_, a, b) => {
+                a.compile_pass1(state);
+                b.compile_pass1(state);
+            }
             OpKind::Select(_, p, a, b) => {
                 p.compile_pass1(state);
                 a.compile_pass1(state);
                 b.compile_pass1(state);
             }
-            OpKind::Extract(_, a) => {
-                a.compile_pass1(state);
-            }
-            OpKind::Replace(_, a, b) => {
+            OpKind::Shuffle(_, p, a, b) => {
+                p.compile_pass1(state);
                 a.compile_pass1(state);
                 b.compile_pass1(state);
             }
@@ -2540,10 +2555,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             }
             OpKind::Splat(a) => {
                 a.compile_pass1(state);
-            }
-            OpKind::Shuffle(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
             }
 
             OpKind::None(a) => {
@@ -2796,6 +2807,40 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                     (slot, T::NPW2)
                 }
             }
+            OpKind::Shuffle(lnpw2, p, a, b) => {
+                schedule! {
+                    let (p_slot, p_npw2) = p.compile_pass2(state);
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                }
+                let p_refs = p.dec_refs();
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
+
+                // can we reuse slots?
+                if a_refs == 0 {
+                    state.bytecode.push(u32::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, a_slot, b_slot
+                    )));
+                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    self.slot.set(Some(a_slot));
+                    (a_slot, T::NPW2)
+                } else {
+                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                    state.bytecode.push(u32::from(OpIns::new(
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
+                    )));
+                    state.bytecode.push(u32::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, slot, b_slot
+                    )));
+                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    self.slot.set(Some(slot));
+                    (slot, T::NPW2)
+                }
+            }
             OpKind::Extract(lane, a) => {
                 assert!(T::NPW2 <= a.npw2());
                 let (a_slot, a_npw2) = a.compile_pass2(state);
@@ -2879,36 +2924,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
-            }
-            OpKind::Shuffle(lnpw2, a, b) => {
-                schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
-                }
-                let a_refs = a.dec_refs();
-                let b_refs = b.dec_refs();
-
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
             }
 
             OpKind::None(a) => {
