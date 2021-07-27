@@ -12,8 +12,6 @@ pub enum Error {
     Unaligned,
     #[error("Out of bounds access")]
     OutOfBounds,
-    #[error("Divide by zero")]
-    DivideByZero,
     #[error("Attempted to declassify in compile block")]
     DeclassifyInCompile,
     #[error("Exceeded 256 slots for u{}", 8 << _0)]

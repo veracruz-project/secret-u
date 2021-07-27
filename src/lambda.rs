@@ -28,14 +28,13 @@ macro_rules! compile_object {
         $crate::lambda::paste! {
             use $crate::int::SecretTree;
             use $crate::opcode::OpTree;
-            use std::rc::Rc;
             use std::io;
 
             #[derive(Clone)]
             struct SecretClosure {
                 // any arguments that may need patching
                 $(
-                    [<__sym_$($a)+>]: Rc<<$t as SecretTree>::Tree>,
+                    [<__sym_$($a)+>]: <$t as SecretTree>::Tree,
                 )*
 
                 // bytecode and stack
@@ -63,7 +62,7 @@ macro_rules! compile_object {
                     );
 
                     // compile tree
-                    let (bytecode, stack) = v.tree_compile(true);
+                    let (bytecode, stack) = v.tree().compile(true);
 
                     // return closure
                     SecretClosure {
@@ -121,7 +120,7 @@ macro_rules! compile_object {
                     )*
 
                     // execute
-                    <$r>::tree_exec(&self.__bytecode, &mut stack)
+                    Ok(<$r>::from_tree(OpTree::try_exec(&self.__bytecode, &mut stack)?))
                 }
 
                 /// Call underlying bytecode

@@ -16,7 +16,6 @@ use std::mem::size_of;
 use std::collections::HashMap;
 #[cfg(feature="opt-color-slots")]
 use std::collections::BTreeSet;
-#[cfg(feature="opt-fold-consts")]
 use std::cell::RefCell;
 
 use aligned_utils::bytes::AlignedBytes;
@@ -40,7 +39,7 @@ use aligned_utils::bytes::AlignedBytes;
 ///   ^   ^         ^         ^         ^- 8-bit source slot
 ///   |   |         |         '----------- 8-bit destination slot
 ///   |   |         '--------------------- 8-bit opcode
-///   |   '------------------------------- 3-bit npw2(lanes) or npw2(source size)
+///   |   '------------------------------- 3-bit npw2(lanes)
 ///   '----------------------------------- 3-bit npw2(size)
 ///
 /// However there are 4 special instruction which use either a 7-bit
@@ -677,69 +676,105 @@ opu_impl! { U512([u8; 64]; 6)             }
 /// Kinds of operations in tree
 #[derive(Debug)]
 pub enum OpKind<T: OpU> {
+    Const(T),
     Imm(T),
     Sym(&'static str),
 
-    Extract(u8, Rc<dyn DynOpTree>),
-    Replace(u8, Rc<OpTree<T>>, Rc<dyn DynOpTree>),
-    Select(u8, Rc<OpTree<T>>, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Shuffle(u8, Rc<OpTree<T>>, Rc<OpTree<T>>, Rc<OpTree<T>>),
+    Extract(u8, Rc<dyn DynOpNode>),
+    Replace(u8, Rc<OpNode<T>>, Rc<dyn DynOpNode>),
+    Select(u8, Rc<OpNode<T>>, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Shuffle(u8, Rc<OpNode<T>>, Rc<OpNode<T>>, Rc<OpNode<T>>),
 
-    ExtendU(Rc<dyn DynOpTree>),
-    ExtendS(Rc<dyn DynOpTree>),
-    Splat(Rc<dyn DynOpTree>),
+    ExtendU(Rc<dyn DynOpNode>),
+    ExtendS(Rc<dyn DynOpNode>),
+    Splat(Rc<dyn DynOpNode>),
 
-    None(Rc<OpTree<T>>),
-    Any(Rc<OpTree<T>>),
-    All(u8, Rc<OpTree<T>>),
-    Eq(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Ne(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    LtU(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    LtS(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    GtU(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    GtS(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    LeU(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    LeS(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    GeU(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    GeS(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    MinU(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    MinS(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    MaxU(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    MaxS(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
+    None(Rc<OpNode<T>>),
+    Any(Rc<OpNode<T>>),
+    All(u8, Rc<OpNode<T>>),
+    Eq(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Ne(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    LtU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    LtS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    GtU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    GtS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    LeU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    LeS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    GeU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    GeS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    MinU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    MinS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    MaxU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    MaxS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
 
-    Neg(u8, Rc<OpTree<T>>),
-    Abs(u8, Rc<OpTree<T>>),
-    Not(Rc<OpTree<T>>),
-    Clz(u8, Rc<OpTree<T>>),
-    Ctz(u8, Rc<OpTree<T>>),
-    Popcnt(u8, Rc<OpTree<T>>),
-    Add(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Sub(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Mul(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    And(Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Andnot(Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Or(Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Xor(Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Shl(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    ShrU(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    ShrS(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Rotl(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
-    Rotr(u8, Rc<OpTree<T>>, Rc<OpTree<T>>),
+    Neg(u8, Rc<OpNode<T>>),
+    Abs(u8, Rc<OpNode<T>>),
+    Not(Rc<OpNode<T>>),
+    Clz(u8, Rc<OpNode<T>>),
+    Ctz(u8, Rc<OpNode<T>>),
+    Popcnt(u8, Rc<OpNode<T>>),
+    Add(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Sub(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Mul(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    And(Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Andnot(Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Or(Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Xor(Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Shl(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    ShrU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    ShrS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Rotl(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Rotr(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
 }
 
 
 /// Tree of operations, including metadata to deduplicate
 /// common branches
 #[derive(Debug)]
-pub struct OpTree<T: OpU> {
+pub struct OpNode<T: OpU> {
     kind: OpKind<T>,
     refs: Cell<u32>,
     slot: Cell<Option<u8>>,
     flags: u8,
     depth: u32,
     #[cfg(feature="opt-fold-consts")]
-    folded: RefCell<Option<Option<Rc<OpTree<T>>>>>,
+    folded: RefCell<Option<Option<Rc<OpNode<T>>>>>,
 }
+
+/// Root OpNode with additional small object optimization, which
+/// is useful for avoiding unnecessary allocations
+///
+/// Note this still participates in DAG deduplication by lazily
+/// allocating on demand, the result is a lot of RefCells...
+///
+/// Also not that Cell is not usable here because Rc does not
+/// implement Copy
+///
+#[derive(Debug)]
+pub struct OpTree<T: OpU>(RefCell<OpRoot<T>>);
+
+#[derive(Debug)]
+pub enum OpRoot<T: OpU> {
+    Const(T),
+    Imm(T),
+    Tree(Rc<OpNode<T>>),
+}
+
+impl<T: OpU> Default for OpTree<T> {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+impl<T: OpU> Clone for OpTree<T> {
+    // clone defers to tree, which ensures the backing tree is
+    // Rc before cloning
+    fn clone(&self) -> Self {
+        OpTree(RefCell::new(OpRoot::Tree(self.node())))
+    }
+}
+
+
 
 /// Pool for allocating/reusing slots in a fictional blob of bytes
 #[derive(Debug)]
@@ -913,13 +948,639 @@ impl OpCompile {
     }
 }
 
-/// Core OpTree type
+
+/// A trait to help with conversions between trees of different types
+pub trait DynOpTree {
+    /// get NPW2 of the underlying tree
+    fn npw2(&self) -> u8;
+
+    /// get the underlying DynOpNode
+    fn dyn_node(&self) -> Rc<dyn DynOpNode>;
+
+    // some dyn operations that can avoid casting
+    fn dyn_not(&self) -> Rc<dyn DynOpTree>;
+    fn dyn_and(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree>;
+    fn dyn_andnot(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree>;
+    fn dyn_notand(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree>;
+    fn dyn_or(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree>;
+    fn dyn_xor(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree>;
+}
+
+impl<T: OpU> DynOpTree for OpTree<T> {
+    fn npw2(&self) -> u8 {
+        T::NPW2
+    }
+
+    fn dyn_node(&self) -> Rc<dyn DynOpNode> {
+        // node triggers a lazily allocated Rc object here, and then
+        // we insert our trait object as we return, neato
+        self.node()
+    }
+
+    fn dyn_not(&self) -> Rc<dyn DynOpTree> {
+        Rc::new(Self::not(self.clone()))
+    }
+
+    fn dyn_and(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree> {
+        // use the smallest type
+        if other.npw2() < self.npw2() {
+            other.dyn_and(self)
+        } else {
+            Rc::new(Self::and(self.clone(), OpTree::dyn_cast_s(other)))
+        }
+    }
+
+    fn dyn_andnot(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree> {
+        // use the smallest type
+        if other.npw2() < self.npw2() {
+            other.dyn_notand(self)
+        } else {
+            Rc::new(Self::andnot(self.clone(), OpTree::dyn_cast_s(other)))
+        }
+    }
+
+    fn dyn_notand(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree> {
+        // use the smallest type
+        if other.npw2() < self.npw2() {
+            other.dyn_andnot(self)
+        } else {
+            Rc::new(Self::andnot(OpTree::dyn_cast_s(other), self.clone()))
+        }
+    }
+
+    fn dyn_or(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree> {
+        // use the smallest type
+        if other.npw2() < self.npw2() {
+            other.dyn_or(self)
+        } else {
+            Rc::new(Self::or(self.clone(), OpTree::dyn_cast_s(other)))
+        }
+    }
+
+    fn dyn_xor(&self, other: &dyn DynOpTree) -> Rc<dyn DynOpTree> {
+        // use the smallest type
+        if other.npw2() < self.npw2() {
+            other.dyn_xor(self)
+        } else {
+            Rc::new(Self::xor(self.clone(), OpTree::dyn_cast_s(other)))
+        }
+    }
+}
+
+
+/// Core of the OpTree
 impl<T: OpU> OpTree<T> {
+    /// Create an immediate, secret value
+    pub fn imm<U>(v: U) -> Self
+    where
+        T: From<U>
+    {
+        OpTree(RefCell::new(OpRoot::Imm(T::from(v))))
+    }
+
+    /// Create a const susceptable to compiler optimizations
+    pub fn const_<U>(v: U) -> Self
+    where
+        T: From<U>
+    {
+        OpTree(RefCell::new(OpRoot::Const(T::from(v))))
+    }
+
+    /// A constant 0
+    pub fn zero() -> Self {
+        Self::const_(T::zero())
+    }
+
+    /// A constant 1
+    pub fn one() -> Self {
+        Self::const_(T::one())
+    }
+
+    /// A constant with all bits set to 1
+    pub fn ones() -> Self {
+        Self::const_(T::ones())
+    }
+
+    /// Create new tree
+    fn from_kind(kind: OpKind<T>, flags: u8, depth: u32) -> Self {
+        OpTree(RefCell::new(OpRoot::Tree(Rc::new(OpNode::new(kind, flags, depth)))))
+    }
+
+    /// Get internal tree, potentially allocating if needed
+    fn node(&self) -> Rc<OpNode<T>> {
+        let mut tree = self.0.borrow_mut();
+        match &*tree {
+            OpRoot::Const(v) => {
+                // convert to Rc if necessary
+                let node = Rc::new(OpNode::new(
+                    OpKind::Const(*v), 0, 0
+                ));
+                *tree = OpRoot::Tree(node.clone());
+                node
+            }
+            OpRoot::Imm(v) => {
+                // convert to Rc if necessary
+                let node = Rc::new(OpNode::new(
+                    OpKind::Imm(*v), OpNode::<T>::SECRET, 0
+                ));
+                *tree = OpRoot::Tree(node.clone());
+                node
+            }
+            OpRoot::Tree(node) => {
+                // can just increment reference count here
+                node.clone()
+            }
+        }
+    }
+
+    /// Forcefully downcast into a different OpTree, panicking if types
+    /// do not match
+    pub fn dyn_downcast(a: &dyn DynOpTree) -> Self {
+        assert_eq!(a.npw2(), T::NPW2);
+        let b: &Self = unsafe { &*(a as *const dyn DynOpTree as *const Self) };
+        b.clone()
+    }
+
+    /// Helper for choosing the most efficient cast between trees of
+    /// different types, including returning the tree as is with only
+    /// the type information stripped
+    pub fn dyn_cast_u(a: &dyn DynOpTree) -> Self {
+        if T::NPW2 > a.npw2() {
+            let a = a.dyn_node();
+            let flags = a.flags();
+            let depth = a.depth();
+            Self::from_kind(OpKind::ExtendU(a), flags, depth)
+        } else if T::NPW2 < a.npw2() {
+            let a = a.dyn_node();
+            let flags = a.flags();
+            let depth = a.depth();
+            Self::from_kind(OpKind::Extract(0, a), flags, depth)
+        } else {
+            Self::dyn_downcast(a)
+        }
+    }
+
+    /// Helper for choosing the most efficient cast between trees of
+    /// different types, including returning the tree as is with only
+    /// the type information stripped
+    pub fn dyn_cast_s(a: &dyn DynOpTree) -> Self {
+        if T::NPW2 > a.npw2() {
+            let a = a.dyn_node();
+            let flags = a.flags();
+            let depth = a.depth();
+            Self::from_kind(OpKind::ExtendS(a), flags, depth)
+        } else if T::NPW2 < a.npw2() {
+            let a = a.dyn_node();
+            let flags = a.flags();
+            let depth = a.depth();
+            Self::from_kind(OpKind::Extract(0, a), flags, depth)
+        } else {
+            Self::dyn_downcast(a)
+        }
+    }
+
+    /// is expression an immediate?
+    pub fn is_imm(&self) -> bool {
+        match &*self.0.borrow() {
+            OpRoot::Const(_) => true,
+            OpRoot::Imm(_) => true,
+            OpRoot::Tree(tree) => tree.is_imm(),
+        }
+    }
+
+    /// is expression a symbol?
+    pub fn is_sym(&self) -> bool {
+        match &*self.0.borrow() {
+            OpRoot::Const(_) => false,
+            OpRoot::Imm(_) => false,
+            OpRoot::Tree(tree) => tree.is_sym(),
+        }
+    }
+
+    /// is expression const?
+    pub fn is_const(&self) -> bool {
+        match &*self.0.borrow() {
+            OpRoot::Const(_) => true,
+            OpRoot::Imm(_) => false,
+            OpRoot::Tree(tree) => tree.is_const(),
+        }
+    }
+
+    // Constructors for other tree nodes, note that
+    // constant-ness is propogated
+    pub fn sym(name: &'static str) -> Self {
+        Self::from_kind(OpKind::Sym(name), OpNode::<T>::SECRET | OpNode::<T>::SYM, 0)
+    }
+
+    pub fn extract<U: OpU>(x: u8, a: OpTree<U>) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Extract(x, a), flags, depth)
+    }
+
+    pub fn replace<U: OpU>(x: u8, a: Self, b: OpTree<U>) -> Self {
+        let a = a.node();
+        let b = b.dyn_node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Replace(x, a, b), flags, depth)
+    }
+
+    pub fn select(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
+        let p = p.node();
+        let a = a.node();
+        let b = b.node();
+        let flags = p.flags() | a.flags() | b.flags();
+        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
+        Self::from_kind(OpKind::Select(lnpw2, p, a, b), flags, depth)
+    }
+
+    pub fn shuffle(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
+        let p = p.node();
+        let a = a.node();
+        let b = b.node();
+        let flags = p.flags() | a.flags() | b.flags();
+        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
+        Self::from_kind(OpKind::Shuffle(lnpw2, p, a, b), flags, depth)
+    }
+
+    pub fn extend_u<U: OpU>(a: OpTree<U>) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::ExtendU(a), flags, depth)
+    }
+
+    pub fn extend_s<U: OpU>(a: OpTree<U>) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::ExtendS(a), flags, depth)
+    }
+
+    pub fn splat<U: OpU>(a: OpTree<U>) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Splat(a), flags, depth)
+    }
+
+    pub fn none(a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::None(a), flags, depth)
+    }
+
+    pub fn any(a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Any(a), flags, depth)
+    }
+
+    pub fn all(lnpw2: u8, a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::All(lnpw2, a), flags, depth)
+    }
+
+    pub fn eq(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Eq(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn ne(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Ne(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn lt_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::LtU(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn lt_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::LtS(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn gt_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::GtU(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn gt_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::GtS(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn le_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::LeU(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn le_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::LeS(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn ge_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::GeU(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn ge_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::GeS(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn min_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::MinU(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn min_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::MinS(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn max_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::MaxU(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn max_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::MaxS(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn neg(lnpw2: u8, a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Neg(lnpw2, a), flags, depth)
+    }
+
+    pub fn abs(lnpw2: u8, a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Abs(lnpw2, a), flags, depth)
+    }
+
+    pub fn not(a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Not(a), flags, depth)
+    }
+
+    pub fn clz(lnpw2: u8, a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Clz(lnpw2, a), flags, depth)
+    }
+
+    pub fn ctz(lnpw2: u8, a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Ctz(lnpw2, a), flags, depth)
+    }
+
+    pub fn popcnt(lnpw2: u8, a: Self) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Popcnt(lnpw2, a), flags, depth)
+    }
+
+    pub fn add(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Add(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn sub(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Sub(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn mul(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Mul(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn and(a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::And(a, b), flags, depth)
+    }
+
+    pub fn andnot(a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Andnot(a, b), flags, depth)
+    }
+
+    pub fn or(a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Or(a, b), flags, depth)
+    }
+
+    pub fn xor(a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Xor(a, b), flags, depth)
+    }
+
+    pub fn shl(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Shl(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn shr_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::ShrU(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn shr_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::ShrS(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn rotl(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Rotl(lnpw2, a, b), flags, depth)
+    }
+
+    pub fn rotr(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Rotr(lnpw2, a, b), flags, depth)
+    }
+
+    /// display tree for debugging
+    pub fn disas<W: io::Write>(&self, mut out: W) -> Result<(), io::Error> {
+        match &*self.0.borrow() {
+            OpRoot::Const(v) => writeln!(out, "    (u{}.const {:x}", 8 << T::NPW2, v),
+            OpRoot::Imm(v)   => writeln!(out, "    (u{}.imm {:x})",  8 << T::NPW2, v),
+            OpRoot::Tree(tree) => tree.disas(out),
+        }
+    }
+
+    /// high-level compile into bytecode, stack, and initial stack pointer
+    pub fn compile(&self, opt: bool) -> (Vec<u32>, AlignedBytes) {
+        self.node().compile(opt)
+    }
+
+    /// Assuming we are Sym, patch the slots during a call
+    pub fn patch<U>(&self, slots: &mut [u8], v: U)
+    where
+        T: From<U>
+    {
+        match &*self.0.borrow() {
+            OpRoot::Tree(tree) => tree.patch(slots, v),
+            _ => panic!("patching non-sym?")
+        }
+    }
+
+    /// execute bytecode, resulting in an immediate OpTree
+    pub fn exec(bytecode: &[u32], slots: &mut [u8]) -> Self {
+        Self::try_exec(bytecode, slots).unwrap()
+    }
+
+    /// execute bytecode, resulting in an immediate OpTree
+    pub fn try_exec(bytecode: &[u32], slots: &mut [u8]) -> Result<Self, Error> {
+        let res = exec(bytecode, slots)?;
+        Ok(OpTree(RefCell::new(OpRoot::Imm(T::from_le_bytes(
+            T::Bytes::try_from(res).map_err(|_| Error::InvalidReturn)?
+        )))))
+    }
+
+    /// compile and execute if OpTree is not already an immediate
+    pub fn eval(self) -> Self {
+        self.try_eval().unwrap()
+    }
+
+    /// compile and execute if OpTree is not already an immediate
+    pub fn try_eval(self) -> Result<Self, Error> {
+        match self.0.into_inner() {
+            OpRoot::Const(v) => Ok(Self::const_(v)),
+            OpRoot::Imm(v)   => Ok(Self::imm(v)),
+            OpRoot::Tree(tree) => {
+                let (bytecode, mut stack) = tree.compile(false);
+                Self::try_exec(&bytecode, &mut stack)
+            }
+        }
+    }
+
+    /// retrieve result, panicking if OpTree is not in immediate form
+    pub fn result<U>(self) -> U
+    where
+        U: From<T>
+    {
+        self.try_result::<U>()
+            .expect("attempted to get result from un-evaled tree")
+    }
+
+    /// retrieve result, or None
+    pub fn try_result<U>(self) -> Option<U>
+    where
+        U: From<T>
+    {
+        match self.0.into_inner() {
+            OpRoot::Const(v) => Some(U::from(v)),
+            OpRoot::Imm(v)   => Some(U::from(v)),
+            OpRoot::Tree(_)  => None,
+        }
+    }
+}
+
+/// Core OpNode type
+impl<T: OpU> OpNode<T> {
     const SECRET: u8 = 0x1;
     const SYM: u8    = 0x2;
 
-    fn new(kind: OpKind<T>, flags: u8, depth: u32) -> OpTree<T> {
-        OpTree {
+    fn new(kind: OpKind<T>, flags: u8, depth: u32) -> OpNode<T> {
+        OpNode {
             kind: kind,
             refs: Cell::new(0),
             slot: Cell::new(None),
@@ -927,304 +1588,6 @@ impl<T: OpU> OpTree<T> {
             depth: depth,
             #[cfg(feature="opt-fold-consts")]
             folded: RefCell::new(None),
-        }
-    }
-
-    /// Create an immediate, secret value
-    pub fn imm<U>(v: U) -> Rc<Self>
-    where
-        T: From<U>
-    {
-        Rc::new(Self::new(OpKind::Imm(T::from(v)), Self::SECRET, 1))
-    }
-
-    /// Create a const susceptable to compiler optimizations
-    pub fn const_<U>(v: U) -> Rc<Self>
-    where
-        T: From<U>
-    {
-        Rc::new(Self::new(OpKind::Imm(T::from(v)), 0, 1))
-    }
-
-    /// A constant 0
-    pub fn zero() -> Rc<Self> {
-        Self::const_(T::zero())
-    }
-
-    /// A constant 1
-    pub fn one() -> Rc<Self> {
-        Self::const_(T::one())
-    }
-
-    /// A constant with all bits set to 1
-    pub fn ones() -> Rc<Self> {
-        Self::const_(T::ones())
-    }
-
-    // Constructors for other tree nodes, note that
-    // constant-ness is propogated
-    pub fn sym(name: &'static str) -> Rc<Self> {
-        Rc::new(Self::new(OpKind::Sym(name), Self::SECRET | Self::SYM, 1))
-    }
-
-    pub fn extract(x: u8, a: Rc<dyn DynOpTree>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Extract(x, a), flags, depth))
-    }
-
-    pub fn replace(x: u8, a: Rc<Self>, b: Rc<dyn DynOpTree>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Replace(x, a, b), flags, depth))
-    }
-
-    pub fn select(lnpw2: u8, p: Rc<Self>, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = p.flags() | a.flags() | b.flags();
-        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
-        Rc::new(Self::new(OpKind::Select(lnpw2, p, a, b), flags, depth))
-    }
-
-    pub fn shuffle(lnpw2: u8, p: Rc<Self>, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = p.flags() | a.flags() | b.flags();
-        let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
-        Rc::new(Self::new(OpKind::Shuffle(lnpw2, p, a, b), flags, depth))
-    }
-
-    pub fn extend_u(a: Rc<dyn DynOpTree>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::ExtendU(a), flags, depth))
-    }
-
-    pub fn extend_s(a: Rc<dyn DynOpTree>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::ExtendS(a), flags, depth))
-    }
-
-    pub fn splat(a: Rc<dyn DynOpTree>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Splat(a), flags, depth))
-    }
-
-    pub fn none(a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::None(a), flags, depth))
-    }
-
-    pub fn any(a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Any(a), flags, depth))
-    }
-
-    pub fn all(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::All(lnpw2, a), flags, depth))
-    }
-
-    pub fn eq(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Eq(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn ne(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Ne(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn lt_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::LtU(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn lt_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::LtS(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn gt_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::GtU(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn gt_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::GtS(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn le_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::LeU(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn le_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::LeS(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn ge_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::GeU(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn ge_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::GeS(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn min_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::MinU(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn min_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::MinS(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn max_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::MaxU(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn max_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::MaxS(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn neg(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Neg(lnpw2, a), flags, depth))
-    }
-
-    pub fn abs(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Abs(lnpw2, a), flags, depth))
-    }
-
-    pub fn not(a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Not(a), flags, depth))
-    }
-
-    pub fn clz(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Clz(lnpw2, a), flags, depth))
-    }
-
-    pub fn ctz(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Ctz(lnpw2, a), flags, depth))
-    }
-
-    pub fn popcnt(lnpw2: u8, a: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags();
-        let depth = a.depth();
-        Rc::new(Self::new(OpKind::Popcnt(lnpw2, a), flags, depth))
-    }
-
-    pub fn add(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Add(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn sub(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Sub(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn mul(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Mul(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn and(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::And(a, b), flags, depth))
-    }
-
-    pub fn andnot(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Andnot(a, b), flags, depth))
-    }
-
-    pub fn or(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Or(a, b), flags, depth))
-    }
-
-    pub fn xor(a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Xor(a, b), flags, depth))
-    }
-
-    pub fn shl(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Shl(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn shr_u(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::ShrU(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn shr_s(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::ShrS(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn rotl(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Rotl(lnpw2, a, b), flags, depth))
-    }
-
-    pub fn rotr(lnpw2: u8, a: Rc<Self>, b: Rc<Self>) -> Rc<Self> {
-        let flags = a.flags() | b.flags();
-        let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Rc::new(Self::new(OpKind::Rotr(lnpw2, a, b), flags, depth))
-    }
-
-    /// Downcast a generic OpTree, panicing if types do not match
-    pub fn downcast(a: Rc<dyn DynOpTree>) -> Rc<OpTree<T>> {
-        assert!(a.npw2() == T::NPW2);
-        // based on Rc::downcast impl
-        unsafe {
-            Rc::from_raw(Rc::into_raw(a) as _)
         }
     }
 
@@ -1317,21 +1680,6 @@ impl<T: OpU> OpTree<T> {
         (state.bytecode, aligned_slots)
     }
 
-    /// compile and execute if value is not an immediate or constant already
-    pub fn eval(&self) -> Result<T, Error> {
-        match self.kind {
-            OpKind::Imm(v) => Ok(v),
-            _ => {
-                let (bytecode, mut stack) = self.compile(false);
-                let res = exec(&bytecode, &mut stack)?;
-                let v = T::from_le_bytes(
-                    T::Bytes::try_from(res).map_err(|_| Error::InvalidReturn)?
-                );
-                Ok(v)
-            }
-        }
-    }
-
     /// Assuming we are Sym, patch the slots during a call
     pub fn patch<U>(&self, slots: &mut [u8], v: U)
     where
@@ -1351,10 +1699,21 @@ impl<T: OpU> OpTree<T> {
                 .. (slot as usize + 1) * size_of::<T>()
         ].copy_from_slice(T::from(v).to_le_bytes().as_ref());
     }
+
+    /// compile and execute if value is not already an immediate or constant
+    pub fn eval(&self) -> T {
+        self.try_eval().unwrap()
+    }
+
+    /// compile and execute if value is not already an immediate or constant
+    pub fn try_eval(&self) -> Result<T, Error> {
+        let (bytecode, mut stack) = self.compile(false);
+        Ok(OpTree::try_exec(&bytecode, &mut stack)?.result())
+    }
 }
 
 // dyn-compatible wrapping trait
-pub trait DynOpTree: Debug {
+pub trait DynOpNode: Debug {
     /// npw2(size), used as a part of instruction encoding
     fn npw2(&self) -> u8;
 
@@ -1381,9 +1740,6 @@ pub trait DynOpTree: Debug {
 
     /// checks if expression is const and is ones
     fn is_const_ones(&self) -> bool;
-
-    /// hook to enable none without known type
-    fn dyn_not(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree>;
 
     /// Increment tree-internal reference count
     fn inc_refs(&self) -> u32;
@@ -1491,7 +1847,7 @@ macro_rules! schedule {
     };
 }
 
-impl<T: OpU> DynOpTree for OpTree<T> {
+impl<T: OpU> DynOpNode for OpNode<T> {
     fn npw2(&self) -> u8 {
         T::NPW2
     }
@@ -1513,6 +1869,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
 
     fn is_imm(&self) -> bool {
         match self.kind {
+            OpKind::Const(_) => true,
             OpKind::Imm(_) => true,
             _ => false,
         }
@@ -1529,52 +1886,43 @@ impl<T: OpU> DynOpTree for OpTree<T> {
     fn is_const_zero(&self) -> bool {
         #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
-            (true, OpKind::Imm(v), _             ) => v.is_zero(),
-            (true, _,               Some(Some(x))) => x.is_const_zero(),
-            _                                      => false,
+            (true, OpKind::Const(v), _            ) => v.is_zero(),
+            (true, _,                Some(Some(x))) => x.is_const_zero(),
+            _                                       => false,
         }
         #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
-            (true, OpKind::Imm(v)) => v.is_zero(),
-            _                      => false,
+            (true, OpKind::Const(v)) => v.is_zero(),
+            _                        => false,
         }
     }
 
     fn is_const_one(&self) -> bool {
         #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
-            (true, OpKind::Imm(v), _             ) => v.is_one(),
-            (true, _,               Some(Some(x))) => x.is_const_one(),
-            _                                      => false,
+            (true, OpKind::Const(v), _            ) => v.is_one(),
+            (true, _,                Some(Some(x))) => x.is_const_one(),
+            _                                       => false,
         }
         #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
-            (true, OpKind::Imm(v)) => v.is_zero(),
-            _                      => false,
+            (true, OpKind::Const(v)) => v.is_zero(),
+            _                        => false,
         }
     }
 
     fn is_const_ones(&self) -> bool {
         #[cfg(feature="opt-fold-consts")]
         match (self.is_const(), &self.kind, &*self.folded.borrow()) {
-            (true, OpKind::Imm(v), _             ) => v.is_ones(),
-            (true, _,               Some(Some(x))) => x.is_const_ones(),
-            _                                      => false,
+            (true, OpKind::Const(v), _            ) => v.is_ones(),
+            (true, _,                Some(Some(x))) => x.is_const_ones(),
+            _                                       => false,
         }
         #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
-            (true, OpKind::Imm(v)) => v.is_zero(),
-            _                      => false,
+            (true, OpKind::Const(v)) => v.is_zero(),
+            _                        => false,
         }
-    }
-
-    fn dyn_not(&self) -> &'static dyn Fn(Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
-        // bit messy but this works
-        // unfortunately this only works when there is a single argument
-        fn not<T: OpU>(tree: Rc<dyn DynOpTree>) -> Rc<dyn DynOpTree> {
-            OpTree::not(OpTree::<T>::downcast(tree))
-        }
-        &not::<T>
     }
 
     fn inc_refs(&self) -> u32 {
@@ -1616,6 +1964,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         }
 
         match &self.kind {
+            OpKind::Const(_) => {},
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
 
@@ -1804,7 +2153,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         }
 
         let expr = match &self.kind {
-            OpKind::Imm(v) if self.is_const() => format!("(u{}.const {:x})",
+            OpKind::Const(v) => format!("(u{}.const {:x})",
                 8 << T::NPW2,
                 v
             ),
@@ -2046,6 +2395,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         assert_eq!(self.refs.get(), 0);
 
         match &self.kind {
+            OpKind::Const(_) => {},
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
 
@@ -2221,7 +2571,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         }
         self.folded.replace(Some(None));
         
-        if !self.is_imm() && self.is_const() {
+        if self.is_const() && !self.is_imm() {
             // oh hey, we're const
             //
             // note this recursively triggers another compilation
@@ -2229,13 +2579,16 @@ impl<T: OpU> DynOpTree for OpTree<T> {
             //
             // if this fails we just bail on the const folding so the error
             // can be reported at runtime
-            if let Ok(v) = self.eval() {
-                self.folded.replace(Some(Some(Self::const_(v))));
+            if let Ok(v) = self.try_eval() {
+                self.folded.replace(Some(Some(Rc::new(Self::new(
+                    OpKind::Const(v), 0, 0
+                )))));
                 return;
             }
         }
 
         match &self.kind {
+            OpKind::Const(_) => {},
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
 
@@ -2480,12 +2833,10 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         self.slot.set(None);
 
         match &self.kind {
+            OpKind::Const(_) => {
+                // handle consts later
+            }
             OpKind::Imm(v) => {
-                if self.is_const() {
-                    // handle consts later
-                    return;
-                }
-
                 // allocate slot
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 self.slot.set(Some(slot));
@@ -2705,10 +3056,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         }
 
         match &self.kind {
-            OpKind::Imm(v) => {
-                // variable imms handled on first pass
-                assert!(self.is_const());
-
+            OpKind::Const(v) => {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 #[allow(unused_mut)] let mut best_npw2 = T::NPW2;
                 #[allow(unused_mut)] let mut best_ins8 = OpCode::ExtendConst8U;
@@ -2767,6 +3115,10 @@ impl<T: OpU> DynOpTree for OpTree<T> {
 
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
+            }
+            OpKind::Imm(_) => {
+                // should be entirely handled in first pass
+                unreachable!()
             }
             OpKind::Sym(_) => {
                 // should be entirely handled in first pass
