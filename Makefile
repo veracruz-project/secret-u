@@ -14,8 +14,8 @@ define TEST_EXAMPLE
 
 endef
 test:
-	cargo build --no-default-features 
 	cargo test --lib -- --nocapture --test-threads 1
+	cargo build --lib --no-default-features
 	$(patsubst examples/%.rs,$(call TEST_EXAMPLE,%),$(wildcard examples/*.rs))
 
 .PHONY: clean

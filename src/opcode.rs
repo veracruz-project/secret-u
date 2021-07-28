@@ -17,6 +17,8 @@ use std::collections::HashMap;
 #[cfg(feature="opt-color-slots")]
 use std::collections::BTreeSet;
 use std::cell::RefCell;
+use std::ops::Deref;
+use std::ops::DerefMut;
 
 use aligned_utils::bytes::AlignedBytes;
 
@@ -680,51 +682,51 @@ pub enum OpKind<T: OpU> {
     Imm(T),
     Sym(&'static str),
 
-    Extract(u8, Rc<dyn DynOpNode>),
-    Replace(u8, Rc<OpNode<T>>, Rc<dyn DynOpNode>),
-    Select(u8, Rc<OpNode<T>>, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Shuffle(u8, Rc<OpNode<T>>, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Extract(u8, RefCell<Rc<dyn DynOpNode>>),
+    Replace(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<dyn DynOpNode>>),
+    Select(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Shuffle(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
 
-    ExtendU(Rc<dyn DynOpNode>),
-    ExtendS(Rc<dyn DynOpNode>),
-    Splat(Rc<dyn DynOpNode>),
+    ExtendU(RefCell<Rc<dyn DynOpNode>>),
+    ExtendS(RefCell<Rc<dyn DynOpNode>>),
+    Splat(RefCell<Rc<dyn DynOpNode>>),
 
-    None(Rc<OpNode<T>>),
-    Any(Rc<OpNode<T>>),
-    All(u8, Rc<OpNode<T>>),
-    Eq(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Ne(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    LtU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    LtS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    GtU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    GtS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    LeU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    LeS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    GeU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    GeS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    MinU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    MinS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    MaxU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    MaxS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    None(RefCell<Rc<OpNode<T>>>),
+    Any(RefCell<Rc<OpNode<T>>>),
+    All(u8, RefCell<Rc<OpNode<T>>>),
+    Eq(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Ne(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LtU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LtS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GtU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GtS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LeU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LeS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GeU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GeS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MinU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MinS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MaxU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MaxS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
 
-    Neg(u8, Rc<OpNode<T>>),
-    Abs(u8, Rc<OpNode<T>>),
-    Not(Rc<OpNode<T>>),
-    Clz(u8, Rc<OpNode<T>>),
-    Ctz(u8, Rc<OpNode<T>>),
-    Popcnt(u8, Rc<OpNode<T>>),
-    Add(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Sub(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Mul(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    And(Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Andnot(Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Or(Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Xor(Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Shl(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    ShrU(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    ShrS(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Rotl(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
-    Rotr(u8, Rc<OpNode<T>>, Rc<OpNode<T>>),
+    Neg(u8, RefCell<Rc<OpNode<T>>>),
+    Abs(u8, RefCell<Rc<OpNode<T>>>),
+    Not(RefCell<Rc<OpNode<T>>>),
+    Clz(u8, RefCell<Rc<OpNode<T>>>),
+    Ctz(u8, RefCell<Rc<OpNode<T>>>),
+    Popcnt(u8, RefCell<Rc<OpNode<T>>>),
+    Add(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Sub(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Mul(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    And(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Andnot(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Or(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Xor(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Shl(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    ShrU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    ShrS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Rotl(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Rotr(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
 }
 
 
@@ -736,9 +738,10 @@ pub struct OpNode<T: OpU> {
     refs: Cell<u32>,
     slot: Cell<Option<u8>>,
     flags: u8,
+    #[cfg(feature="opt-schedule-slots")]
     depth: u32,
     #[cfg(feature="opt-fold-consts")]
-    folded: RefCell<Option<Option<Rc<OpNode<T>>>>>,
+    folded: Cell<bool>,
 }
 
 /// Root OpNode with additional small object optimization, which
@@ -1063,13 +1066,15 @@ impl<T: OpU> OpTree<T> {
 
     /// Create new tree
     fn from_kind(kind: OpKind<T>, flags: u8, depth: u32) -> Self {
-        OpTree(RefCell::new(OpRoot::Tree(Rc::new(OpNode::new(kind, flags, depth)))))
+        OpTree(RefCell::new(OpRoot::Tree(Rc::new(
+            OpNode::new(kind, flags, depth)
+        ))))
     }
 
     /// Get internal tree, potentially allocating if needed
     fn node(&self) -> Rc<OpNode<T>> {
         let mut tree = self.0.borrow_mut();
-        match &*tree {
+        match tree.deref() {
             OpRoot::Const(v) => {
                 // convert to Rc if necessary
                 let node = Rc::new(OpNode::new(
@@ -1109,12 +1114,12 @@ impl<T: OpU> OpTree<T> {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::ExtendU(a), flags, depth)
+            Self::from_kind(OpKind::ExtendU(RefCell::new(a)), flags, depth)
         } else if T::NPW2 < a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::Extract(0, a), flags, depth)
+            Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth)
         } else {
             Self::dyn_downcast(a)
         }
@@ -1128,12 +1133,12 @@ impl<T: OpU> OpTree<T> {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::ExtendS(a), flags, depth)
+            Self::from_kind(OpKind::ExtendS(RefCell::new(a)), flags, depth)
         } else if T::NPW2 < a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::Extract(0, a), flags, depth)
+            Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth)
         } else {
             Self::dyn_downcast(a)
         }
@@ -1141,7 +1146,7 @@ impl<T: OpU> OpTree<T> {
 
     /// is expression an immediate?
     pub fn is_imm(&self) -> bool {
-        match &*self.0.borrow() {
+        match self.0.borrow().deref() {
             OpRoot::Const(_) => true,
             OpRoot::Imm(_) => true,
             OpRoot::Tree(tree) => tree.is_imm(),
@@ -1150,7 +1155,7 @@ impl<T: OpU> OpTree<T> {
 
     /// is expression a symbol?
     pub fn is_sym(&self) -> bool {
-        match &*self.0.borrow() {
+        match self.0.borrow().deref() {
             OpRoot::Const(_) => false,
             OpRoot::Imm(_) => false,
             OpRoot::Tree(tree) => tree.is_sym(),
@@ -1159,7 +1164,7 @@ impl<T: OpU> OpTree<T> {
 
     /// is expression const?
     pub fn is_const(&self) -> bool {
-        match &*self.0.borrow() {
+        match self.0.borrow().deref() {
             OpRoot::Const(_) => true,
             OpRoot::Imm(_) => false,
             OpRoot::Tree(tree) => tree.is_const(),
@@ -1176,7 +1181,7 @@ impl<T: OpU> OpTree<T> {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Extract(x, a), flags, depth)
+        Self::from_kind(OpKind::Extract(x, RefCell::new(a)), flags, depth)
     }
 
     pub fn replace<U: OpU>(x: u8, a: Self, b: OpTree<U>) -> Self {
@@ -1184,7 +1189,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.dyn_node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Replace(x, a, b), flags, depth)
+        Self::from_kind(OpKind::Replace(x, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn select(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
@@ -1193,7 +1198,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = p.flags() | a.flags() | b.flags();
         let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
-        Self::from_kind(OpKind::Select(lnpw2, p, a, b), flags, depth)
+        Self::from_kind(OpKind::Select(lnpw2, RefCell::new(p), RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn shuffle(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
@@ -1202,49 +1207,49 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = p.flags() | a.flags() | b.flags();
         let depth = max(p.depth(), max(a.depth(), b.depth())).saturating_add(1);
-        Self::from_kind(OpKind::Shuffle(lnpw2, p, a, b), flags, depth)
+        Self::from_kind(OpKind::Shuffle(lnpw2, RefCell::new(p), RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn extend_u<U: OpU>(a: OpTree<U>) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::ExtendU(a), flags, depth)
+        Self::from_kind(OpKind::ExtendU(RefCell::new(a)), flags, depth)
     }
 
     pub fn extend_s<U: OpU>(a: OpTree<U>) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::ExtendS(a), flags, depth)
+        Self::from_kind(OpKind::ExtendS(RefCell::new(a)), flags, depth)
     }
 
     pub fn splat<U: OpU>(a: OpTree<U>) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Splat(a), flags, depth)
+        Self::from_kind(OpKind::Splat(RefCell::new(a)), flags, depth)
     }
 
     pub fn none(a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::None(a), flags, depth)
+        Self::from_kind(OpKind::None(RefCell::new(a)), flags, depth)
     }
 
     pub fn any(a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Any(a), flags, depth)
+        Self::from_kind(OpKind::Any(RefCell::new(a)), flags, depth)
     }
 
     pub fn all(lnpw2: u8, a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::All(lnpw2, a), flags, depth)
+        Self::from_kind(OpKind::All(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn eq(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1252,7 +1257,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Eq(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Eq(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn ne(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1260,7 +1265,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Ne(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Ne(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn lt_u(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1268,7 +1273,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::LtU(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::LtU(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn lt_s(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1276,7 +1281,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::LtS(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::LtS(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn gt_u(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1284,7 +1289,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::GtU(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::GtU(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn gt_s(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1292,7 +1297,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::GtS(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::GtS(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn le_u(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1300,7 +1305,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::LeU(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::LeU(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn le_s(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1308,7 +1313,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::LeS(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::LeS(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn ge_u(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1316,7 +1321,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::GeU(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::GeU(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn ge_s(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1324,7 +1329,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::GeS(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::GeS(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn min_u(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1332,7 +1337,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::MinU(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::MinU(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn min_s(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1340,7 +1345,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::MinS(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::MinS(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn max_u(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1348,7 +1353,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::MaxU(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::MaxU(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn max_s(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1356,49 +1361,49 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::MaxS(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::MaxS(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn neg(lnpw2: u8, a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Neg(lnpw2, a), flags, depth)
+        Self::from_kind(OpKind::Neg(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn abs(lnpw2: u8, a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Abs(lnpw2, a), flags, depth)
+        Self::from_kind(OpKind::Abs(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn not(a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Not(a), flags, depth)
+        Self::from_kind(OpKind::Not(RefCell::new(a)), flags, depth)
     }
 
     pub fn clz(lnpw2: u8, a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Clz(lnpw2, a), flags, depth)
+        Self::from_kind(OpKind::Clz(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn ctz(lnpw2: u8, a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Ctz(lnpw2, a), flags, depth)
+        Self::from_kind(OpKind::Ctz(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn popcnt(lnpw2: u8, a: Self) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::Popcnt(lnpw2, a), flags, depth)
+        Self::from_kind(OpKind::Popcnt(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn add(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1406,7 +1411,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Add(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Add(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn sub(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1414,7 +1419,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Sub(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Sub(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn mul(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1422,7 +1427,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Mul(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Mul(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn and(a: Self, b: Self) -> Self {
@@ -1430,7 +1435,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::And(a, b), flags, depth)
+        Self::from_kind(OpKind::And(RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn andnot(a: Self, b: Self) -> Self {
@@ -1438,7 +1443,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Andnot(a, b), flags, depth)
+        Self::from_kind(OpKind::Andnot(RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn or(a: Self, b: Self) -> Self {
@@ -1446,7 +1451,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Or(a, b), flags, depth)
+        Self::from_kind(OpKind::Or(RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn xor(a: Self, b: Self) -> Self {
@@ -1454,7 +1459,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Xor(a, b), flags, depth)
+        Self::from_kind(OpKind::Xor(RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn shl(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1462,7 +1467,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Shl(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Shl(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn shr_u(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1470,7 +1475,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::ShrU(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::ShrU(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn shr_s(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1478,7 +1483,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::ShrS(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::ShrS(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn rotl(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1486,7 +1491,7 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Rotl(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Rotl(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn rotr(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1494,12 +1499,12 @@ impl<T: OpU> OpTree<T> {
         let b = b.node();
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
-        Self::from_kind(OpKind::Rotr(lnpw2, a, b), flags, depth)
+        Self::from_kind(OpKind::Rotr(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     /// display tree for debugging
     pub fn disas<W: io::Write>(&self, mut out: W) -> Result<(), io::Error> {
-        match &*self.0.borrow() {
+        match self.0.borrow().deref() {
             OpRoot::Const(v) => writeln!(out, "    (u{}.const {:x}", 8 << T::NPW2, v),
             OpRoot::Imm(v)   => writeln!(out, "    (u{}.imm {:x})",  8 << T::NPW2, v),
             OpRoot::Tree(tree) => tree.disas(out),
@@ -1508,7 +1513,25 @@ impl<T: OpU> OpTree<T> {
 
     /// high-level compile into bytecode, stack, and initial stack pointer
     pub fn compile(&self, opt: bool) -> (Vec<u32>, AlignedBytes) {
-        self.node().compile(opt)
+        // force to tree form
+        self.node();
+
+        match self.0.borrow_mut().deref_mut() {
+            OpRoot::Tree(ref mut tree) => {
+                // should we do a constant folding pass? we need to do this here
+                // so we can update our root reference
+                #[cfg(feature="opt-fold-consts")]
+                if opt {
+                    if let Some(x) = tree.fold_consts() {
+                        *tree = OpNode::<T>::dyn_downcast(x);
+                    }
+                }
+
+                // compile
+                tree.compile(opt)
+            }
+            _ => panic!("compiling non-tree?"),
+        }
     }
 
     /// Assuming we are Sym, patch the slots during a call
@@ -1516,7 +1539,7 @@ impl<T: OpU> OpTree<T> {
     where
         T: From<U>
     {
-        match &*self.0.borrow() {
+        match self.0.borrow().deref() {
             OpRoot::Tree(tree) => tree.patch(slots, v),
             _ => panic!("patching non-sym?")
         }
@@ -1579,16 +1602,24 @@ impl<T: OpU> OpNode<T> {
     const SECRET: u8 = 0x1;
     const SYM: u8    = 0x2;
 
-    fn new(kind: OpKind<T>, flags: u8, depth: u32) -> OpNode<T> {
+    fn new(kind: OpKind<T>, flags: u8, #[allow(unused)] depth: u32) -> OpNode<T> {
         OpNode {
             kind: kind,
             refs: Cell::new(0),
             slot: Cell::new(None),
             flags: flags,
+            #[cfg(feature="opt-schedule-slots")]
             depth: depth,
             #[cfg(feature="opt-fold-consts")]
-            folded: RefCell::new(None),
+            folded: Cell::new(false),
         }
+    }
+
+    /// Forcefully downcast into a different OpNode, panicking if types
+    /// do not match
+    pub fn dyn_downcast(a: Rc<dyn DynOpNode>) -> Rc<Self> {
+        assert_eq!(a.npw2(), T::NPW2);
+        unsafe { Rc::from_raw(Rc::into_raw(a) as _) }
     }
 
     /// display tree for debugging
@@ -1616,12 +1647,6 @@ impl<T: OpU> OpNode<T> {
 
     /// high-level compile into bytecode, stack, and initial stack pointer
     pub fn compile(&self, opt: bool) -> (Vec<u32>, AlignedBytes) {
-        // should we do a constant folding pass?
-        #[cfg(feature="opt-fold-consts")]
-        if opt {
-            self.fold_consts();
-        }
-
         // debug?
         #[cfg(feature="debug-trees")]
         {
@@ -1766,7 +1791,7 @@ pub trait DynOpNode: Debug {
 
     /// An optional pass to fold consts in the tree
     #[cfg(feature="opt-fold-consts")]
-    fn fold_consts(&self);
+    fn fold_consts(&self) -> Option<Rc<dyn DynOpNode>>;
 
     /// First compile pass, used to find the number of immediates
     /// for offset calculation, and local reference counting to
@@ -1857,14 +1882,14 @@ impl<T: OpU> DynOpNode for OpNode<T> {
     }
 
     fn depth(&self) -> u32 {
-        // TODO ok we need a different way to handle this
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.depth();
+        #[cfg(feature="opt-schedule-slots")]
+        {
+            self.depth
         }
-
-        self.depth
+        #[cfg(not(feature="opt-schedule-slots"))]
+        {
+            0
+        }
     }
 
     fn is_imm(&self) -> bool {
@@ -1884,13 +1909,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
     }
 
     fn is_const_zero(&self) -> bool {
-        #[cfg(feature="opt-fold-consts")]
-        match (self.is_const(), &self.kind, &*self.folded.borrow()) {
-            (true, OpKind::Const(v), _            ) => v.is_zero(),
-            (true, _,                Some(Some(x))) => x.is_const_zero(),
-            _                                       => false,
-        }
-        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind::Const(v)) => v.is_zero(),
             _                        => false,
@@ -1898,13 +1916,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
     }
 
     fn is_const_one(&self) -> bool {
-        #[cfg(feature="opt-fold-consts")]
-        match (self.is_const(), &self.kind, &*self.folded.borrow()) {
-            (true, OpKind::Const(v), _            ) => v.is_one(),
-            (true, _,                Some(Some(x))) => x.is_const_one(),
-            _                                       => false,
-        }
-        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind::Const(v)) => v.is_zero(),
             _                        => false,
@@ -1912,13 +1923,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
     }
 
     fn is_const_ones(&self) -> bool {
-        #[cfg(feature="opt-fold-consts")]
-        match (self.is_const(), &self.kind, &*self.folded.borrow()) {
-            (true, OpKind::Const(v), _            ) => v.is_ones(),
-            (true, _,                Some(Some(x))) => x.is_const_ones(),
-            _                                       => false,
-        }
-        #[cfg(not(feature="opt-fold-consts"))]
         match (self.is_const(), &self.kind) {
             (true, OpKind::Const(v)) => v.is_zero(),
             _                        => false,
@@ -1926,36 +1930,18 @@ impl<T: OpU> DynOpNode for OpNode<T> {
     }
 
     fn inc_refs(&self) -> u32 {
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.inc_refs();
-        }
-
         let refs = self.refs.get() + 1;
         self.refs.set(refs);
         refs
     }
 
     fn dec_refs(&self) -> u32 {
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.dec_refs();
-        }
-
         let refs = self.refs.get() - 1;
         self.refs.set(refs);
         refs
     }
 
     fn disas_pass1(&self) {
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.disas_pass1();
-        }
-
         // mark node as seen
         let refs = self.inc_refs();
         if refs > 1 {
@@ -1969,164 +1955,164 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             OpKind::Sym(_) => {},
 
             OpKind::Extract(_, a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Replace(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Select(_, p, a, b) => {
-                p.disas_pass1();
-                a.disas_pass1();
-                b.disas_pass1();
+                p.borrow().disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Shuffle(_, p, a, b) => {
-                p.disas_pass1();
-                a.disas_pass1();
-                b.disas_pass1();
+                p.borrow().disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
 
             OpKind::ExtendU(a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::ExtendS(a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Splat(a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
 
             OpKind::None(a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Any(a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::All(_, a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Eq(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Ne(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::LtU(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::LtS(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::GtU(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::GtS(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::LeU(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::LeS(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::GeU(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::GeS(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::MinU(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::MinS(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::MaxU(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::MaxS(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
 
             OpKind::Neg(_, a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Abs(_, a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Not(a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Clz(_, a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Ctz(_, a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Popcnt(_, a) => {
-                a.disas_pass1();
+                a.borrow().disas_pass1();
             }
             OpKind::Add(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Sub(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Mul(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::And(a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Andnot(a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Or(a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Xor(a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Shl(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::ShrU(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::ShrS(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Rotl(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
             OpKind::Rotr(_, a, b) => {
-                a.disas_pass1();
-                b.disas_pass1();
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
             }
         }
     }
@@ -2137,12 +2123,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         arbitrary_names: &mut dyn Iterator<Item=String>,
         stmts: &mut dyn io::Write,
     ) -> Result<String, io::Error> {
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.disas_pass2(names, arbitrary_names, stmts);
-        }
-
         // is node shared?
         let refs = self.dec_refs();
 
@@ -2167,208 +2147,208 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             ),
 
             OpKind::Extract(x, a) => format!("(u{}.extract {} {})",
-                prefix(a.npw2(), a.npw2()-T::NPW2),
+                prefix(a.borrow().npw2(), a.borrow().npw2()-T::NPW2),
                 x,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Replace(x, a, b) => format!("(u{}.replace {} {} {})",
-                prefix(T::NPW2, T::NPW2-b.npw2()),
+                prefix(T::NPW2, T::NPW2-b.borrow().npw2()),
                 x,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Select(lnpw2, p, a, b) => format!("(u{}.select {} {} {})",
                 prefix(T::NPW2, *lnpw2),
-                p.disas_pass2(names, arbitrary_names, stmts)?,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?
+                p.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Shuffle(lnpw2, p, a, b) => format!("(u{}.shuffle {} {} {})",
                 prefix(T::NPW2, *lnpw2),
-                p.disas_pass2(names, arbitrary_names, stmts)?,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?
+                p.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
 
             OpKind::ExtendU(a) => format!("(u{}.extend_u {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::ExtendS(a) => format!("(u{}.extend_s {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Splat(a) => format!("(u{}.splat {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
 
             OpKind::None(a) => format!("(u{}.none {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Any(a) => format!("(u{}.any {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::All(lnpw2, a) => format!("(u{}.all {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Eq(lnpw2, a, b) => format!("(u{}.eq {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Ne(lnpw2, a, b) => format!("(u{}.ne {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::LtU(lnpw2, a, b) => format!("(u{}.lt_u {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::LtS(lnpw2, a, b) => format!("(u{}.lt_s {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::GtU(lnpw2, a, b) => format!("(u{}.gt_u {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::GtS(lnpw2, a, b) => format!("(u{}.gt_s {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::LeU(lnpw2, a, b) => format!("(u{}.le_u {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::LeS(lnpw2, a, b) => format!("(u{}.le_s {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::GeU(lnpw2, a, b) => format!("(u{}.ge_u {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::GeS(lnpw2, a, b) => format!("(u{}.ge_s {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::MinU(lnpw2, a, b) => format!("(u{}.min_u {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::MinS(lnpw2, a, b) => format!("(u{}.min_s {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::MaxU(lnpw2, a, b) => format!("(u{}.max_u {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::MaxS(lnpw2, a, b) => format!("(u{}.max_s {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
 
             OpKind::Neg(lnpw2, a) => format!("(u{}.neg {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Abs(lnpw2, a) => format!("(u{}.abs {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Not(a) => format!("(u{}.not {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Clz(lnpw2, a) => format!("(u{}.clz {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Ctz(lnpw2, a) => format!("(u{}.ctz {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Popcnt(lnpw2, a) => format!("(u{}.popcnt {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Add(lnpw2, a, b) => format!("(u{}.add {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Sub(lnpw2, a, b) => format!("(u{}.sub {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Mul(lnpw2, a, b) => format!("(u{}.mul {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::And(a, b) => format!("(u{}.and {} {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Andnot(a, b) => format!("(u{}.andnot {} {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Or(a, b) => format!("(u{}.or {} {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Xor(a, b) => format!("(u{}.xor {} {})",
                 8 << T::NPW2,
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Shl(lnpw2, a, b) => format!("(u{}.shl {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::ShrU(lnpw2, a, b) => format!("(u{}.shr_u {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::ShrS(lnpw2, a, b) => format!("(u{}.shr_s {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Rotl(lnpw2, a, b) => format!("(u{}.rotl {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Rotr(lnpw2, a, b) => format!("(u{}.rotr {} {})",
                 prefix(T::NPW2, *lnpw2),
-                a.disas_pass2(names, arbitrary_names, stmts)?,
-                b.disas_pass2(names, arbitrary_names, stmts)?,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
         };
 
@@ -2385,12 +2365,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
     #[cfg(feature="debug-check-refs")]
     fn check_refs(&self) {
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.check_refs();
-        }
-
         // refs must equal 0 between multi-pass traversals
         assert_eq!(self.refs.get(), 0);
 
@@ -2400,176 +2374,176 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             OpKind::Sym(_) => {},
 
             OpKind::Extract(_, a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Replace(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Select(_, p, a, b) => {
-                p.check_refs();
-                a.check_refs();
-                b.check_refs();
+                p.borrow().check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Shuffle(_, p, a, b) => {
-                p.check_refs();
-                a.check_refs();
-                b.check_refs();
+                p.borrow().check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
 
             OpKind::ExtendU(a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::ExtendS(a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Splat(a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
 
             OpKind::None(a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Any(a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::All(_, a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Eq(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Ne(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::LtU(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::LtS(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::GtU(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::GtS(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::LeU(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::LeS(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::GeU(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::GeS(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::MinU(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::MinS(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::MaxU(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::MaxS(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
 
             OpKind::Neg(_, a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Abs(_, a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Not(a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Clz(_, a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Ctz(_, a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Popcnt(_, a) => {
-                a.check_refs();
+                a.borrow().check_refs();
             }
             OpKind::Add(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Sub(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Mul(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::And(a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Andnot(a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Or(a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Xor(a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Shl(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::ShrU(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::ShrS(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Rotl(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
             OpKind::Rotr(_, a, b) => {
-                a.check_refs();
-                b.check_refs();
+                a.borrow().check_refs();
+                b.borrow().check_refs();
             }
         }
     }
 
 
     #[cfg(feature="opt-fold-consts")]
-    fn fold_consts(&self) {
+    fn fold_consts(&self) -> Option<Rc<dyn DynOpNode>> {
         // already folded?
-        if self.folded.borrow().is_some() {
-            return;
+        if self.folded.get() {
+            return None;
         }
-        self.folded.replace(Some(None));
+        self.folded.set(true);
         
         if self.is_const() && !self.is_imm() {
             // oh hey, we're const
@@ -2580,10 +2554,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             // if this fails we just bail on the const folding so the error
             // can be reported at runtime
             if let Ok(v) = self.try_eval() {
-                self.folded.replace(Some(Some(Rc::new(Self::new(
+                return Some(Rc::new(Self::new(
                     OpKind::Const(v), 0, 0
-                )))));
-                return;
+                )));
             }
         }
 
@@ -2593,235 +2566,304 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             OpKind::Sym(_) => {},
 
             OpKind::Extract(_, a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = x);
             }
             OpKind::Replace(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = x);
             }
             OpKind::Select(_, p, a, b) => {
-                p.fold_consts();
-                a.fold_consts();
-                b.fold_consts();
+                let mut p = p.borrow_mut();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                p.fold_consts().map(|x| *p = Self::dyn_downcast(x));
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::Shuffle(_, p, a, b) => {
-                p.fold_consts();
-                a.fold_consts();
-                b.fold_consts();
+                let mut p = p.borrow_mut();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                p.fold_consts().map(|x| *p = Self::dyn_downcast(x));
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
 
             OpKind::ExtendU(a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = x);
             }
             OpKind::ExtendS(a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = x);
             }
             OpKind::Splat(a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = x);
             }
 
             OpKind::None(a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Any(a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::All(_, a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Eq(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::Ne(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::LtU(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::LtS(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::GtU(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::GtS(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::LeU(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::LeS(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::GeU(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::GeS(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::MinU(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::MinS(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::MaxU(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::MaxS(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
 
             OpKind::Neg(_, a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Abs(_, a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Not(a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Clz(_, a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Ctz(_, a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Popcnt(_, a) => {
-                a.fold_consts();
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Add(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_zero() {
-                    self.folded.replace(Some(Some(b.clone())));
+                    return Some(b.clone());
                 } else if b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Sub(_, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Mul(x, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && a.is_const_one() {
-                    self.folded.replace(Some(Some(b.clone())));
+                    return Some(b.clone());
                 } else if *x == 0 && b.is_const_one() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::And(a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_ones() {
-                    self.folded.replace(Some(Some(b.clone())));
+                    return Some(b.clone());
                 } else if b.is_const_ones() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Andnot(a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_ones() {
-                    self.folded.replace(Some(Some(b.clone())));
+                    return Some(b.clone());
                 } else if b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Or(a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_zero() {
-                    self.folded.replace(Some(Some(b.clone())));
+                    return Some(b.clone());
                 } else if b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Xor(a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_zero() {
-                    self.folded.replace(Some(Some(b.clone())));
+                    return Some(b.clone());
                 } else if b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Shl(x, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::ShrU(x, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::ShrS(x, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Rotl(x, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
             OpKind::Rotr(x, a, b) => {
-                a.fold_consts();
-                b.fold_consts();
+                let mut a = a.borrow_mut();
+                let mut b = b.borrow_mut();
+                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
-                    self.folded.replace(Some(Some(a.clone())));
+                    return Some(a.clone());
                 }
             }
         }
+
+        None
     }
 
     fn compile_pass1(&self, state: &mut OpCompile) {
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.compile_pass1(state);
-        }
-
         // mark node as seen
         let refs = self.inc_refs();
         if refs > 1 {
@@ -2881,175 +2923,169 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             }
 
             OpKind::Extract(_, a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Replace(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Select(_, p, a, b) => {
-                p.compile_pass1(state);
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                p.borrow().compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Shuffle(_, p, a, b) => {
-                p.compile_pass1(state);
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                p.borrow().compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
 
             OpKind::ExtendU(a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::ExtendS(a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Splat(a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
 
             OpKind::None(a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Any(a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::All(_, a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Eq(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Ne(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::LtU(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::LtS(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::GtU(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::GtS(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::LeU(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::LeS(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::GeU(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::GeS(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::MinU(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::MinS(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::MaxU(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::MaxS(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
 
             OpKind::Neg(_, a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Abs(_, a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Not(a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Clz(_, a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Ctz(_, a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Popcnt(_, a) => {
-                a.compile_pass1(state);
+                a.borrow().compile_pass1(state);
             }
             OpKind::Add(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Sub(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Mul(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::And(a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Andnot(a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Or(a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Xor(a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Shl(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::ShrU(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::ShrS(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Rotl(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
             OpKind::Rotr(_, a, b) => {
-                a.compile_pass1(state);
-                b.compile_pass1(state);
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
             }
         }
     }
 
     fn compile_pass2(&self, state: &mut OpCompile) -> (u8, u8) {
-        // prefer folded tree
-        #[cfg(feature="opt-fold-consts")]
-        if let Some(Some(folded)) = &*self.folded.borrow() {
-            return folded.compile_pass2(state);
-        }
-
         // already computed?
         if let Some(slot) = self.slot.get() {
             return (slot, T::NPW2);
@@ -3126,6 +3162,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             }
 
             OpKind::Select(lnpw2, p, a, b) => {
+                let p = p.borrow();
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (p_slot, p_npw2) = p.compile_pass2(state);
                     let (a_slot, a_npw2) = a.compile_pass2(state);
@@ -3160,6 +3199,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Shuffle(lnpw2, p, a, b) => {
+                let p = p.borrow();
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (p_slot, p_npw2) = p.compile_pass2(state);
                     let (a_slot, a_npw2) = a.compile_pass2(state);
@@ -3194,6 +3236,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Extract(lane, a) => {
+                let a = a.borrow();
                 assert!(T::NPW2 <= a.npw2());
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
@@ -3207,6 +3250,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Replace(lane, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 assert!(T::NPW2 >= b.npw2());
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
@@ -3239,6 +3284,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             }
 
             OpKind::ExtendU(a) => {
+                let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
@@ -3252,6 +3298,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::ExtendS(a) => {
+                let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
@@ -3265,6 +3312,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Splat(a) => {
+                let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
@@ -3279,6 +3327,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             }
 
             OpKind::None(a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3291,6 +3340,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Any(a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3303,6 +3353,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::All(lnpw2, a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3315,6 +3366,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Eq(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3352,6 +3405,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Ne(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3389,6 +3444,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LtU(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3426,6 +3483,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LtS(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3463,6 +3522,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GtU(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3500,6 +3561,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GtS(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3537,6 +3600,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LeU(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3574,6 +3639,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LeS(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3611,6 +3678,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GeU(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3648,6 +3717,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GeS(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3685,6 +3756,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MinU(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3722,6 +3795,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MinS(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3759,6 +3834,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MaxU(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3796,6 +3873,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MaxS(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3833,6 +3912,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Neg(lnpw2, a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3845,6 +3925,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Abs(lnpw2, a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3857,6 +3938,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Not(a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3869,6 +3951,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Clz(lnpw2, a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3881,6 +3964,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Ctz(lnpw2, a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3893,6 +3977,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Popcnt(lnpw2, a) => {
+                let a = a.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3905,6 +3990,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
             OpKind::Add(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3942,6 +4029,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Sub(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -3972,6 +4061,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Mul(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4009,6 +4100,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::And(a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4046,6 +4139,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Andnot(a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4083,6 +4178,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Or(a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4120,6 +4217,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Xor(a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4157,6 +4256,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Shl(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4187,6 +4288,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::ShrU(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4217,6 +4320,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::ShrS(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4247,6 +4352,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Rotl(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
@@ -4277,6 +4384,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Rotr(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
                 schedule! {
                     let (a_slot, a_npw2) = a.compile_pass2(state);
                     let (b_slot, b_npw2) = b.compile_pass2(state);
