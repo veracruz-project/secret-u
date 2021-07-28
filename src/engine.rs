@@ -10,6 +10,11 @@ use std::convert::TryFrom;
 use std::cmp::min;
 use std::cmp::max;
 
+use num_bigint::BigUint;
+use num_bigint::BigInt;
+use num_bigint::Sign;
+use num_traits::sign::Signed;
+
 #[cfg(feature="debug-trace")]
 use crate::opcode::OpIns;
 
@@ -40,11 +45,12 @@ trait Bytes: Sized {
     fn from_le(self) -> Self;
 
     // extract/replace
-    fn extract<T>(self, i: usize) -> Option<T>
+    fn extract<T>(self, i: u32) -> Option<T>
     where
         T: Bytes
     {
         let bytes = self.to_le_bytes();
+        let i = i as usize;
         bytes.as_ref()
             .get(i*size_of::<T>() .. (i+1)*size_of::<T>())
             .map(|slice| {
@@ -54,11 +60,12 @@ trait Bytes: Sized {
             })
     }
 
-    fn replace<T>(self, i: usize, t: T) -> Option<Self>
+    fn replace<T>(self, i: u32, t: T) -> Option<Self>
     where
         T: Bytes
     {
         let mut bytes = self.to_le_bytes();
+        let i = i as usize;
 
         bytes.as_mut()
             .get_mut(i*size_of::<T>() .. (i+1)*size_of::<T>())?
@@ -202,55 +209,146 @@ bytes_impl! { u16      => u16::MIN,      u16::MAX      }
 bytes_impl! { u32      => u32::MIN,      u32::MAX      }
 bytes_impl! { u64      => u64::MIN,      u64::MAX      }
 bytes_impl! { u128     => u128::MIN,     u128::MAX     }
-bytes_impl! { [u128;2] => [u128::MIN;2], [u128::MAX;2] }
-bytes_impl! { [u128;4] => [u128::MIN;4], [u128::MAX;4] }
+bytes_impl! { [u32;8]  => [u32::MIN;8],  [u32::MAX;8]  }
+bytes_impl! { [u32;16] => [u32::MIN;16], [u32::MAX;16] }
 
 
-/// Helper for converting into indices (usize)
-trait IntoUsize {
-    /// Cheap cast to usize
-    fn wrapping_into_usize(self) -> usize;
+/// Helper for converting into indices (u32)
+trait IntoUsize: Sized {
+    /// Cheap cast to u32
+    fn wrapping_into_u32(self) -> u32;
 
-    /// Cast to usize with overflow checking
-    fn try_into_usize(self) -> Option<usize>;
+    /// Cast to u32 with overflow checking
+    fn try_into_u32(self) -> Option<u32>;
+
+    /// Cheap cast from u32
+    fn wrapping_from_u32(size: u32) -> Self;
+
+    /// Cast from u32 with overflow checking
+    fn try_from_u32(size: u32) -> Option<Self>;
 }
 
-macro_rules! into_usize_impl {
+macro_rules! into_u32_impl {
     ($t:ident) => {
         impl IntoUsize for $t {
-            fn wrapping_into_usize(self) -> usize {
-                self as usize
+            fn wrapping_into_u32(self) -> u32 {
+                self as u32
             }
 
-            fn try_into_usize(self) -> Option<usize> {
-                usize::try_from(self).ok()
+            fn try_into_u32(self) -> Option<u32> {
+                u32::try_from(self).ok()
+            }
+
+            fn wrapping_from_u32(size: u32) -> Self {
+                size as Self
+            }
+
+            fn try_from_u32(size: u32) -> Option<Self> {
+                Self::try_from(size).ok()
             }
         }
     };
     ([$t:ty;$n:expr]) => {
         impl IntoUsize for [$t;$n] {
-            fn wrapping_into_usize(self) -> usize {
-                self[0] as usize
+            fn wrapping_into_u32(self) -> u32 {
+                self[0] as u32
             }
 
-            fn try_into_usize(self) -> Option<usize> {
+            fn try_into_u32(self) -> Option<u32> {
                 if self[1..].iter().all(|x| *x == 0) {
-                    usize::try_from(self[0]).ok()
+                    u32::try_from(self[0]).ok()
                 } else {
                     None
                 }
+            }
+
+            fn wrapping_from_u32(size: u32) -> Self {
+                let mut words = [0; $n];
+                words[0] = size as $t;
+                words
+            }
+
+            fn try_from_u32(size: u32) -> Option<Self> {
+                let mut words = [0; $n];
+                words[0] = <$t>::try_from(size).ok()?;
+                Some(words)
             }
         }
     };
 }
 
-into_usize_impl! { u8       }
-into_usize_impl! { u16      }
-into_usize_impl! { u32      }
-into_usize_impl! { u64      }
-into_usize_impl! { u128     }
-into_usize_impl! { [u128;2] }
-into_usize_impl! { [u128;4] }
+into_u32_impl! { u8       }
+into_u32_impl! { u16      }
+into_u32_impl! { u32      }
+into_u32_impl! { u64      }
+into_u32_impl! { u128     }
+into_u32_impl! { [u32;8]  }
+into_u32_impl! { [u32;16] }
+
+
+/// Helper for converting into bigints
+trait IntoBigInt {
+    fn into_biguint(self) -> BigUint;
+    fn into_bigint(self) -> BigInt;
+    fn from_biguint(int: BigUint) -> Self;
+    fn from_bigint(int: BigInt) -> Self;
+}
+
+macro_rules! into_bigint_impl {
+    ([$t:ty;$n:expr]) => {
+        impl IntoBigInt for [$t;$n] {
+            fn into_biguint(self) -> BigUint {
+                BigUint::from_slice(&self)
+            }
+
+            fn into_bigint(mut self) -> BigInt {
+                // BigInt takes u32s and a sign bit, so we need to manually
+                // negate here
+                if (self[$n-1] as i32) < 0 {
+                    let mut carry = 1;
+                    for i in 0..$n {
+                        let res = (!self[i]).overflowing_add(carry);
+                        self[i] = res.0;
+                        carry = u32::from(res.1);
+                    }
+                    BigInt::from_slice(Sign::Minus, &self)
+                } else {
+                    BigInt::from_slice(Sign::Plus, &self)
+                }
+            }
+
+            fn from_biguint(int: BigUint) -> Self {
+                let mut words = [0; $n];
+                for (i, w) in int.iter_u32_digits().take($n).enumerate() {
+                    words[i] = w;
+                }
+                words
+            }
+
+            fn from_bigint(int: BigInt) -> Self {
+                let mut words = [0; $n];
+                for (i, w) in int.iter_u32_digits().take($n).enumerate() {
+                    words[i] = w;
+                }
+
+                if int.is_negative() {
+                    // manually negate here
+                    let mut carry = 1;
+                    for i in 0..$n {
+                        let res = (!words[i]).overflowing_add(carry);
+                        words[i] = res.0;
+                        carry = u32::from(res.1);
+                    }
+                }
+
+                words
+            }
+        }
+    };
+}
+
+into_bigint_impl! { [u32;8]  }
+into_bigint_impl! { [u32;16] }
 
 
 /// Trait to help perform multi-lane operations
@@ -434,20 +532,20 @@ lanes_impl! { u128 => u32;4 }
 lanes_impl! { u128 => u64;2 }
 lanes_impl! { u128 => u128  }
 
-lanes_impl! { [u128;2] => u8;32    }
-lanes_impl! { [u128;2] => u16;16   }
-lanes_impl! { [u128;2] => u32;8    }
-lanes_impl! { [u128;2] => u64;4    }
-lanes_impl! { [u128;2] => u128;2   }
-lanes_impl! { [u128;2] => [u128;2] }
+lanes_impl! { [u32;8]  => u8;32   }
+lanes_impl! { [u32;8]  => u16;16  }
+lanes_impl! { [u32;8]  => u32;8   }
+lanes_impl! { [u32;8]  => u64;4   }
+lanes_impl! { [u32;8]  => u128;2  }
+lanes_impl! { [u32;8]  => [u32;8] }
 
-lanes_impl! { [u128;4] => u8;64      }
-lanes_impl! { [u128;4] => u16;32     }
-lanes_impl! { [u128;4] => u32;16     }
-lanes_impl! { [u128;4] => u64;8      }
-lanes_impl! { [u128;4] => u128;4     }
-lanes_impl! { [u128;4] => [u128;2];2 }
-lanes_impl! { [u128;4] => [u128;4]   }
+lanes_impl! { [u32;16] => u8;64     }
+lanes_impl! { [u32;16] => u16;32    }
+lanes_impl! { [u32;16] => u32;16    }
+lanes_impl! { [u32;16] => u64;8     }
+lanes_impl! { [u32;16] => u128;4    }
+lanes_impl! { [u32;16] => [u32;8];2 }
+lanes_impl! { [u32;16] => [u32;16]  }
 
 
 /// Primitive implementation of VM operations
@@ -490,52 +588,52 @@ trait Vop: Eq {
 macro_rules! vop_impl {
     ($t:ident{$i:ty}) => {
         impl Vop for $t {
-            fn vlt_u(self, b: Self) -> bool {
-                self < b
+            fn vlt_u(self, other: Self) -> bool {
+                self < other
             }
 
-            fn vlt_s(self, b: Self) -> bool {
-                (self as $i) < (b as $i)
+            fn vlt_s(self, other: Self) -> bool {
+                (self as $i) < (other as $i)
             }
 
-            fn vgt_u(self, b: Self) -> bool {
-                self > b
+            fn vgt_u(self, other: Self) -> bool {
+                self > other
             }
 
-            fn vgt_s(self, b: Self) -> bool {
-                (self as $i) > (b as $i)
+            fn vgt_s(self, other: Self) -> bool {
+                (self as $i) > (other as $i)
             }
 
-            fn vle_u(self, b: Self) -> bool {
-                self <= b
+            fn vle_u(self, other: Self) -> bool {
+                self <= other
             }
 
-            fn vle_s(self, b: Self) -> bool {
-                (self as $i) <= (b as $i)
+            fn vle_s(self, other: Self) -> bool {
+                (self as $i) <= (other as $i)
             }
 
-            fn vge_u(self, b: Self) -> bool {
-                self >= b
+            fn vge_u(self, other: Self) -> bool {
+                self >= other
             }
 
-            fn vge_s(self, b: Self) -> bool {
-                (self as $i) >= (b as $i)
+            fn vge_s(self, other: Self) -> bool {
+                (self as $i) >= (other as $i)
             }
 
-            fn vmin_u(self, b: Self) -> Self {
-                min(self, b)
+            fn vmin_u(self, other: Self) -> Self {
+                min(self, other)
             }
 
-            fn vmin_s(self, b: Self) -> Self {
-                min((self as $i), (b as $i)) as $t
+            fn vmin_s(self, other: Self) -> Self {
+                min((self as $i), (other as $i)) as $t
             }
 
-            fn vmax_u(self, b: Self) -> Self {
-                max(self, b)
+            fn vmax_u(self, other: Self) -> Self {
+                max(self, other)
             }
 
-            fn vmax_s(self, b: Self) -> Self {
-                max((self as $i), (b as $i)) as $t
+            fn vmax_s(self, other: Self) -> Self {
+                max((self as $i), (other as $i)) as $t
             }
 
             fn vneg(self) -> Self {
@@ -562,175 +660,269 @@ macro_rules! vop_impl {
                 self.count_ones() as $t
             }
 
-            fn vadd(self, b: Self) -> Self {
-                self.wrapping_add(b)
+            fn vadd(self, other: Self) -> Self {
+                self.wrapping_add(other)
             }
 
-            fn vsub(self, b: Self) -> Self {
-                self.wrapping_sub(b)
+            fn vsub(self, other: Self) -> Self {
+                self.wrapping_sub(other)
             }
 
-            fn vmul(self, b: Self) -> Self {
-                self.wrapping_mul(b)
+            fn vmul(self, other: Self) -> Self {
+                self.wrapping_mul(other)
             }
 
-            fn vand(self, b: Self) -> Self {
-                self & b
+            fn vand(self, other: Self) -> Self {
+                self & other
             }
 
-            fn vandnot(self, b: Self) -> Self {
-                self & !b
+            fn vandnot(self, other: Self) -> Self {
+                self & !other
             }
 
-            fn vor(self, b: Self) -> Self {
-                self | b
+            fn vor(self, other: Self) -> Self {
+                self | other
             }
 
-            fn vxor(self, b: Self) -> Self {
-                self ^ b
+            fn vxor(self, other: Self) -> Self {
+                self ^ other
             }
 
-            fn vshl(self, b: Self) -> Self {
-                self.wrapping_shl(b as u32)
+            fn vshl(self, other: Self) -> Self {
+                self.wrapping_shl(other as u32)
             }
 
-            fn vshr_u(self, b: Self) -> Self {
-                self.wrapping_shr(b as u32)
+            fn vshr_u(self, other: Self) -> Self {
+                self.wrapping_shr(other as u32)
             }
 
-            fn vshr_s(self, b: Self) -> Self {
-                (self as $i).wrapping_shr(b as u32) as $t
+            fn vshr_s(self, other: Self) -> Self {
+                (self as $i).wrapping_shr(other as u32) as $t
             }
 
-            fn vrotl(self, b: Self) -> Self {
-                self.rotate_left(b as u32)
+            fn vrotl(self, other: Self) -> Self {
+                self.rotate_left(other as u32)
             }
 
-            fn vrotr(self, b: Self) -> Self {
-                self.rotate_right(b as u32)
+            fn vrotr(self, other: Self) -> Self {
+                self.rotate_right(other as u32)
             }
         }
     };
     ([$t:ty; $n:expr]) => {
         #[allow(unused_variables)]
+        #[allow(unused_mut)]
         impl Vop for [$t;$n] {
-            fn vlt_u(self, b: Self) -> bool {
-                todo!()
+            fn vlt_u(mut self, other: Self) -> bool {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                a < b
             }
 
-            fn vlt_s(self, b: Self) -> bool {
-                todo!()
+            fn vlt_s(mut self, other: Self) -> bool {
+                let a = self.into_bigint();
+                let b = other.into_bigint();
+                a < b
             }
 
-            fn vgt_u(self, b: Self) -> bool {
-                todo!()
+            fn vgt_u(mut self, other: Self) -> bool {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                a > b
             }
 
-            fn vgt_s(self, b: Self) -> bool {
-                todo!()
+            fn vgt_s(mut self, other: Self) -> bool {
+                let a = self.into_bigint();
+                let b = other.into_bigint();
+                a > b
             }
 
-            fn vle_u(self, b: Self) -> bool {
-                todo!()
+            fn vle_u(mut self, other: Self) -> bool {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                a <= b
             }
 
-            fn vle_s(self, b: Self) -> bool {
-                todo!()
+            fn vle_s(mut self, other: Self) -> bool {
+                let a = self.into_bigint();
+                let b = other.into_bigint();
+                a <= b
             }
 
-            fn vge_u(self, b: Self) -> bool {
-                todo!()
+            fn vge_u(mut self, other: Self) -> bool {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                a >= b
             }
 
-            fn vge_s(self, b: Self) -> bool {
-                todo!()
+            fn vge_s(mut self, other: Self) -> bool {
+                let a = self.into_bigint();
+                let b = other.into_bigint();
+                a >= b
             }
 
-            fn vmin_u(self, b: Self) -> Self {
-                todo!()
+            fn vmin_u(mut self, other: Self) -> Self {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                Self::from_biguint(min(a, b))
             }
 
-            fn vmin_s(self, b: Self) -> Self {
-                todo!()
+            fn vmin_s(mut self, other: Self) -> Self {
+                let a = self.into_bigint();
+                let b = other.into_bigint();
+                Self::from_bigint(min(a, b))
             }
 
-            fn vmax_u(self, b: Self) -> Self {
-                todo!()
+            fn vmax_u(mut self, other: Self) -> Self {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                Self::from_biguint(max(a, b))
             }
 
-            fn vmax_s(self, b: Self) -> Self {
-                todo!()
-            }
-            fn vneg(self) -> Self {
-                todo!()
-            }
-
-            fn vabs(self) -> Self {
-                todo!()
+            fn vmax_s(mut self, other: Self) -> Self {
+                let a = self.into_bigint();
+                let b = other.into_bigint();
+                Self::from_bigint(max(a, b))
             }
 
-            fn vnot(self) -> Self {
-                todo!()
+            fn vneg(mut self) -> Self {
+                let a = self.into_bigint();
+                Self::from_bigint(-a)
             }
 
-            fn vclz(self) -> Self {
-                todo!()
+            fn vabs(mut self) -> Self {
+                let a = self.into_bigint();
+                Self::from_bigint(a.abs())
             }
 
-            fn vctz(self) -> Self {
-                todo!()
+            fn vnot(mut self) -> Self {
+                for i in 0..$n {
+                    self[i] = !self[i];
+                }
+                self
             }
 
-            fn vpopcnt(self) -> Self {
-                todo!()
+            fn vclz(mut self) -> Self {
+                let mut sum = 0;
+                for i in 0..$n {
+                    sum = if self[i] == 0 { sum } else { 0 }
+                        + self[i].leading_zeros();
+                }
+                Self::wrapping_from_u32(sum)
             }
 
-            fn vadd(self, b: Self) -> Self {
-                todo!()
+            fn vctz(mut self) -> Self {
+                let mut sum = 0;
+                let mut done = false;
+                for i in 0..$n {
+                    sum += if !done { self[i].trailing_zeros() } else { 0 };
+                    done |= self[i] == 0;
+                }
+                Self::wrapping_from_u32(sum)
             }
 
-            fn vsub(self, b: Self) -> Self {
-                todo!()
+            fn vpopcnt(mut self) -> Self {
+                let mut sum = 0;
+                for i in 0..$n {
+                    sum += self[i].count_ones();
+                }
+                Self::wrapping_from_u32(sum)
             }
 
-            fn vmul(self, b: Self) -> Self {
-                todo!()
+            fn vadd(mut self, other: Self) -> Self {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                Self::from_biguint(a + b)
             }
 
-            fn vand(self, b: Self) -> Self {
-                todo!()
+            fn vsub(mut self, other: Self) -> Self {
+                let a = self.into_bigint();
+                let b = other.into_bigint();
+                Self::from_bigint(a - b)
             }
 
-            fn vandnot(self, b: Self) -> Self {
-                todo!()
+            fn vmul(self, other: Self) -> Self {
+                let a = self.into_biguint();
+                let b = other.into_biguint();
+                Self::from_biguint(a * b)
             }
 
-            fn vor(self, b: Self) -> Self {
-                todo!()
+            fn vand(mut self, other: Self) -> Self {
+                for i in 0..$n {
+                    self[i] = self[i] & other[i];
+                }
+                self
             }
 
-            fn vxor(self, b: Self) -> Self {
-                todo!()
+            fn vandnot(mut self, other: Self) -> Self {
+                for i in 0..$n {
+                    self[i] = self[i] & !other[i];
+                }
+                self
             }
 
-            fn vshl(self, b: Self) -> Self {
-                todo!()
+            fn vor(mut self, other: Self) -> Self {
+                for i in 0..$n {
+                    self[i] = self[i] | other[i];
+                }
+                self
             }
 
-            fn vshr_u(self, b: Self) -> Self {
-                todo!()
+            fn vxor(mut self, other: Self) -> Self {
+                for i in 0..$n {
+                    self[i] = self[i] ^ other[i];
+                }
+                self
             }
 
-            fn vshr_s(self, b: Self) -> Self {
-                todo!()
+            fn vshl(self, other: Self) -> Self {
+                let a = self.into_biguint();
+                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
+                Self::from_biguint(a << b)
             }
 
-            fn vrotl(self, b: Self) -> Self {
-                todo!()
+            fn vshr_u(self, other: Self) -> Self {
+                let a = self.into_biguint();
+                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
+                Self::from_biguint(a >> b)
             }
 
-            fn vrotr(self, b: Self) -> Self {
-                todo!()
+            fn vshr_s(self, other: Self) -> Self {
+                let a = self.into_bigint();
+                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
+                Self::from_bigint(a >> b)
+            }
+
+            fn vrotl(self, other: Self) -> Self {
+                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
+                let width = 8*size_of::<$t>() as u32;
+                let sh_lo = b % width;
+                let sh_hi = (b / width) as usize;
+
+                let mut words = [0; $n];
+                for i in 0..$n {
+                    words[i] = (self[i.wrapping_sub(sh_hi  ) % $n] << sh_lo)
+                        | (self[i.wrapping_sub(sh_hi+1) % $n]
+                             .checked_shr(width - sh_lo).unwrap_or(0));
+                }
+
+                words
+            }
+
+            fn vrotr(mut self, other: Self) -> Self {
+                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
+                let width = 8*size_of::<$t>() as u32;
+                let sh_lo = b % width;
+                let sh_hi = (b / width) as usize;
+
+                let mut words = [0; $n];
+                for i in 0..$n {
+                    words[i] = (self[i.wrapping_add(sh_hi  ) % $n] >> sh_lo)
+                        | (self[i.wrapping_add(sh_hi+1) % $n]
+                            .checked_shl(width - sh_lo).unwrap_or(0));
+                }
+
+                words
             }
         }
     };
@@ -741,8 +933,8 @@ vop_impl! { u16{i16}   }
 vop_impl! { u32{i32}   }
 vop_impl! { u64{i64}   }
 vop_impl! { u128{i128} }
-vop_impl! { [u128;2]   }
-vop_impl! { [u128;4]   }
+vop_impl! { [u32;8]    }
+vop_impl! { [u32;16]   }
 
 
 /// Wrapper for handling different type access to state
@@ -854,14 +1046,14 @@ macro_rules! ex {
     // extract (le)
     (|$s:ident| extract $i:expr, $a:ident: $t:ty, $b:ident: $u:ty) => {{
         let b = $s.reg::<$u>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.extract(usize::from($i)).unwrap();
+        *$s.reg_mut::<$t>($a)? = b.extract(u32::from($i)).unwrap();
     }};
 
     // replace (le)
     (|$s:ident| replace $i:expr, $a:ident: $t:ty, $b:ident: $u:ty) => {{
         let a = $s.reg::<$t>($a)?;
         let b = $s.reg::<$u>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.replace(usize::from($i), *b).unwrap();
+        *$s.reg_mut::<$t>($a)? = a.replace(u32::from($i), *b).unwrap();
     }};
 
     // select
@@ -886,7 +1078,7 @@ macro_rules! ex {
         let a = $s.reg::<$t>($a)?;
         let b = $s.reg::<$t>($b)?;
         *$s.reg_mut::<$t>($a)? = p.xmap(|x: $u| {
-            match x.try_into_usize() {
+            match x.try_into_u32() {
                 Some(i) if i < $n              => a.extract(i).unwrap(),
                 Some(i) if i >= $n && i < 2*$n => b.extract(i-$n).unwrap(),
                 _                              => <$u>::ZERO,
@@ -1029,8 +1221,7 @@ macro_rules! ex {
         let _ = transmute::<$t, [$u;$n]>;
         let b = $s.reg::<$t>($b)?;
         *$s.reg_mut::<$t>($a)? = b.xfilter(|x: $t| {
-            // note the non-shortcutting and here
-            x.xfold(|p, x: $u| p & (x != <$u>::ZERO), true)
+            x.xfold(|p, x: $u| p && x != <$u>::ZERO, true)
         });
     }};
 
@@ -1346,8 +1537,8 @@ pub fn exec<'a>(
             (2, 0, 0x001) => ex!{|s| arg a: u32,      b: u32      },
             (3, 0, 0x001) => ex!{|s| arg a: u64,      b: u64      },
             (4, 0, 0x001) => ex!{|s| arg a: u128,     b: u128     },
-            (5, 0, 0x001) => ex!{|s| arg a: [u128;2], b: [u128;2] },
-            (6, 0, 0x001) => ex!{|s| arg a: [u128;4], b: [u128;4] },
+            (5, 0, 0x001) => ex!{|s| arg a: [u32;8],  b: [u32;8]  },
+            (6, 0, 0x001) => ex!{|s| arg a: [u32;16], b: [u32;16] },
 
             // ret (convert from ne and exit)
             (0, 0, 0x002) => ex!{|s| ret a: u8,       b: u8       },
@@ -1355,8 +1546,8 @@ pub fn exec<'a>(
             (2, 0, 0x002) => ex!{|s| ret a: u32,      b: u32      },
             (3, 0, 0x002) => ex!{|s| ret a: u64,      b: u64      },
             (4, 0, 0x002) => ex!{|s| ret a: u128,     b: u128     },
-            (5, 0, 0x002) => ex!{|s| ret a: [u128;2], b: [u128;2] },
-            (6, 0, 0x002) => ex!{|s| ret a: [u128;4], b: [u128;4] },
+            (5, 0, 0x002) => ex!{|s| ret a: [u32;8],  b: [u32;8]  },
+            (6, 0, 0x002) => ex!{|s| ret a: [u32;16], b: [u32;16] },
 
 
             //// special instructions ////
@@ -1382,20 +1573,20 @@ pub fn exec<'a>(
             (4, 3, 0x100..=0x101) => ex!{|s| extract l, a: u16,      b: u128     },
             (4, 4, 0x100..=0x100) => ex!{|s| extract l, a: u8,       b: u128     },
 
-            (5, 0, 0x100..=0x11f) => ex!{|s| extract l, a: [u128;2], b: [u128;2] },
-            (5, 1, 0x100..=0x10f) => ex!{|s| extract l, a: u128,     b: [u128;2] },
-            (5, 2, 0x100..=0x107) => ex!{|s| extract l, a: u64,      b: [u128;2] },
-            (5, 3, 0x100..=0x103) => ex!{|s| extract l, a: u32,      b: [u128;2] },
-            (5, 4, 0x100..=0x101) => ex!{|s| extract l, a: u16,      b: [u128;2] },
-            (5, 5, 0x100..=0x100) => ex!{|s| extract l, a: u8,       b: [u128;2] },
+            (5, 0, 0x100..=0x11f) => ex!{|s| extract l, a: [u32;8],  b: [u32;8]  },
+            (5, 1, 0x100..=0x10f) => ex!{|s| extract l, a: u128,     b: [u32;8]  },
+            (5, 2, 0x100..=0x107) => ex!{|s| extract l, a: u64,      b: [u32;8]  },
+            (5, 3, 0x100..=0x103) => ex!{|s| extract l, a: u32,      b: [u32;8]  },
+            (5, 4, 0x100..=0x101) => ex!{|s| extract l, a: u16,      b: [u32;8]  },
+            (5, 5, 0x100..=0x100) => ex!{|s| extract l, a: u8,       b: [u32;8]  },
 
-            (6, 0, 0x100..=0x13f) => ex!{|s| extract l, a: [u128;4], b: [u128;4] },
-            (6, 1, 0x100..=0x11f) => ex!{|s| extract l, a: [u128;2], b: [u128;4] },
-            (6, 2, 0x100..=0x10f) => ex!{|s| extract l, a: u128,     b: [u128;4] },
-            (6, 3, 0x100..=0x107) => ex!{|s| extract l, a: u64,      b: [u128;4] },
-            (6, 4, 0x100..=0x103) => ex!{|s| extract l, a: u32,      b: [u128;4] },
-            (6, 5, 0x100..=0x101) => ex!{|s| extract l, a: u16,      b: [u128;4] },
-            (6, 6, 0x100..=0x100) => ex!{|s| extract l, a: u8,       b: [u128;4] },
+            (6, 0, 0x100..=0x13f) => ex!{|s| extract l, a: [u32;16], b: [u32;16] },
+            (6, 1, 0x100..=0x11f) => ex!{|s| extract l, a: [u32;8],  b: [u32;16] },
+            (6, 2, 0x100..=0x10f) => ex!{|s| extract l, a: u128,     b: [u32;16] },
+            (6, 3, 0x100..=0x107) => ex!{|s| extract l, a: u64,      b: [u32;16] },
+            (6, 4, 0x100..=0x103) => ex!{|s| extract l, a: u32,      b: [u32;16] },
+            (6, 5, 0x100..=0x101) => ex!{|s| extract l, a: u16,      b: [u32;16] },
+            (6, 6, 0x100..=0x100) => ex!{|s| extract l, a: u8,       b: [u32;16] },
 
             // replace
             (0, 0, 0x180..=0x180) => ex!{|s| replace l, a: u8,       b: u8       },
@@ -1418,20 +1609,20 @@ pub fn exec<'a>(
             (4, 3, 0x180..=0x181) => ex!{|s| replace l, a: u128,     b: u16      },
             (4, 4, 0x180..=0x180) => ex!{|s| replace l, a: u128,     b: u8       },
 
-            (5, 0, 0x180..=0x19f) => ex!{|s| replace l, a: [u128;2], b: [u128;2] },
-            (5, 1, 0x180..=0x18f) => ex!{|s| replace l, a: [u128;2], b: u128     },
-            (5, 2, 0x180..=0x187) => ex!{|s| replace l, a: [u128;2], b: u64      },
-            (5, 3, 0x180..=0x183) => ex!{|s| replace l, a: [u128;2], b: u32      },
-            (5, 4, 0x180..=0x181) => ex!{|s| replace l, a: [u128;2], b: u16      },
-            (5, 5, 0x180..=0x180) => ex!{|s| replace l, a: [u128;2], b: u8       },
+            (5, 0, 0x180..=0x19f) => ex!{|s| replace l, a: [u32;8],  b: [u32;8]  },
+            (5, 1, 0x180..=0x18f) => ex!{|s| replace l, a: [u32;8],  b: u128     },
+            (5, 2, 0x180..=0x187) => ex!{|s| replace l, a: [u32;8],  b: u64      },
+            (5, 3, 0x180..=0x183) => ex!{|s| replace l, a: [u32;8],  b: u32      },
+            (5, 4, 0x180..=0x181) => ex!{|s| replace l, a: [u32;8],  b: u16      },
+            (5, 5, 0x180..=0x180) => ex!{|s| replace l, a: [u32;8],  b: u8       },
 
-            (6, 0, 0x180..=0x1bf) => ex!{|s| replace l, a: [u128;4], b: [u128;4] },
-            (6, 1, 0x180..=0x19f) => ex!{|s| replace l, a: [u128;4], b: [u128;2] },
-            (6, 2, 0x180..=0x18f) => ex!{|s| replace l, a: [u128;4], b: u128     },
-            (6, 3, 0x180..=0x187) => ex!{|s| replace l, a: [u128;4], b: u64      },
-            (6, 4, 0x180..=0x183) => ex!{|s| replace l, a: [u128;4], b: u32      },
-            (6, 5, 0x180..=0x181) => ex!{|s| replace l, a: [u128;2], b: u16      },
-            (6, 6, 0x180..=0x180) => ex!{|s| replace l, a: [u128;4], b: u8       },
+            (6, 0, 0x180..=0x1bf) => ex!{|s| replace l, a: [u32;16], b: [u32;16] },
+            (6, 1, 0x180..=0x19f) => ex!{|s| replace l, a: [u32;16], b: [u32;8]  },
+            (6, 2, 0x180..=0x18f) => ex!{|s| replace l, a: [u32;16], b: u128     },
+            (6, 3, 0x180..=0x187) => ex!{|s| replace l, a: [u32;16], b: u64      },
+            (6, 4, 0x180..=0x183) => ex!{|s| replace l, a: [u32;16], b: u32      },
+            (6, 5, 0x180..=0x181) => ex!{|s| replace l, a: [u32;8],  b: u16      },
+            (6, 6, 0x180..=0x180) => ex!{|s| replace l, a: [u32;16], b: u8       },
 
             // select
             (0, 0, 0x200..=0x2ff) => ex!{|s| select p, a: u8,       b: u8;1       },
@@ -1454,20 +1645,20 @@ pub fn exec<'a>(
             (4, 3, 0x200..=0x2ff) => ex!{|s| select p, a: u128,     b: u16;8      },
             (4, 4, 0x200..=0x2ff) => ex!{|s| select p, a: u128,     b: u8;16      },
 
-            (5, 0, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;2], b: u128;2     },
-            (5, 2, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;2], b: u64;4      },
-            (5, 3, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;2], b: u32;8      },
-            (5, 4, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;2], b: u16;16     },
-            (5, 5, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;2], b: u8;32      },
+            (5, 0, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u128;2     },
+            (5, 2, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u64;4      },
+            (5, 3, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u32;8      },
+            (5, 4, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u16;16     },
+            (5, 5, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;4], b: u128;4     },
-            (6, 3, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;4], b: u64;8      },
-            (6, 4, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;4], b: u32;16     },
-            (6, 5, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;4], b: u16;32     },
-            (6, 6, 0x200..=0x2ff) => ex!{|s| select p, a: [u128;4], b: u8;64      },
+            (6, 0, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u128;4     },
+            (6, 3, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u64;8      },
+            (6, 4, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u32;16     },
+            (6, 5, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u16;32     },
+            (6, 6, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u8;64      },
 
             // shuffle
             (0, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u8,       b: u8;1       },
@@ -1490,20 +1681,20 @@ pub fn exec<'a>(
             (4, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u128,     b: u16;8      },
             (4, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u128,     b: u8;16      },
 
-            (5, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;2], b: u128;2     },
-            (5, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;2], b: u64;4      },
-            (5, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;2], b: u32;8      },
-            (5, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;2], b: u16;16     },
-            (5, 5, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;2], b: u8;32      },
+            (5, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u128;2     },
+            (5, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u64;4      },
+            (5, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u32;8      },
+            (5, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u16;16     },
+            (5, 5, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;4], b: u128;4     },
-            (6, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;4], b: u64;8      },
-            (6, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;4], b: u32;16     },
-            (6, 5, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;4], b: u16;32     },
-            (6, 6, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u128;4], b: u8;64      },
+            (6, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u128;4     },
+            (6, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u64;8      },
+            (6, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u32;16     },
+            (6, 5, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u16;32     },
+            (6, 6, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u8;64      },
 
 
             //// conversion instructions ////
@@ -1529,20 +1720,20 @@ pub fn exec<'a>(
             (4, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: u128,     pc: u16      },
             (4, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: u128,     pc: u8       },
 
-            (5, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;2], pc: [u128;2] },
-            (5, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;2], pc: u128     },
-            (5, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;2], pc: u64      },
-            (5, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;2], pc: u32      },
-            (5, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;2], pc: u16      },
-            (5, 5, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;2], pc: u8       },
+            (5, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: [u32;8]  },
+            (5, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u128     },
+            (5, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u64      },
+            (5, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u32      },
+            (5, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u16      },
+            (5, 5, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u8       },
 
-            (6, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;4], pc: [u128;4] },
-            (6, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;4], pc: [u128;2] },
-            (6, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;4], pc: u128     },
-            (6, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;4], pc: u64      },
-            (6, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;4], pc: u32      },
-            (6, 5, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;4], pc: u16      },
-            (6, 6, 0x003) => ex!{|s, bytecode| extend_const_u a: [u128;4], pc: u8       },
+            (6, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: [u32;16] },
+            (6, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: [u32;8]  },
+            (6, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u128     },
+            (6, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u64      },
+            (6, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u32      },
+            (6, 5, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u16      },
+            (6, 6, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u8       },
 
             // extend_const_s
             (0, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: u8,       pc: u8       },
@@ -1565,20 +1756,20 @@ pub fn exec<'a>(
             (4, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: u128,     pc: u16      },
             (4, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: u128,     pc: u8       },
 
-            (5, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;2], pc: [u128;2] },
-            (5, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;2], pc: u128     },
-            (5, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;2], pc: u64      },
-            (5, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;2], pc: u32      },
-            (5, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;2], pc: u16      },
-            (5, 5, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;2], pc: u8       },
+            (5, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: [u32;8]  },
+            (5, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u128     },
+            (5, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u64      },
+            (5, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u32      },
+            (5, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u16      },
+            (5, 5, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u8       },
 
-            (6, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;4], pc: [u128;4] },
-            (6, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;4], pc: [u128;2] },
-            (6, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;4], pc: u128     },
-            (6, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;4], pc: u64      },
-            (6, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;4], pc: u32      },
-            (6, 5, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;4], pc: u16      },
-            (6, 6, 0x004) => ex!{|s, bytecode| extend_const_s a: [u128;4], pc: u8       },
+            (6, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: [u32;16] },
+            (6, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: [u32;8]  },
+            (6, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u128     },
+            (6, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u64      },
+            (6, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u32      },
+            (6, 5, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u16      },
+            (6, 6, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u8       },
 
             // splat_const
             (0, 0, 0x005) => ex!{|s, bytecode| splat_const a: u8,       pc: u8       },
@@ -1601,20 +1792,20 @@ pub fn exec<'a>(
             (4, 3, 0x005) => ex!{|s, bytecode| splat_const a: u128,     pc: u16      },
             (4, 4, 0x005) => ex!{|s, bytecode| splat_const a: u128,     pc: u8       },
 
-            (5, 0, 0x005) => ex!{|s, bytecode| splat_const a: [u128;2], pc: [u128;2] },
-            (5, 1, 0x005) => ex!{|s, bytecode| splat_const a: [u128;2], pc: u128     },
-            (5, 2, 0x005) => ex!{|s, bytecode| splat_const a: [u128;2], pc: u64      },
-            (5, 3, 0x005) => ex!{|s, bytecode| splat_const a: [u128;2], pc: u32      },
-            (5, 4, 0x005) => ex!{|s, bytecode| splat_const a: [u128;2], pc: u16      },
-            (5, 5, 0x005) => ex!{|s, bytecode| splat_const a: [u128;2], pc: u8       },
+            (5, 0, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: [u32;8]  },
+            (5, 1, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u128     },
+            (5, 2, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u64      },
+            (5, 3, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u32      },
+            (5, 4, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u16      },
+            (5, 5, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u8       },
 
-            (6, 0, 0x005) => ex!{|s, bytecode| splat_const a: [u128;4], pc: [u128;4] },
-            (6, 1, 0x005) => ex!{|s, bytecode| splat_const a: [u128;4], pc: [u128;2] },
-            (6, 2, 0x005) => ex!{|s, bytecode| splat_const a: [u128;4], pc: u128     },
-            (6, 3, 0x005) => ex!{|s, bytecode| splat_const a: [u128;4], pc: u64      },
-            (6, 4, 0x005) => ex!{|s, bytecode| splat_const a: [u128;4], pc: u32      },
-            (6, 5, 0x005) => ex!{|s, bytecode| splat_const a: [u128;4], pc: u16      },
-            (6, 6, 0x005) => ex!{|s, bytecode| splat_const a: [u128;4], pc: u8       },
+            (6, 0, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: [u32;16] },
+            (6, 1, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: [u32;8]  },
+            (6, 2, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u128     },
+            (6, 3, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u64      },
+            (6, 4, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u32      },
+            (6, 5, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u16      },
+            (6, 6, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u8       },
 
             // extend_const8_u
             (0, 0, 0x006) => ex!{|s| extend_const8_u a: u8,       b },
@@ -1622,8 +1813,8 @@ pub fn exec<'a>(
             (2, 2, 0x006) => ex!{|s| extend_const8_u a: u32,      b },
             (3, 3, 0x006) => ex!{|s| extend_const8_u a: u64,      b },
             (4, 4, 0x006) => ex!{|s| extend_const8_u a: u128,     b },
-            (5, 5, 0x006) => ex!{|s| extend_const8_u a: [u128;2], b },
-            (6, 6, 0x006) => ex!{|s| extend_const8_u a: [u128;4], b },
+            (5, 5, 0x006) => ex!{|s| extend_const8_u a: [u32;8],  b },
+            (6, 6, 0x006) => ex!{|s| extend_const8_u a: [u32;16], b },
 
             // extend_const8_s
             (0, 0, 0x007) => ex!{|s| extend_const8_s a: u8,       b },
@@ -1631,8 +1822,8 @@ pub fn exec<'a>(
             (2, 2, 0x007) => ex!{|s| extend_const8_s a: u32,      b },
             (3, 3, 0x007) => ex!{|s| extend_const8_s a: u64,      b },
             (4, 4, 0x007) => ex!{|s| extend_const8_s a: u128,     b },
-            (5, 5, 0x007) => ex!{|s| extend_const8_s a: [u128;2], b },
-            (6, 6, 0x007) => ex!{|s| extend_const8_s a: [u128;4], b },
+            (5, 5, 0x007) => ex!{|s| extend_const8_s a: [u32;8],  b },
+            (6, 6, 0x007) => ex!{|s| extend_const8_s a: [u32;16], b },
 
             // splat_const8
             (0, 0, 0x008) => ex!{|s| splat_const8 a: u8,       b },
@@ -1640,8 +1831,8 @@ pub fn exec<'a>(
             (2, 2, 0x008) => ex!{|s| splat_const8 a: u32,      b },
             (3, 3, 0x008) => ex!{|s| splat_const8 a: u64,      b },
             (4, 4, 0x008) => ex!{|s| splat_const8 a: u128,     b },
-            (5, 5, 0x008) => ex!{|s| splat_const8 a: [u128;2], b },
-            (6, 6, 0x008) => ex!{|s| splat_const8 a: [u128;4], b },
+            (5, 5, 0x008) => ex!{|s| splat_const8 a: [u32;8],  b },
+            (6, 6, 0x008) => ex!{|s| splat_const8 a: [u32;16], b },
 
             // extend_u
             (0, 0, 0x009) => ex!{|s| extend_u a: u8,       b: u8       },
@@ -1664,20 +1855,20 @@ pub fn exec<'a>(
             (4, 3, 0x009) => ex!{|s| extend_u a: u128,     b: u16      },
             (4, 4, 0x009) => ex!{|s| extend_u a: u128,     b: u8       },
 
-            (5, 0, 0x009) => ex!{|s| extend_u a: [u128;2], b: [u128;2] },
-            (5, 1, 0x009) => ex!{|s| extend_u a: [u128;2], b: u128     },
-            (5, 2, 0x009) => ex!{|s| extend_u a: [u128;2], b: u64      },
-            (5, 3, 0x009) => ex!{|s| extend_u a: [u128;2], b: u32      },
-            (5, 4, 0x009) => ex!{|s| extend_u a: [u128;2], b: u16      },
-            (5, 5, 0x009) => ex!{|s| extend_u a: [u128;2], b: u8       },
+            (5, 0, 0x009) => ex!{|s| extend_u a: [u32;8],  b: [u32;8]  },
+            (5, 1, 0x009) => ex!{|s| extend_u a: [u32;8],  b: u128     },
+            (5, 2, 0x009) => ex!{|s| extend_u a: [u32;8],  b: u64      },
+            (5, 3, 0x009) => ex!{|s| extend_u a: [u32;8],  b: u32      },
+            (5, 4, 0x009) => ex!{|s| extend_u a: [u32;8],  b: u16      },
+            (5, 5, 0x009) => ex!{|s| extend_u a: [u32;8],  b: u8       },
 
-            (6, 0, 0x009) => ex!{|s| extend_u a: [u128;4], b: [u128;4] },
-            (6, 1, 0x009) => ex!{|s| extend_u a: [u128;4], b: [u128;2] },
-            (6, 2, 0x009) => ex!{|s| extend_u a: [u128;4], b: u128     },
-            (6, 3, 0x009) => ex!{|s| extend_u a: [u128;4], b: u64      },
-            (6, 4, 0x009) => ex!{|s| extend_u a: [u128;4], b: u32      },
-            (6, 5, 0x009) => ex!{|s| extend_u a: [u128;4], b: u16      },
-            (6, 6, 0x009) => ex!{|s| extend_u a: [u128;4], b: u8       },
+            (6, 0, 0x009) => ex!{|s| extend_u a: [u32;16], b: [u32;16] },
+            (6, 1, 0x009) => ex!{|s| extend_u a: [u32;16], b: [u32;8]  },
+            (6, 2, 0x009) => ex!{|s| extend_u a: [u32;16], b: u128     },
+            (6, 3, 0x009) => ex!{|s| extend_u a: [u32;16], b: u64      },
+            (6, 4, 0x009) => ex!{|s| extend_u a: [u32;16], b: u32      },
+            (6, 5, 0x009) => ex!{|s| extend_u a: [u32;16], b: u16      },
+            (6, 6, 0x009) => ex!{|s| extend_u a: [u32;16], b: u8       },
 
             // extend_s
             (0, 0, 0x00a) => ex!{|s| extend_s a: u8,       b: u8       },
@@ -1700,20 +1891,20 @@ pub fn exec<'a>(
             (4, 3, 0x00a) => ex!{|s| extend_s a: u128,     b: u16      },
             (4, 4, 0x00a) => ex!{|s| extend_s a: u128,     b: u8       },
 
-            (5, 0, 0x00a) => ex!{|s| extend_s a: [u128;2], b: [u128;2] },
-            (5, 1, 0x00a) => ex!{|s| extend_s a: [u128;2], b: u128     },
-            (5, 2, 0x00a) => ex!{|s| extend_s a: [u128;2], b: u64      },
-            (5, 3, 0x00a) => ex!{|s| extend_s a: [u128;2], b: u32      },
-            (5, 4, 0x00a) => ex!{|s| extend_s a: [u128;2], b: u16      },
-            (5, 5, 0x00a) => ex!{|s| extend_s a: [u128;2], b: u8       },
+            (5, 0, 0x00a) => ex!{|s| extend_s a: [u32;8],  b: [u32;8]  },
+            (5, 1, 0x00a) => ex!{|s| extend_s a: [u32;8],  b: u128     },
+            (5, 2, 0x00a) => ex!{|s| extend_s a: [u32;8],  b: u64      },
+            (5, 3, 0x00a) => ex!{|s| extend_s a: [u32;8],  b: u32      },
+            (5, 4, 0x00a) => ex!{|s| extend_s a: [u32;8],  b: u16      },
+            (5, 5, 0x00a) => ex!{|s| extend_s a: [u32;8],  b: u8       },
 
-            (6, 0, 0x00a) => ex!{|s| extend_s a: [u128;4], b: [u128;4] },
-            (6, 1, 0x00a) => ex!{|s| extend_s a: [u128;4], b: [u128;2] },
-            (6, 2, 0x00a) => ex!{|s| extend_s a: [u128;4], b: u128     },
-            (6, 3, 0x00a) => ex!{|s| extend_s a: [u128;4], b: u64      },
-            (6, 4, 0x00a) => ex!{|s| extend_s a: [u128;4], b: u32      },
-            (6, 5, 0x00a) => ex!{|s| extend_s a: [u128;4], b: u16      },
-            (6, 6, 0x00a) => ex!{|s| extend_s a: [u128;4], b: u8       },
+            (6, 0, 0x00a) => ex!{|s| extend_s a: [u32;16], b: [u32;16] },
+            (6, 1, 0x00a) => ex!{|s| extend_s a: [u32;16], b: [u32;8]  },
+            (6, 2, 0x00a) => ex!{|s| extend_s a: [u32;16], b: u128     },
+            (6, 3, 0x00a) => ex!{|s| extend_s a: [u32;16], b: u64      },
+            (6, 4, 0x00a) => ex!{|s| extend_s a: [u32;16], b: u32      },
+            (6, 5, 0x00a) => ex!{|s| extend_s a: [u32;16], b: u16      },
+            (6, 6, 0x00a) => ex!{|s| extend_s a: [u32;16], b: u8       },
 
             // splat
             (0, 0, 0x00b) => ex!{|s| splat a: u8,       b: u8       },
@@ -1736,20 +1927,20 @@ pub fn exec<'a>(
             (4, 3, 0x00b) => ex!{|s| splat a: u128,     b: u16      },
             (4, 4, 0x00b) => ex!{|s| splat a: u128,     b: u8       },
 
-            (5, 0, 0x00b) => ex!{|s| splat a: [u128;2], b: [u128;2] },
-            (5, 1, 0x00b) => ex!{|s| splat a: [u128;2], b: u128     },
-            (5, 2, 0x00b) => ex!{|s| splat a: [u128;2], b: u64      },
-            (5, 3, 0x00b) => ex!{|s| splat a: [u128;2], b: u32      },
-            (5, 4, 0x00b) => ex!{|s| splat a: [u128;2], b: u16      },
-            (5, 5, 0x00b) => ex!{|s| splat a: [u128;2], b: u8       },
+            (5, 0, 0x00b) => ex!{|s| splat a: [u32;8],  b: [u32;8]  },
+            (5, 1, 0x00b) => ex!{|s| splat a: [u32;8],  b: u128     },
+            (5, 2, 0x00b) => ex!{|s| splat a: [u32;8],  b: u64      },
+            (5, 3, 0x00b) => ex!{|s| splat a: [u32;8],  b: u32      },
+            (5, 4, 0x00b) => ex!{|s| splat a: [u32;8],  b: u16      },
+            (5, 5, 0x00b) => ex!{|s| splat a: [u32;8],  b: u8       },
 
-            (6, 0, 0x00b) => ex!{|s| splat a: [u128;4], b: [u128;4] },
-            (6, 1, 0x00b) => ex!{|s| splat a: [u128;4], b: [u128;2] },
-            (6, 2, 0x00b) => ex!{|s| splat a: [u128;4], b: u128     },
-            (6, 3, 0x00b) => ex!{|s| splat a: [u128;4], b: u64      },
-            (6, 4, 0x00b) => ex!{|s| splat a: [u128;4], b: u32      },
-            (6, 5, 0x00b) => ex!{|s| splat a: [u128;4], b: u16      },
-            (6, 6, 0x00b) => ex!{|s| splat a: [u128;4], b: u8       },
+            (6, 0, 0x00b) => ex!{|s| splat a: [u32;16], b: [u32;16] },
+            (6, 1, 0x00b) => ex!{|s| splat a: [u32;16], b: [u32;8]  },
+            (6, 2, 0x00b) => ex!{|s| splat a: [u32;16], b: u128     },
+            (6, 3, 0x00b) => ex!{|s| splat a: [u32;16], b: u64      },
+            (6, 4, 0x00b) => ex!{|s| splat a: [u32;16], b: u32      },
+            (6, 5, 0x00b) => ex!{|s| splat a: [u32;16], b: u16      },
+            (6, 6, 0x00b) => ex!{|s| splat a: [u32;16], b: u8       },
 
 
             //// comparison instructions ////
@@ -1760,8 +1951,8 @@ pub fn exec<'a>(
             (2, 0..=2, 0x00c) => ex!{|s| none a: u32,      b: u32      },
             (3, 0..=3, 0x00c) => ex!{|s| none a: u64,      b: u64      },
             (4, 0..=4, 0x00c) => ex!{|s| none a: u128,     b: u128     },
-            (5, 0..=5, 0x00c) => ex!{|s| none a: [u128;2], b: [u128;2] },
-            (6, 0..=6, 0x00c) => ex!{|s| none a: [u128;4], b: [u128;4] },
+            (5, 0..=5, 0x00c) => ex!{|s| none a: [u32;8],  b: [u32;8]  },
+            (6, 0..=6, 0x00c) => ex!{|s| none a: [u32;16], b: [u32;16] },
 
             // any
             (0, 0..=0, 0x00d) => ex!{|s| any a: u8,       b: u8       },
@@ -1769,8 +1960,8 @@ pub fn exec<'a>(
             (2, 0..=2, 0x00d) => ex!{|s| any a: u32,      b: u32      },
             (3, 0..=3, 0x00d) => ex!{|s| any a: u64,      b: u64      },
             (4, 0..=4, 0x00d) => ex!{|s| any a: u128,     b: u128     },
-            (5, 0..=5, 0x00d) => ex!{|s| any a: [u128;2], b: [u128;2] },
-            (6, 0..=6, 0x00d) => ex!{|s| any a: [u128;4], b: [u128;4] },
+            (5, 0..=5, 0x00d) => ex!{|s| any a: [u32;8],  b: [u32;8]  },
+            (6, 0..=6, 0x00d) => ex!{|s| any a: [u32;16], b: [u32;16] },
 
             // all
             (0, 0, 0x00e) => ex!{|s| all a: u8,       b: u8;1       },
@@ -1793,20 +1984,20 @@ pub fn exec<'a>(
             (4, 3, 0x00e) => ex!{|s| all a: u128,     b: u16;8      },
             (4, 4, 0x00e) => ex!{|s| all a: u128,     b: u8;16      },
 
-            (5, 0, 0x00e) => ex!{|s| all a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x00e) => ex!{|s| all a: [u128;2], b: u128;2     },
-            (5, 2, 0x00e) => ex!{|s| all a: [u128;2], b: u64;4      },
-            (5, 3, 0x00e) => ex!{|s| all a: [u128;2], b: u32;8      },
-            (5, 4, 0x00e) => ex!{|s| all a: [u128;2], b: u16;16     },
-            (5, 5, 0x00e) => ex!{|s| all a: [u128;2], b: u8;32      },
+            (5, 0, 0x00e) => ex!{|s| all a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x00e) => ex!{|s| all a: [u32;8],  b: u128;2     },
+            (5, 2, 0x00e) => ex!{|s| all a: [u32;8],  b: u64;4      },
+            (5, 3, 0x00e) => ex!{|s| all a: [u32;8],  b: u32;8      },
+            (5, 4, 0x00e) => ex!{|s| all a: [u32;8],  b: u16;16     },
+            (5, 5, 0x00e) => ex!{|s| all a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x00e) => ex!{|s| all a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x00e) => ex!{|s| all a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x00e) => ex!{|s| all a: [u128;4], b: u128;4     },
-            (6, 3, 0x00e) => ex!{|s| all a: [u128;4], b: u64;8      },
-            (6, 4, 0x00e) => ex!{|s| all a: [u128;4], b: u32;16     },
-            (6, 5, 0x00e) => ex!{|s| all a: [u128;4], b: u16;32     },
-            (6, 6, 0x00e) => ex!{|s| all a: [u128;4], b: u8;64      },
+            (6, 0, 0x00e) => ex!{|s| all a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x00e) => ex!{|s| all a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x00e) => ex!{|s| all a: [u32;16], b: u128;4     },
+            (6, 3, 0x00e) => ex!{|s| all a: [u32;16], b: u64;8      },
+            (6, 4, 0x00e) => ex!{|s| all a: [u32;16], b: u32;16     },
+            (6, 5, 0x00e) => ex!{|s| all a: [u32;16], b: u16;32     },
+            (6, 6, 0x00e) => ex!{|s| all a: [u32;16], b: u8;64      },
 
             // eq
             (0, 0, 0x00f) => ex!{|s| eq a: u8,       b: u8;1       },
@@ -1829,20 +2020,20 @@ pub fn exec<'a>(
             (4, 3, 0x00f) => ex!{|s| eq a: u128,     b: u16;8      },
             (4, 4, 0x00f) => ex!{|s| eq a: u128,     b: u8;16      },
 
-            (5, 0, 0x00f) => ex!{|s| eq a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x00f) => ex!{|s| eq a: [u128;2], b: u128;2     },
-            (5, 2, 0x00f) => ex!{|s| eq a: [u128;2], b: u64;4      },
-            (5, 3, 0x00f) => ex!{|s| eq a: [u128;2], b: u32;8      },
-            (5, 4, 0x00f) => ex!{|s| eq a: [u128;2], b: u16;16     },
-            (5, 5, 0x00f) => ex!{|s| eq a: [u128;2], b: u8;32      },
+            (5, 0, 0x00f) => ex!{|s| eq a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x00f) => ex!{|s| eq a: [u32;8],  b: u128;2     },
+            (5, 2, 0x00f) => ex!{|s| eq a: [u32;8],  b: u64;4      },
+            (5, 3, 0x00f) => ex!{|s| eq a: [u32;8],  b: u32;8      },
+            (5, 4, 0x00f) => ex!{|s| eq a: [u32;8],  b: u16;16     },
+            (5, 5, 0x00f) => ex!{|s| eq a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x00f) => ex!{|s| eq a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x00f) => ex!{|s| eq a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x00f) => ex!{|s| eq a: [u128;4], b: u128;4     },
-            (6, 3, 0x00f) => ex!{|s| eq a: [u128;4], b: u64;8      },
-            (6, 4, 0x00f) => ex!{|s| eq a: [u128;4], b: u32;16     },
-            (6, 5, 0x00f) => ex!{|s| eq a: [u128;4], b: u16;32     },
-            (6, 6, 0x00f) => ex!{|s| eq a: [u128;4], b: u8;64      },
+            (6, 0, 0x00f) => ex!{|s| eq a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x00f) => ex!{|s| eq a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x00f) => ex!{|s| eq a: [u32;16], b: u128;4     },
+            (6, 3, 0x00f) => ex!{|s| eq a: [u32;16], b: u64;8      },
+            (6, 4, 0x00f) => ex!{|s| eq a: [u32;16], b: u32;16     },
+            (6, 5, 0x00f) => ex!{|s| eq a: [u32;16], b: u16;32     },
+            (6, 6, 0x00f) => ex!{|s| eq a: [u32;16], b: u8;64      },
 
             // ne
             (0, 0, 0x010) => ex!{|s| ne a: u8,       b: u8;1       },
@@ -1865,20 +2056,20 @@ pub fn exec<'a>(
             (4, 3, 0x010) => ex!{|s| ne a: u128,     b: u16;8      },
             (4, 4, 0x010) => ex!{|s| ne a: u128,     b: u8;16      },
 
-            (5, 0, 0x010) => ex!{|s| ne a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x010) => ex!{|s| ne a: [u128;2], b: u128;2     },
-            (5, 2, 0x010) => ex!{|s| ne a: [u128;2], b: u64;4      },
-            (5, 3, 0x010) => ex!{|s| ne a: [u128;2], b: u32;8      },
-            (5, 4, 0x010) => ex!{|s| ne a: [u128;2], b: u16;16     },
-            (5, 5, 0x010) => ex!{|s| ne a: [u128;2], b: u8;32      },
+            (5, 0, 0x010) => ex!{|s| ne a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x010) => ex!{|s| ne a: [u32;8],  b: u128;2     },
+            (5, 2, 0x010) => ex!{|s| ne a: [u32;8],  b: u64;4      },
+            (5, 3, 0x010) => ex!{|s| ne a: [u32;8],  b: u32;8      },
+            (5, 4, 0x010) => ex!{|s| ne a: [u32;8],  b: u16;16     },
+            (5, 5, 0x010) => ex!{|s| ne a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x010) => ex!{|s| ne a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x010) => ex!{|s| ne a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x010) => ex!{|s| ne a: [u128;4], b: u128;4     },
-            (6, 3, 0x010) => ex!{|s| ne a: [u128;4], b: u64;8      },
-            (6, 4, 0x010) => ex!{|s| ne a: [u128;4], b: u32;16     },
-            (6, 5, 0x010) => ex!{|s| ne a: [u128;4], b: u16;32     },
-            (6, 6, 0x010) => ex!{|s| ne a: [u128;4], b: u8;64      },
+            (6, 0, 0x010) => ex!{|s| ne a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x010) => ex!{|s| ne a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x010) => ex!{|s| ne a: [u32;16], b: u128;4     },
+            (6, 3, 0x010) => ex!{|s| ne a: [u32;16], b: u64;8      },
+            (6, 4, 0x010) => ex!{|s| ne a: [u32;16], b: u32;16     },
+            (6, 5, 0x010) => ex!{|s| ne a: [u32;16], b: u16;32     },
+            (6, 6, 0x010) => ex!{|s| ne a: [u32;16], b: u8;64      },
 
             // lt_u
             (0, 0, 0x011) => ex!{|s| lt_u a: u8,       b: u8;1       },
@@ -1901,20 +2092,20 @@ pub fn exec<'a>(
             (4, 3, 0x011) => ex!{|s| lt_u a: u128,     b: u16;8      },
             (4, 4, 0x011) => ex!{|s| lt_u a: u128,     b: u8;16      },
 
-            (5, 0, 0x011) => ex!{|s| lt_u a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x011) => ex!{|s| lt_u a: [u128;2], b: u128;2     },
-            (5, 2, 0x011) => ex!{|s| lt_u a: [u128;2], b: u64;4      },
-            (5, 3, 0x011) => ex!{|s| lt_u a: [u128;2], b: u32;8      },
-            (5, 4, 0x011) => ex!{|s| lt_u a: [u128;2], b: u16;16     },
-            (5, 5, 0x011) => ex!{|s| lt_u a: [u128;2], b: u8;32      },
+            (5, 0, 0x011) => ex!{|s| lt_u a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x011) => ex!{|s| lt_u a: [u32;8],  b: u128;2     },
+            (5, 2, 0x011) => ex!{|s| lt_u a: [u32;8],  b: u64;4      },
+            (5, 3, 0x011) => ex!{|s| lt_u a: [u32;8],  b: u32;8      },
+            (5, 4, 0x011) => ex!{|s| lt_u a: [u32;8],  b: u16;16     },
+            (5, 5, 0x011) => ex!{|s| lt_u a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x011) => ex!{|s| lt_u a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x011) => ex!{|s| lt_u a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x011) => ex!{|s| lt_u a: [u128;4], b: u128;4     },
-            (6, 3, 0x011) => ex!{|s| lt_u a: [u128;4], b: u64;8      },
-            (6, 4, 0x011) => ex!{|s| lt_u a: [u128;4], b: u32;16     },
-            (6, 5, 0x011) => ex!{|s| lt_u a: [u128;4], b: u16;32     },
-            (6, 6, 0x011) => ex!{|s| lt_u a: [u128;4], b: u8;64      },
+            (6, 0, 0x011) => ex!{|s| lt_u a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x011) => ex!{|s| lt_u a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x011) => ex!{|s| lt_u a: [u32;16], b: u128;4     },
+            (6, 3, 0x011) => ex!{|s| lt_u a: [u32;16], b: u64;8      },
+            (6, 4, 0x011) => ex!{|s| lt_u a: [u32;16], b: u32;16     },
+            (6, 5, 0x011) => ex!{|s| lt_u a: [u32;16], b: u16;32     },
+            (6, 6, 0x011) => ex!{|s| lt_u a: [u32;16], b: u8;64      },
 
             // lt_s
             (0, 0, 0x012) => ex!{|s| lt_s a: u8,       b: u8;1       },
@@ -1937,20 +2128,20 @@ pub fn exec<'a>(
             (4, 3, 0x012) => ex!{|s| lt_s a: u128,     b: u16;8      },
             (4, 4, 0x012) => ex!{|s| lt_s a: u128,     b: u8;16      },
 
-            (5, 0, 0x012) => ex!{|s| lt_s a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x012) => ex!{|s| lt_s a: [u128;2], b: u128;2     },
-            (5, 2, 0x012) => ex!{|s| lt_s a: [u128;2], b: u64;4      },
-            (5, 3, 0x012) => ex!{|s| lt_s a: [u128;2], b: u32;8      },
-            (5, 4, 0x012) => ex!{|s| lt_s a: [u128;2], b: u16;16     },
-            (5, 5, 0x012) => ex!{|s| lt_s a: [u128;2], b: u8;32      },
+            (5, 0, 0x012) => ex!{|s| lt_s a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x012) => ex!{|s| lt_s a: [u32;8],  b: u128;2     },
+            (5, 2, 0x012) => ex!{|s| lt_s a: [u32;8],  b: u64;4      },
+            (5, 3, 0x012) => ex!{|s| lt_s a: [u32;8],  b: u32;8      },
+            (5, 4, 0x012) => ex!{|s| lt_s a: [u32;8],  b: u16;16     },
+            (5, 5, 0x012) => ex!{|s| lt_s a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x012) => ex!{|s| lt_s a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x012) => ex!{|s| lt_s a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x012) => ex!{|s| lt_s a: [u128;4], b: u128;4     },
-            (6, 3, 0x012) => ex!{|s| lt_s a: [u128;4], b: u64;8      },
-            (6, 4, 0x012) => ex!{|s| lt_s a: [u128;4], b: u32;16     },
-            (6, 5, 0x012) => ex!{|s| lt_s a: [u128;4], b: u16;32     },
-            (6, 6, 0x012) => ex!{|s| lt_s a: [u128;4], b: u8;64      },
+            (6, 0, 0x012) => ex!{|s| lt_s a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x012) => ex!{|s| lt_s a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x012) => ex!{|s| lt_s a: [u32;16], b: u128;4     },
+            (6, 3, 0x012) => ex!{|s| lt_s a: [u32;16], b: u64;8      },
+            (6, 4, 0x012) => ex!{|s| lt_s a: [u32;16], b: u32;16     },
+            (6, 5, 0x012) => ex!{|s| lt_s a: [u32;16], b: u16;32     },
+            (6, 6, 0x012) => ex!{|s| lt_s a: [u32;16], b: u8;64      },
 
             // gt_u
             (0, 0, 0x013) => ex!{|s| gt_u a: u8,       b: u8;1       },
@@ -1973,20 +2164,20 @@ pub fn exec<'a>(
             (4, 3, 0x013) => ex!{|s| gt_u a: u128,     b: u16;8      },
             (4, 4, 0x013) => ex!{|s| gt_u a: u128,     b: u8;16      },
 
-            (5, 0, 0x013) => ex!{|s| gt_u a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x013) => ex!{|s| gt_u a: [u128;2], b: u128;2     },
-            (5, 2, 0x013) => ex!{|s| gt_u a: [u128;2], b: u64;4      },
-            (5, 3, 0x013) => ex!{|s| gt_u a: [u128;2], b: u32;8      },
-            (5, 4, 0x013) => ex!{|s| gt_u a: [u128;2], b: u16;16     },
-            (5, 5, 0x013) => ex!{|s| gt_u a: [u128;2], b: u8;32      },
+            (5, 0, 0x013) => ex!{|s| gt_u a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x013) => ex!{|s| gt_u a: [u32;8],  b: u128;2     },
+            (5, 2, 0x013) => ex!{|s| gt_u a: [u32;8],  b: u64;4      },
+            (5, 3, 0x013) => ex!{|s| gt_u a: [u32;8],  b: u32;8      },
+            (5, 4, 0x013) => ex!{|s| gt_u a: [u32;8],  b: u16;16     },
+            (5, 5, 0x013) => ex!{|s| gt_u a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x013) => ex!{|s| gt_u a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x013) => ex!{|s| gt_u a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x013) => ex!{|s| gt_u a: [u128;4], b: u128;4     },
-            (6, 3, 0x013) => ex!{|s| gt_u a: [u128;4], b: u64;8      },
-            (6, 4, 0x013) => ex!{|s| gt_u a: [u128;4], b: u32;16     },
-            (6, 5, 0x013) => ex!{|s| gt_u a: [u128;4], b: u16;32     },
-            (6, 6, 0x013) => ex!{|s| gt_u a: [u128;4], b: u8;64      },
+            (6, 0, 0x013) => ex!{|s| gt_u a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x013) => ex!{|s| gt_u a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x013) => ex!{|s| gt_u a: [u32;16], b: u128;4     },
+            (6, 3, 0x013) => ex!{|s| gt_u a: [u32;16], b: u64;8      },
+            (6, 4, 0x013) => ex!{|s| gt_u a: [u32;16], b: u32;16     },
+            (6, 5, 0x013) => ex!{|s| gt_u a: [u32;16], b: u16;32     },
+            (6, 6, 0x013) => ex!{|s| gt_u a: [u32;16], b: u8;64      },
 
             // gt_s
             (0, 0, 0x014) => ex!{|s| gt_s a: u8,       b: u8;1       },
@@ -2009,20 +2200,20 @@ pub fn exec<'a>(
             (4, 3, 0x014) => ex!{|s| gt_s a: u128,     b: u16;8      },
             (4, 4, 0x014) => ex!{|s| gt_s a: u128,     b: u8;16      },
 
-            (5, 0, 0x014) => ex!{|s| gt_s a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x014) => ex!{|s| gt_s a: [u128;2], b: u128;2     },
-            (5, 2, 0x014) => ex!{|s| gt_s a: [u128;2], b: u64;4      },
-            (5, 3, 0x014) => ex!{|s| gt_s a: [u128;2], b: u32;8      },
-            (5, 4, 0x014) => ex!{|s| gt_s a: [u128;2], b: u16;16     },
-            (5, 5, 0x014) => ex!{|s| gt_s a: [u128;2], b: u8;32      },
+            (5, 0, 0x014) => ex!{|s| gt_s a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x014) => ex!{|s| gt_s a: [u32;8],  b: u128;2     },
+            (5, 2, 0x014) => ex!{|s| gt_s a: [u32;8],  b: u64;4      },
+            (5, 3, 0x014) => ex!{|s| gt_s a: [u32;8],  b: u32;8      },
+            (5, 4, 0x014) => ex!{|s| gt_s a: [u32;8],  b: u16;16     },
+            (5, 5, 0x014) => ex!{|s| gt_s a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x014) => ex!{|s| gt_s a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x014) => ex!{|s| gt_s a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x014) => ex!{|s| gt_s a: [u128;4], b: u128;4     },
-            (6, 3, 0x014) => ex!{|s| gt_s a: [u128;4], b: u64;8      },
-            (6, 4, 0x014) => ex!{|s| gt_s a: [u128;4], b: u32;16     },
-            (6, 5, 0x014) => ex!{|s| gt_s a: [u128;4], b: u16;32     },
-            (6, 6, 0x014) => ex!{|s| gt_s a: [u128;4], b: u8;64      },
+            (6, 0, 0x014) => ex!{|s| gt_s a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x014) => ex!{|s| gt_s a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x014) => ex!{|s| gt_s a: [u32;16], b: u128;4     },
+            (6, 3, 0x014) => ex!{|s| gt_s a: [u32;16], b: u64;8      },
+            (6, 4, 0x014) => ex!{|s| gt_s a: [u32;16], b: u32;16     },
+            (6, 5, 0x014) => ex!{|s| gt_s a: [u32;16], b: u16;32     },
+            (6, 6, 0x014) => ex!{|s| gt_s a: [u32;16], b: u8;64      },
 
             // le_u
             (0, 0, 0x015) => ex!{|s| le_u a: u8,       b: u8;1       },
@@ -2045,20 +2236,20 @@ pub fn exec<'a>(
             (4, 3, 0x015) => ex!{|s| le_u a: u128,     b: u16;8      },
             (4, 4, 0x015) => ex!{|s| le_u a: u128,     b: u8;16      },
 
-            (5, 0, 0x015) => ex!{|s| le_u a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x015) => ex!{|s| le_u a: [u128;2], b: u128;2     },
-            (5, 2, 0x015) => ex!{|s| le_u a: [u128;2], b: u64;4      },
-            (5, 3, 0x015) => ex!{|s| le_u a: [u128;2], b: u32;8      },
-            (5, 4, 0x015) => ex!{|s| le_u a: [u128;2], b: u16;16     },
-            (5, 5, 0x015) => ex!{|s| le_u a: [u128;2], b: u8;32      },
+            (5, 0, 0x015) => ex!{|s| le_u a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x015) => ex!{|s| le_u a: [u32;8],  b: u128;2     },
+            (5, 2, 0x015) => ex!{|s| le_u a: [u32;8],  b: u64;4      },
+            (5, 3, 0x015) => ex!{|s| le_u a: [u32;8],  b: u32;8      },
+            (5, 4, 0x015) => ex!{|s| le_u a: [u32;8],  b: u16;16     },
+            (5, 5, 0x015) => ex!{|s| le_u a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x015) => ex!{|s| le_u a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x015) => ex!{|s| le_u a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x015) => ex!{|s| le_u a: [u128;4], b: u128;4     },
-            (6, 3, 0x015) => ex!{|s| le_u a: [u128;4], b: u64;8      },
-            (6, 4, 0x015) => ex!{|s| le_u a: [u128;4], b: u32;16     },
-            (6, 5, 0x015) => ex!{|s| le_u a: [u128;4], b: u16;32     },
-            (6, 6, 0x015) => ex!{|s| le_u a: [u128;4], b: u8;64      },
+            (6, 0, 0x015) => ex!{|s| le_u a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x015) => ex!{|s| le_u a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x015) => ex!{|s| le_u a: [u32;16], b: u128;4     },
+            (6, 3, 0x015) => ex!{|s| le_u a: [u32;16], b: u64;8      },
+            (6, 4, 0x015) => ex!{|s| le_u a: [u32;16], b: u32;16     },
+            (6, 5, 0x015) => ex!{|s| le_u a: [u32;16], b: u16;32     },
+            (6, 6, 0x015) => ex!{|s| le_u a: [u32;16], b: u8;64      },
 
             // le_s
             (0, 0, 0x016) => ex!{|s| le_s a: u8,       b: u8;1       },
@@ -2081,20 +2272,20 @@ pub fn exec<'a>(
             (4, 3, 0x016) => ex!{|s| le_s a: u128,     b: u16;8      },
             (4, 4, 0x016) => ex!{|s| le_s a: u128,     b: u8;16      },
 
-            (5, 0, 0x016) => ex!{|s| le_s a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x016) => ex!{|s| le_s a: [u128;2], b: u128;2     },
-            (5, 2, 0x016) => ex!{|s| le_s a: [u128;2], b: u64;4      },
-            (5, 3, 0x016) => ex!{|s| le_s a: [u128;2], b: u32;8      },
-            (5, 4, 0x016) => ex!{|s| le_s a: [u128;2], b: u16;16     },
-            (5, 5, 0x016) => ex!{|s| le_s a: [u128;2], b: u8;32      },
+            (5, 0, 0x016) => ex!{|s| le_s a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x016) => ex!{|s| le_s a: [u32;8],  b: u128;2     },
+            (5, 2, 0x016) => ex!{|s| le_s a: [u32;8],  b: u64;4      },
+            (5, 3, 0x016) => ex!{|s| le_s a: [u32;8],  b: u32;8      },
+            (5, 4, 0x016) => ex!{|s| le_s a: [u32;8],  b: u16;16     },
+            (5, 5, 0x016) => ex!{|s| le_s a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x016) => ex!{|s| le_s a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x016) => ex!{|s| le_s a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x016) => ex!{|s| le_s a: [u128;4], b: u128;4     },
-            (6, 3, 0x016) => ex!{|s| le_s a: [u128;4], b: u64;8      },
-            (6, 4, 0x016) => ex!{|s| le_s a: [u128;4], b: u32;16     },
-            (6, 5, 0x016) => ex!{|s| le_s a: [u128;4], b: u16;32     },
-            (6, 6, 0x016) => ex!{|s| le_s a: [u128;4], b: u8;64      },
+            (6, 0, 0x016) => ex!{|s| le_s a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x016) => ex!{|s| le_s a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x016) => ex!{|s| le_s a: [u32;16], b: u128;4     },
+            (6, 3, 0x016) => ex!{|s| le_s a: [u32;16], b: u64;8      },
+            (6, 4, 0x016) => ex!{|s| le_s a: [u32;16], b: u32;16     },
+            (6, 5, 0x016) => ex!{|s| le_s a: [u32;16], b: u16;32     },
+            (6, 6, 0x016) => ex!{|s| le_s a: [u32;16], b: u8;64      },
 
             // ge_u
             (0, 0, 0x017) => ex!{|s| ge_u a: u8,       b: u8;1       },
@@ -2117,20 +2308,20 @@ pub fn exec<'a>(
             (4, 3, 0x017) => ex!{|s| ge_u a: u128,     b: u16;8      },
             (4, 4, 0x017) => ex!{|s| ge_u a: u128,     b: u8;16      },
 
-            (5, 0, 0x017) => ex!{|s| ge_u a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x017) => ex!{|s| ge_u a: [u128;2], b: u128;2     },
-            (5, 2, 0x017) => ex!{|s| ge_u a: [u128;2], b: u64;4      },
-            (5, 3, 0x017) => ex!{|s| ge_u a: [u128;2], b: u32;8      },
-            (5, 4, 0x017) => ex!{|s| ge_u a: [u128;2], b: u16;16     },
-            (5, 5, 0x017) => ex!{|s| ge_u a: [u128;2], b: u8;32      },
+            (5, 0, 0x017) => ex!{|s| ge_u a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x017) => ex!{|s| ge_u a: [u32;8],  b: u128;2     },
+            (5, 2, 0x017) => ex!{|s| ge_u a: [u32;8],  b: u64;4      },
+            (5, 3, 0x017) => ex!{|s| ge_u a: [u32;8],  b: u32;8      },
+            (5, 4, 0x017) => ex!{|s| ge_u a: [u32;8],  b: u16;16     },
+            (5, 5, 0x017) => ex!{|s| ge_u a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x017) => ex!{|s| ge_u a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x017) => ex!{|s| ge_u a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x017) => ex!{|s| ge_u a: [u128;4], b: u128;4     },
-            (6, 3, 0x017) => ex!{|s| ge_u a: [u128;4], b: u64;8      },
-            (6, 4, 0x017) => ex!{|s| ge_u a: [u128;4], b: u32;16     },
-            (6, 5, 0x017) => ex!{|s| ge_u a: [u128;4], b: u16;32     },
-            (6, 6, 0x017) => ex!{|s| ge_u a: [u128;4], b: u8;64      },
+            (6, 0, 0x017) => ex!{|s| ge_u a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x017) => ex!{|s| ge_u a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x017) => ex!{|s| ge_u a: [u32;16], b: u128;4     },
+            (6, 3, 0x017) => ex!{|s| ge_u a: [u32;16], b: u64;8      },
+            (6, 4, 0x017) => ex!{|s| ge_u a: [u32;16], b: u32;16     },
+            (6, 5, 0x017) => ex!{|s| ge_u a: [u32;16], b: u16;32     },
+            (6, 6, 0x017) => ex!{|s| ge_u a: [u32;16], b: u8;64      },
 
             // ge_s
             (0, 0, 0x018) => ex!{|s| ge_s a: u8,       b: u8;1       },
@@ -2153,20 +2344,20 @@ pub fn exec<'a>(
             (4, 3, 0x018) => ex!{|s| ge_s a: u128,     b: u16;8      },
             (4, 4, 0x018) => ex!{|s| ge_s a: u128,     b: u8;16      },
 
-            (5, 0, 0x018) => ex!{|s| ge_s a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x018) => ex!{|s| ge_s a: [u128;2], b: u128;2     },
-            (5, 2, 0x018) => ex!{|s| ge_s a: [u128;2], b: u64;4      },
-            (5, 3, 0x018) => ex!{|s| ge_s a: [u128;2], b: u32;8      },
-            (5, 4, 0x018) => ex!{|s| ge_s a: [u128;2], b: u16;16     },
-            (5, 5, 0x018) => ex!{|s| ge_s a: [u128;2], b: u8;32      },
+            (5, 0, 0x018) => ex!{|s| ge_s a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x018) => ex!{|s| ge_s a: [u32;8],  b: u128;2     },
+            (5, 2, 0x018) => ex!{|s| ge_s a: [u32;8],  b: u64;4      },
+            (5, 3, 0x018) => ex!{|s| ge_s a: [u32;8],  b: u32;8      },
+            (5, 4, 0x018) => ex!{|s| ge_s a: [u32;8],  b: u16;16     },
+            (5, 5, 0x018) => ex!{|s| ge_s a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x018) => ex!{|s| ge_s a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x018) => ex!{|s| ge_s a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x018) => ex!{|s| ge_s a: [u128;4], b: u128;4     },
-            (6, 3, 0x018) => ex!{|s| ge_s a: [u128;4], b: u64;8      },
-            (6, 4, 0x018) => ex!{|s| ge_s a: [u128;4], b: u32;16     },
-            (6, 5, 0x018) => ex!{|s| ge_s a: [u128;4], b: u16;32     },
-            (6, 6, 0x018) => ex!{|s| ge_s a: [u128;4], b: u8;64      },
+            (6, 0, 0x018) => ex!{|s| ge_s a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x018) => ex!{|s| ge_s a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x018) => ex!{|s| ge_s a: [u32;16], b: u128;4     },
+            (6, 3, 0x018) => ex!{|s| ge_s a: [u32;16], b: u64;8      },
+            (6, 4, 0x018) => ex!{|s| ge_s a: [u32;16], b: u32;16     },
+            (6, 5, 0x018) => ex!{|s| ge_s a: [u32;16], b: u16;32     },
+            (6, 6, 0x018) => ex!{|s| ge_s a: [u32;16], b: u8;64      },
 
             // min_u
             (0, 0, 0x019) => ex!{|s| min_u a: u8,       b: u8;1       },
@@ -2189,20 +2380,20 @@ pub fn exec<'a>(
             (4, 3, 0x019) => ex!{|s| min_u a: u128,     b: u16;8      },
             (4, 4, 0x019) => ex!{|s| min_u a: u128,     b: u8;16      },
 
-            (5, 0, 0x019) => ex!{|s| min_u a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x019) => ex!{|s| min_u a: [u128;2], b: u128;2     },
-            (5, 2, 0x019) => ex!{|s| min_u a: [u128;2], b: u64;4      },
-            (5, 3, 0x019) => ex!{|s| min_u a: [u128;2], b: u32;8      },
-            (5, 4, 0x019) => ex!{|s| min_u a: [u128;2], b: u16;16     },
-            (5, 5, 0x019) => ex!{|s| min_u a: [u128;2], b: u8;32      },
+            (5, 0, 0x019) => ex!{|s| min_u a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x019) => ex!{|s| min_u a: [u32;8],  b: u128;2     },
+            (5, 2, 0x019) => ex!{|s| min_u a: [u32;8],  b: u64;4      },
+            (5, 3, 0x019) => ex!{|s| min_u a: [u32;8],  b: u32;8      },
+            (5, 4, 0x019) => ex!{|s| min_u a: [u32;8],  b: u16;16     },
+            (5, 5, 0x019) => ex!{|s| min_u a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x019) => ex!{|s| min_u a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x019) => ex!{|s| min_u a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x019) => ex!{|s| min_u a: [u128;4], b: u128;4     },
-            (6, 3, 0x019) => ex!{|s| min_u a: [u128;4], b: u64;8      },
-            (6, 4, 0x019) => ex!{|s| min_u a: [u128;4], b: u32;16     },
-            (6, 5, 0x019) => ex!{|s| min_u a: [u128;4], b: u16;32     },
-            (6, 6, 0x019) => ex!{|s| min_u a: [u128;4], b: u8;64      },
+            (6, 0, 0x019) => ex!{|s| min_u a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x019) => ex!{|s| min_u a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x019) => ex!{|s| min_u a: [u32;16], b: u128;4     },
+            (6, 3, 0x019) => ex!{|s| min_u a: [u32;16], b: u64;8      },
+            (6, 4, 0x019) => ex!{|s| min_u a: [u32;16], b: u32;16     },
+            (6, 5, 0x019) => ex!{|s| min_u a: [u32;16], b: u16;32     },
+            (6, 6, 0x019) => ex!{|s| min_u a: [u32;16], b: u8;64      },
 
             // min_s
             (0, 0, 0x01a) => ex!{|s| min_s a: u8,       b: u8;1       },
@@ -2225,20 +2416,20 @@ pub fn exec<'a>(
             (4, 3, 0x01a) => ex!{|s| min_s a: u128,     b: u16;8      },
             (4, 4, 0x01a) => ex!{|s| min_s a: u128,     b: u8;16      },
 
-            (5, 0, 0x01a) => ex!{|s| min_s a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x01a) => ex!{|s| min_s a: [u128;2], b: u128;2     },
-            (5, 2, 0x01a) => ex!{|s| min_s a: [u128;2], b: u64;4      },
-            (5, 3, 0x01a) => ex!{|s| min_s a: [u128;2], b: u32;8      },
-            (5, 4, 0x01a) => ex!{|s| min_s a: [u128;2], b: u16;16     },
-            (5, 5, 0x01a) => ex!{|s| min_s a: [u128;2], b: u8;32      },
+            (5, 0, 0x01a) => ex!{|s| min_s a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x01a) => ex!{|s| min_s a: [u32;8],  b: u128;2     },
+            (5, 2, 0x01a) => ex!{|s| min_s a: [u32;8],  b: u64;4      },
+            (5, 3, 0x01a) => ex!{|s| min_s a: [u32;8],  b: u32;8      },
+            (5, 4, 0x01a) => ex!{|s| min_s a: [u32;8],  b: u16;16     },
+            (5, 5, 0x01a) => ex!{|s| min_s a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x01a) => ex!{|s| min_s a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x01a) => ex!{|s| min_s a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x01a) => ex!{|s| min_s a: [u128;4], b: u128;4     },
-            (6, 3, 0x01a) => ex!{|s| min_s a: [u128;4], b: u64;8      },
-            (6, 4, 0x01a) => ex!{|s| min_s a: [u128;4], b: u32;16     },
-            (6, 5, 0x01a) => ex!{|s| min_s a: [u128;4], b: u16;32     },
-            (6, 6, 0x01a) => ex!{|s| min_s a: [u128;4], b: u8;64      },
+            (6, 0, 0x01a) => ex!{|s| min_s a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x01a) => ex!{|s| min_s a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x01a) => ex!{|s| min_s a: [u32;16], b: u128;4     },
+            (6, 3, 0x01a) => ex!{|s| min_s a: [u32;16], b: u64;8      },
+            (6, 4, 0x01a) => ex!{|s| min_s a: [u32;16], b: u32;16     },
+            (6, 5, 0x01a) => ex!{|s| min_s a: [u32;16], b: u16;32     },
+            (6, 6, 0x01a) => ex!{|s| min_s a: [u32;16], b: u8;64      },
 
             // max_u
             (0, 0, 0x01b) => ex!{|s| max_u a: u8,       b: u8;1       },
@@ -2261,20 +2452,20 @@ pub fn exec<'a>(
             (4, 3, 0x01b) => ex!{|s| max_u a: u128,     b: u16;8      },
             (4, 4, 0x01b) => ex!{|s| max_u a: u128,     b: u8;16      },
 
-            (5, 0, 0x01b) => ex!{|s| max_u a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x01b) => ex!{|s| max_u a: [u128;2], b: u128;2     },
-            (5, 2, 0x01b) => ex!{|s| max_u a: [u128;2], b: u64;4      },
-            (5, 3, 0x01b) => ex!{|s| max_u a: [u128;2], b: u32;8      },
-            (5, 4, 0x01b) => ex!{|s| max_u a: [u128;2], b: u16;16     },
-            (5, 5, 0x01b) => ex!{|s| max_u a: [u128;2], b: u8;32      },
+            (5, 0, 0x01b) => ex!{|s| max_u a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x01b) => ex!{|s| max_u a: [u32;8],  b: u128;2     },
+            (5, 2, 0x01b) => ex!{|s| max_u a: [u32;8],  b: u64;4      },
+            (5, 3, 0x01b) => ex!{|s| max_u a: [u32;8],  b: u32;8      },
+            (5, 4, 0x01b) => ex!{|s| max_u a: [u32;8],  b: u16;16     },
+            (5, 5, 0x01b) => ex!{|s| max_u a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x01b) => ex!{|s| max_u a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x01b) => ex!{|s| max_u a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x01b) => ex!{|s| max_u a: [u128;4], b: u128;4     },
-            (6, 3, 0x01b) => ex!{|s| max_u a: [u128;4], b: u64;8      },
-            (6, 4, 0x01b) => ex!{|s| max_u a: [u128;4], b: u32;16     },
-            (6, 5, 0x01b) => ex!{|s| max_u a: [u128;4], b: u16;32     },
-            (6, 6, 0x01b) => ex!{|s| max_u a: [u128;4], b: u8;64      },
+            (6, 0, 0x01b) => ex!{|s| max_u a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x01b) => ex!{|s| max_u a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x01b) => ex!{|s| max_u a: [u32;16], b: u128;4     },
+            (6, 3, 0x01b) => ex!{|s| max_u a: [u32;16], b: u64;8      },
+            (6, 4, 0x01b) => ex!{|s| max_u a: [u32;16], b: u32;16     },
+            (6, 5, 0x01b) => ex!{|s| max_u a: [u32;16], b: u16;32     },
+            (6, 6, 0x01b) => ex!{|s| max_u a: [u32;16], b: u8;64      },
 
             // max_s
             (0, 0, 0x01c) => ex!{|s| max_s a: u8,       b: u8;1       },
@@ -2297,20 +2488,20 @@ pub fn exec<'a>(
             (4, 3, 0x01c) => ex!{|s| max_s a: u128,     b: u16;8      },
             (4, 4, 0x01c) => ex!{|s| max_s a: u128,     b: u8;16      },
 
-            (5, 0, 0x01c) => ex!{|s| max_s a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x01c) => ex!{|s| max_s a: [u128;2], b: u128;2     },
-            (5, 2, 0x01c) => ex!{|s| max_s a: [u128;2], b: u64;4      },
-            (5, 3, 0x01c) => ex!{|s| max_s a: [u128;2], b: u32;8      },
-            (5, 4, 0x01c) => ex!{|s| max_s a: [u128;2], b: u16;16     },
-            (5, 5, 0x01c) => ex!{|s| max_s a: [u128;2], b: u8;32      },
+            (5, 0, 0x01c) => ex!{|s| max_s a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x01c) => ex!{|s| max_s a: [u32;8],  b: u128;2     },
+            (5, 2, 0x01c) => ex!{|s| max_s a: [u32;8],  b: u64;4      },
+            (5, 3, 0x01c) => ex!{|s| max_s a: [u32;8],  b: u32;8      },
+            (5, 4, 0x01c) => ex!{|s| max_s a: [u32;8],  b: u16;16     },
+            (5, 5, 0x01c) => ex!{|s| max_s a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x01c) => ex!{|s| max_s a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x01c) => ex!{|s| max_s a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x01c) => ex!{|s| max_s a: [u128;4], b: u128;4     },
-            (6, 3, 0x01c) => ex!{|s| max_s a: [u128;4], b: u64;8      },
-            (6, 4, 0x01c) => ex!{|s| max_s a: [u128;4], b: u32;16     },
-            (6, 5, 0x01c) => ex!{|s| max_s a: [u128;4], b: u16;32     },
-            (6, 6, 0x01c) => ex!{|s| max_s a: [u128;4], b: u8;64      },
+            (6, 0, 0x01c) => ex!{|s| max_s a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x01c) => ex!{|s| max_s a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x01c) => ex!{|s| max_s a: [u32;16], b: u128;4     },
+            (6, 3, 0x01c) => ex!{|s| max_s a: [u32;16], b: u64;8      },
+            (6, 4, 0x01c) => ex!{|s| max_s a: [u32;16], b: u32;16     },
+            (6, 5, 0x01c) => ex!{|s| max_s a: [u32;16], b: u16;32     },
+            (6, 6, 0x01c) => ex!{|s| max_s a: [u32;16], b: u8;64      },
 
 
             //// integer instructions ////
@@ -2336,20 +2527,20 @@ pub fn exec<'a>(
             (4, 3, 0x01d) => ex!{|s| neg a: u128,     b: u16;8      },
             (4, 4, 0x01d) => ex!{|s| neg a: u128,     b: u8;16      },
 
-            (5, 0, 0x01d) => ex!{|s| neg a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x01d) => ex!{|s| neg a: [u128;2], b: u128;2     },
-            (5, 2, 0x01d) => ex!{|s| neg a: [u128;2], b: u64;4      },
-            (5, 3, 0x01d) => ex!{|s| neg a: [u128;2], b: u32;8      },
-            (5, 4, 0x01d) => ex!{|s| neg a: [u128;2], b: u16;16     },
-            (5, 5, 0x01d) => ex!{|s| neg a: [u128;2], b: u8;32      },
+            (5, 0, 0x01d) => ex!{|s| neg a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x01d) => ex!{|s| neg a: [u32;8],  b: u128;2     },
+            (5, 2, 0x01d) => ex!{|s| neg a: [u32;8],  b: u64;4      },
+            (5, 3, 0x01d) => ex!{|s| neg a: [u32;8],  b: u32;8      },
+            (5, 4, 0x01d) => ex!{|s| neg a: [u32;8],  b: u16;16     },
+            (5, 5, 0x01d) => ex!{|s| neg a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x01d) => ex!{|s| neg a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x01d) => ex!{|s| neg a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x01d) => ex!{|s| neg a: [u128;4], b: u128;4     },
-            (6, 3, 0x01d) => ex!{|s| neg a: [u128;4], b: u64;8      },
-            (6, 4, 0x01d) => ex!{|s| neg a: [u128;4], b: u32;16     },
-            (6, 5, 0x01d) => ex!{|s| neg a: [u128;4], b: u16;32     },
-            (6, 6, 0x01d) => ex!{|s| neg a: [u128;4], b: u8;64      },
+            (6, 0, 0x01d) => ex!{|s| neg a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x01d) => ex!{|s| neg a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x01d) => ex!{|s| neg a: [u32;16], b: u128;4     },
+            (6, 3, 0x01d) => ex!{|s| neg a: [u32;16], b: u64;8      },
+            (6, 4, 0x01d) => ex!{|s| neg a: [u32;16], b: u32;16     },
+            (6, 5, 0x01d) => ex!{|s| neg a: [u32;16], b: u16;32     },
+            (6, 6, 0x01d) => ex!{|s| neg a: [u32;16], b: u8;64      },
 
             // abs
             (0, 0, 0x01e) => ex!{|s| abs a: u8,       b: u8;1       },
@@ -2372,20 +2563,20 @@ pub fn exec<'a>(
             (4, 3, 0x01e) => ex!{|s| abs a: u128,     b: u16;8      },
             (4, 4, 0x01e) => ex!{|s| abs a: u128,     b: u8;16      },
 
-            (5, 0, 0x01e) => ex!{|s| abs a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x01e) => ex!{|s| abs a: [u128;2], b: u128;2     },
-            (5, 2, 0x01e) => ex!{|s| abs a: [u128;2], b: u64;4      },
-            (5, 3, 0x01e) => ex!{|s| abs a: [u128;2], b: u32;8      },
-            (5, 4, 0x01e) => ex!{|s| abs a: [u128;2], b: u16;16     },
-            (5, 5, 0x01e) => ex!{|s| abs a: [u128;2], b: u8;32      },
+            (5, 0, 0x01e) => ex!{|s| abs a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x01e) => ex!{|s| abs a: [u32;8],  b: u128;2     },
+            (5, 2, 0x01e) => ex!{|s| abs a: [u32;8],  b: u64;4      },
+            (5, 3, 0x01e) => ex!{|s| abs a: [u32;8],  b: u32;8      },
+            (5, 4, 0x01e) => ex!{|s| abs a: [u32;8],  b: u16;16     },
+            (5, 5, 0x01e) => ex!{|s| abs a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x01e) => ex!{|s| abs a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x01e) => ex!{|s| abs a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x01e) => ex!{|s| abs a: [u128;4], b: u128;4     },
-            (6, 3, 0x01e) => ex!{|s| abs a: [u128;4], b: u64;8      },
-            (6, 4, 0x01e) => ex!{|s| abs a: [u128;4], b: u32;16     },
-            (6, 5, 0x01e) => ex!{|s| abs a: [u128;4], b: u16;32     },
-            (6, 6, 0x01e) => ex!{|s| abs a: [u128;4], b: u8;64      },
+            (6, 0, 0x01e) => ex!{|s| abs a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x01e) => ex!{|s| abs a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x01e) => ex!{|s| abs a: [u32;16], b: u128;4     },
+            (6, 3, 0x01e) => ex!{|s| abs a: [u32;16], b: u64;8      },
+            (6, 4, 0x01e) => ex!{|s| abs a: [u32;16], b: u32;16     },
+            (6, 5, 0x01e) => ex!{|s| abs a: [u32;16], b: u16;32     },
+            (6, 6, 0x01e) => ex!{|s| abs a: [u32;16], b: u8;64      },
 
             // not
             (0, 0..=0, 0x01f) => ex!{|s| not a: u8,       b: u8       },
@@ -2393,8 +2584,8 @@ pub fn exec<'a>(
             (2, 0..=2, 0x01f) => ex!{|s| not a: u32,      b: u32      },
             (3, 0..=3, 0x01f) => ex!{|s| not a: u64,      b: u64      },
             (4, 0..=4, 0x01f) => ex!{|s| not a: u128,     b: u128     },
-            (5, 0..=5, 0x01f) => ex!{|s| not a: [u128;2], b: [u128;2] },
-            (6, 0..=6, 0x01f) => ex!{|s| not a: [u128;4], b: [u128;4] },
+            (5, 0..=5, 0x01f) => ex!{|s| not a: [u32;8],  b: [u32;8]  },
+            (6, 0..=6, 0x01f) => ex!{|s| not a: [u32;16], b: [u32;16] },
 
             // clz
             (0, 0, 0x020) => ex!{|s| clz a: u8,       b: u8;1       },
@@ -2417,20 +2608,20 @@ pub fn exec<'a>(
             (4, 3, 0x020) => ex!{|s| clz a: u128,     b: u16;8      },
             (4, 4, 0x020) => ex!{|s| clz a: u128,     b: u8;16      },
 
-            (5, 0, 0x020) => ex!{|s| clz a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x020) => ex!{|s| clz a: [u128;2], b: u128;2     },
-            (5, 2, 0x020) => ex!{|s| clz a: [u128;2], b: u64;4      },
-            (5, 3, 0x020) => ex!{|s| clz a: [u128;2], b: u32;8      },
-            (5, 4, 0x020) => ex!{|s| clz a: [u128;2], b: u16;16     },
-            (5, 5, 0x020) => ex!{|s| clz a: [u128;2], b: u8;32      },
+            (5, 0, 0x020) => ex!{|s| clz a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x020) => ex!{|s| clz a: [u32;8],  b: u128;2     },
+            (5, 2, 0x020) => ex!{|s| clz a: [u32;8],  b: u64;4      },
+            (5, 3, 0x020) => ex!{|s| clz a: [u32;8],  b: u32;8      },
+            (5, 4, 0x020) => ex!{|s| clz a: [u32;8],  b: u16;16     },
+            (5, 5, 0x020) => ex!{|s| clz a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x020) => ex!{|s| clz a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x020) => ex!{|s| clz a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x020) => ex!{|s| clz a: [u128;4], b: u128;4     },
-            (6, 3, 0x020) => ex!{|s| clz a: [u128;4], b: u64;8      },
-            (6, 4, 0x020) => ex!{|s| clz a: [u128;4], b: u32;16     },
-            (6, 5, 0x020) => ex!{|s| clz a: [u128;4], b: u16;32     },
-            (6, 6, 0x020) => ex!{|s| clz a: [u128;4], b: u8;64      },
+            (6, 0, 0x020) => ex!{|s| clz a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x020) => ex!{|s| clz a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x020) => ex!{|s| clz a: [u32;16], b: u128;4     },
+            (6, 3, 0x020) => ex!{|s| clz a: [u32;16], b: u64;8      },
+            (6, 4, 0x020) => ex!{|s| clz a: [u32;16], b: u32;16     },
+            (6, 5, 0x020) => ex!{|s| clz a: [u32;16], b: u16;32     },
+            (6, 6, 0x020) => ex!{|s| clz a: [u32;16], b: u8;64      },
 
             // ctz
             (0, 0, 0x021) => ex!{|s| ctz a: u8,       b: u8;1       },
@@ -2453,20 +2644,20 @@ pub fn exec<'a>(
             (4, 3, 0x021) => ex!{|s| ctz a: u128,     b: u16;8      },
             (4, 4, 0x021) => ex!{|s| ctz a: u128,     b: u8;16      },
 
-            (5, 0, 0x021) => ex!{|s| ctz a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x021) => ex!{|s| ctz a: [u128;2], b: u128;2     },
-            (5, 2, 0x021) => ex!{|s| ctz a: [u128;2], b: u64;4      },
-            (5, 3, 0x021) => ex!{|s| ctz a: [u128;2], b: u32;8      },
-            (5, 4, 0x021) => ex!{|s| ctz a: [u128;2], b: u16;16     },
-            (5, 5, 0x021) => ex!{|s| ctz a: [u128;2], b: u8;32      },
+            (5, 0, 0x021) => ex!{|s| ctz a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x021) => ex!{|s| ctz a: [u32;8],  b: u128;2     },
+            (5, 2, 0x021) => ex!{|s| ctz a: [u32;8],  b: u64;4      },
+            (5, 3, 0x021) => ex!{|s| ctz a: [u32;8],  b: u32;8      },
+            (5, 4, 0x021) => ex!{|s| ctz a: [u32;8],  b: u16;16     },
+            (5, 5, 0x021) => ex!{|s| ctz a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x021) => ex!{|s| ctz a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x021) => ex!{|s| ctz a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x021) => ex!{|s| ctz a: [u128;4], b: u128;4     },
-            (6, 3, 0x021) => ex!{|s| ctz a: [u128;4], b: u64;8      },
-            (6, 4, 0x021) => ex!{|s| ctz a: [u128;4], b: u32;16     },
-            (6, 5, 0x021) => ex!{|s| ctz a: [u128;4], b: u16;32     },
-            (6, 6, 0x021) => ex!{|s| ctz a: [u128;4], b: u8;64      },
+            (6, 0, 0x021) => ex!{|s| ctz a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x021) => ex!{|s| ctz a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x021) => ex!{|s| ctz a: [u32;16], b: u128;4     },
+            (6, 3, 0x021) => ex!{|s| ctz a: [u32;16], b: u64;8      },
+            (6, 4, 0x021) => ex!{|s| ctz a: [u32;16], b: u32;16     },
+            (6, 5, 0x021) => ex!{|s| ctz a: [u32;16], b: u16;32     },
+            (6, 6, 0x021) => ex!{|s| ctz a: [u32;16], b: u8;64      },
 
             // popcnt
             (0, 0, 0x022) => ex!{|s| popcnt a: u8,       b: u8;1       },
@@ -2489,20 +2680,20 @@ pub fn exec<'a>(
             (4, 3, 0x022) => ex!{|s| popcnt a: u128,     b: u16;8      },
             (4, 4, 0x022) => ex!{|s| popcnt a: u128,     b: u8;16      },
 
-            (5, 0, 0x022) => ex!{|s| popcnt a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x022) => ex!{|s| popcnt a: [u128;2], b: u128;2     },
-            (5, 2, 0x022) => ex!{|s| popcnt a: [u128;2], b: u64;4      },
-            (5, 3, 0x022) => ex!{|s| popcnt a: [u128;2], b: u32;8      },
-            (5, 4, 0x022) => ex!{|s| popcnt a: [u128;2], b: u16;16     },
-            (5, 5, 0x022) => ex!{|s| popcnt a: [u128;2], b: u8;32      },
+            (5, 0, 0x022) => ex!{|s| popcnt a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x022) => ex!{|s| popcnt a: [u32;8],  b: u128;2     },
+            (5, 2, 0x022) => ex!{|s| popcnt a: [u32;8],  b: u64;4      },
+            (5, 3, 0x022) => ex!{|s| popcnt a: [u32;8],  b: u32;8      },
+            (5, 4, 0x022) => ex!{|s| popcnt a: [u32;8],  b: u16;16     },
+            (5, 5, 0x022) => ex!{|s| popcnt a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x022) => ex!{|s| popcnt a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x022) => ex!{|s| popcnt a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x022) => ex!{|s| popcnt a: [u128;4], b: u128;4     },
-            (6, 3, 0x022) => ex!{|s| popcnt a: [u128;4], b: u64;8      },
-            (6, 4, 0x022) => ex!{|s| popcnt a: [u128;4], b: u32;16     },
-            (6, 5, 0x022) => ex!{|s| popcnt a: [u128;4], b: u16;32     },
-            (6, 6, 0x022) => ex!{|s| popcnt a: [u128;4], b: u8;64      },
+            (6, 0, 0x022) => ex!{|s| popcnt a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x022) => ex!{|s| popcnt a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x022) => ex!{|s| popcnt a: [u32;16], b: u128;4     },
+            (6, 3, 0x022) => ex!{|s| popcnt a: [u32;16], b: u64;8      },
+            (6, 4, 0x022) => ex!{|s| popcnt a: [u32;16], b: u32;16     },
+            (6, 5, 0x022) => ex!{|s| popcnt a: [u32;16], b: u16;32     },
+            (6, 6, 0x022) => ex!{|s| popcnt a: [u32;16], b: u8;64      },
 
             // add
             (0, 0, 0x023) => ex!{|s| add a: u8,       b: u8;1       },
@@ -2525,20 +2716,20 @@ pub fn exec<'a>(
             (4, 3, 0x023) => ex!{|s| add a: u128,     b: u16;8      },
             (4, 4, 0x023) => ex!{|s| add a: u128,     b: u8;16      },
 
-            (5, 0, 0x023) => ex!{|s| add a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x023) => ex!{|s| add a: [u128;2], b: u128;2     },
-            (5, 2, 0x023) => ex!{|s| add a: [u128;2], b: u64;4      },
-            (5, 3, 0x023) => ex!{|s| add a: [u128;2], b: u32;8      },
-            (5, 4, 0x023) => ex!{|s| add a: [u128;2], b: u16;16     },
-            (5, 5, 0x023) => ex!{|s| add a: [u128;2], b: u8;32      },
+            (5, 0, 0x023) => ex!{|s| add a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x023) => ex!{|s| add a: [u32;8],  b: u128;2     },
+            (5, 2, 0x023) => ex!{|s| add a: [u32;8],  b: u64;4      },
+            (5, 3, 0x023) => ex!{|s| add a: [u32;8],  b: u32;8      },
+            (5, 4, 0x023) => ex!{|s| add a: [u32;8],  b: u16;16     },
+            (5, 5, 0x023) => ex!{|s| add a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x023) => ex!{|s| add a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x023) => ex!{|s| add a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x023) => ex!{|s| add a: [u128;4], b: u128;4     },
-            (6, 3, 0x023) => ex!{|s| add a: [u128;4], b: u64;8      },
-            (6, 4, 0x023) => ex!{|s| add a: [u128;4], b: u32;16     },
-            (6, 5, 0x023) => ex!{|s| add a: [u128;4], b: u16;32     },
-            (6, 6, 0x023) => ex!{|s| add a: [u128;4], b: u8;64      },
+            (6, 0, 0x023) => ex!{|s| add a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x023) => ex!{|s| add a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x023) => ex!{|s| add a: [u32;16], b: u128;4     },
+            (6, 3, 0x023) => ex!{|s| add a: [u32;16], b: u64;8      },
+            (6, 4, 0x023) => ex!{|s| add a: [u32;16], b: u32;16     },
+            (6, 5, 0x023) => ex!{|s| add a: [u32;16], b: u16;32     },
+            (6, 6, 0x023) => ex!{|s| add a: [u32;16], b: u8;64      },
 
             // sub
             (0, 0, 0x024) => ex!{|s| sub a: u8,       b: u8;1       },
@@ -2561,20 +2752,20 @@ pub fn exec<'a>(
             (4, 3, 0x024) => ex!{|s| sub a: u128,     b: u16;8      },
             (4, 4, 0x024) => ex!{|s| sub a: u128,     b: u8;16      },
 
-            (5, 0, 0x024) => ex!{|s| sub a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x024) => ex!{|s| sub a: [u128;2], b: u128;2     },
-            (5, 2, 0x024) => ex!{|s| sub a: [u128;2], b: u64;4      },
-            (5, 3, 0x024) => ex!{|s| sub a: [u128;2], b: u32;8      },
-            (5, 4, 0x024) => ex!{|s| sub a: [u128;2], b: u16;16     },
-            (5, 5, 0x024) => ex!{|s| sub a: [u128;2], b: u8;32      },
+            (5, 0, 0x024) => ex!{|s| sub a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x024) => ex!{|s| sub a: [u32;8],  b: u128;2     },
+            (5, 2, 0x024) => ex!{|s| sub a: [u32;8],  b: u64;4      },
+            (5, 3, 0x024) => ex!{|s| sub a: [u32;8],  b: u32;8      },
+            (5, 4, 0x024) => ex!{|s| sub a: [u32;8],  b: u16;16     },
+            (5, 5, 0x024) => ex!{|s| sub a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x024) => ex!{|s| sub a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x024) => ex!{|s| sub a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x024) => ex!{|s| sub a: [u128;4], b: u128;4     },
-            (6, 3, 0x024) => ex!{|s| sub a: [u128;4], b: u64;8      },
-            (6, 4, 0x024) => ex!{|s| sub a: [u128;4], b: u32;16     },
-            (6, 5, 0x024) => ex!{|s| sub a: [u128;4], b: u16;32     },
-            (6, 6, 0x024) => ex!{|s| sub a: [u128;4], b: u8;64      },
+            (6, 0, 0x024) => ex!{|s| sub a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x024) => ex!{|s| sub a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x024) => ex!{|s| sub a: [u32;16], b: u128;4     },
+            (6, 3, 0x024) => ex!{|s| sub a: [u32;16], b: u64;8      },
+            (6, 4, 0x024) => ex!{|s| sub a: [u32;16], b: u32;16     },
+            (6, 5, 0x024) => ex!{|s| sub a: [u32;16], b: u16;32     },
+            (6, 6, 0x024) => ex!{|s| sub a: [u32;16], b: u8;64      },
 
             // mul
             (0, 0, 0x025) => ex!{|s| mul a: u8,       b: u8;1       },
@@ -2597,20 +2788,20 @@ pub fn exec<'a>(
             (4, 3, 0x025) => ex!{|s| mul a: u128,     b: u16;8      },
             (4, 4, 0x025) => ex!{|s| mul a: u128,     b: u8;16      },
 
-            (5, 0, 0x025) => ex!{|s| mul a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x025) => ex!{|s| mul a: [u128;2], b: u128;2     },
-            (5, 2, 0x025) => ex!{|s| mul a: [u128;2], b: u64;4      },
-            (5, 3, 0x025) => ex!{|s| mul a: [u128;2], b: u32;8      },
-            (5, 4, 0x025) => ex!{|s| mul a: [u128;2], b: u16;16     },
-            (5, 5, 0x025) => ex!{|s| mul a: [u128;2], b: u8;32      },
+            (5, 0, 0x025) => ex!{|s| mul a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x025) => ex!{|s| mul a: [u32;8],  b: u128;2     },
+            (5, 2, 0x025) => ex!{|s| mul a: [u32;8],  b: u64;4      },
+            (5, 3, 0x025) => ex!{|s| mul a: [u32;8],  b: u32;8      },
+            (5, 4, 0x025) => ex!{|s| mul a: [u32;8],  b: u16;16     },
+            (5, 5, 0x025) => ex!{|s| mul a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x025) => ex!{|s| mul a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x025) => ex!{|s| mul a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x025) => ex!{|s| mul a: [u128;4], b: u128;4     },
-            (6, 3, 0x025) => ex!{|s| mul a: [u128;4], b: u64;8      },
-            (6, 4, 0x025) => ex!{|s| mul a: [u128;4], b: u32;16     },
-            (6, 5, 0x025) => ex!{|s| mul a: [u128;4], b: u16;32     },
-            (6, 6, 0x025) => ex!{|s| mul a: [u128;4], b: u8;64      },
+            (6, 0, 0x025) => ex!{|s| mul a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x025) => ex!{|s| mul a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x025) => ex!{|s| mul a: [u32;16], b: u128;4     },
+            (6, 3, 0x025) => ex!{|s| mul a: [u32;16], b: u64;8      },
+            (6, 4, 0x025) => ex!{|s| mul a: [u32;16], b: u32;16     },
+            (6, 5, 0x025) => ex!{|s| mul a: [u32;16], b: u16;32     },
+            (6, 6, 0x025) => ex!{|s| mul a: [u32;16], b: u8;64      },
 
             // and
             (0, 0..=0, 0x026) => ex!{|s| and a: u8,       b: u8       },
@@ -2618,8 +2809,8 @@ pub fn exec<'a>(
             (2, 0..=2, 0x026) => ex!{|s| and a: u32,      b: u32      },
             (3, 0..=3, 0x026) => ex!{|s| and a: u64,      b: u64      },
             (4, 0..=4, 0x026) => ex!{|s| and a: u128,     b: u128     },
-            (5, 0..=5, 0x026) => ex!{|s| and a: [u128;2], b: [u128;2] },
-            (6, 0..=6, 0x026) => ex!{|s| and a: [u128;4], b: [u128;4] },
+            (5, 0..=5, 0x026) => ex!{|s| and a: [u32;8],  b: [u32;8]  },
+            (6, 0..=6, 0x026) => ex!{|s| and a: [u32;16], b: [u32;16] },
 
             // andnot
             (0, 0..=0, 0x027) => ex!{|s| andnot a: u8,       b: u8       },
@@ -2627,8 +2818,8 @@ pub fn exec<'a>(
             (2, 0..=2, 0x027) => ex!{|s| andnot a: u32,      b: u32      },
             (3, 0..=3, 0x027) => ex!{|s| andnot a: u64,      b: u64      },
             (4, 0..=4, 0x027) => ex!{|s| andnot a: u128,     b: u128     },
-            (5, 0..=5, 0x027) => ex!{|s| andnot a: [u128;2], b: [u128;2] },
-            (6, 0..=6, 0x027) => ex!{|s| andnot a: [u128;4], b: [u128;4] },
+            (5, 0..=5, 0x027) => ex!{|s| andnot a: [u32;8],  b: [u32;8]  },
+            (6, 0..=6, 0x027) => ex!{|s| andnot a: [u32;16], b: [u32;16] },
 
             // or
             (0, 0..=0, 0x028) => ex!{|s| or a: u8,       b: u8       },
@@ -2636,8 +2827,8 @@ pub fn exec<'a>(
             (2, 0..=2, 0x028) => ex!{|s| or a: u32,      b: u32      },
             (3, 0..=3, 0x028) => ex!{|s| or a: u64,      b: u64      },
             (4, 0..=4, 0x028) => ex!{|s| or a: u128,     b: u128     },
-            (5, 0..=5, 0x028) => ex!{|s| or a: [u128;2], b: [u128;2] },
-            (6, 0..=6, 0x028) => ex!{|s| or a: [u128;4], b: [u128;4] },
+            (5, 0..=5, 0x028) => ex!{|s| or a: [u32;8],  b: [u32;8]  },
+            (6, 0..=6, 0x028) => ex!{|s| or a: [u32;16], b: [u32;16] },
 
             // xor
             (0, 0..=0, 0x029) => ex!{|s| xor a: u8,       b: u8       },
@@ -2645,8 +2836,8 @@ pub fn exec<'a>(
             (2, 0..=2, 0x029) => ex!{|s| xor a: u32,      b: u32      },
             (3, 0..=3, 0x029) => ex!{|s| xor a: u64,      b: u64      },
             (4, 0..=4, 0x029) => ex!{|s| xor a: u128,     b: u128     },
-            (5, 0..=5, 0x029) => ex!{|s| xor a: [u128;2], b: [u128;2] },
-            (6, 0..=6, 0x029) => ex!{|s| xor a: [u128;4], b: [u128;4] },
+            (5, 0..=5, 0x029) => ex!{|s| xor a: [u32;8],  b: [u32;8]  },
+            (6, 0..=6, 0x029) => ex!{|s| xor a: [u32;16], b: [u32;16] },
 
             // shl
             (0, 0, 0x02a) => ex!{|s| shl a: u8,       b: u8;1       },
@@ -2669,20 +2860,20 @@ pub fn exec<'a>(
             (4, 3, 0x02a) => ex!{|s| shl a: u128,     b: u16;8      },
             (4, 4, 0x02a) => ex!{|s| shl a: u128,     b: u8;16      },
 
-            (5, 0, 0x02a) => ex!{|s| shl a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x02a) => ex!{|s| shl a: [u128;2], b: u128;2     },
-            (5, 2, 0x02a) => ex!{|s| shl a: [u128;2], b: u64;4      },
-            (5, 3, 0x02a) => ex!{|s| shl a: [u128;2], b: u32;8      },
-            (5, 4, 0x02a) => ex!{|s| shl a: [u128;2], b: u16;16     },
-            (5, 5, 0x02a) => ex!{|s| shl a: [u128;2], b: u8;32      },
+            (5, 0, 0x02a) => ex!{|s| shl a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x02a) => ex!{|s| shl a: [u32;8],  b: u128;2     },
+            (5, 2, 0x02a) => ex!{|s| shl a: [u32;8],  b: u64;4      },
+            (5, 3, 0x02a) => ex!{|s| shl a: [u32;8],  b: u32;8      },
+            (5, 4, 0x02a) => ex!{|s| shl a: [u32;8],  b: u16;16     },
+            (5, 5, 0x02a) => ex!{|s| shl a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x02a) => ex!{|s| shl a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x02a) => ex!{|s| shl a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x02a) => ex!{|s| shl a: [u128;4], b: u128;4     },
-            (6, 3, 0x02a) => ex!{|s| shl a: [u128;4], b: u64;8      },
-            (6, 4, 0x02a) => ex!{|s| shl a: [u128;4], b: u32;16     },
-            (6, 5, 0x02a) => ex!{|s| shl a: [u128;4], b: u16;32     },
-            (6, 6, 0x02a) => ex!{|s| shl a: [u128;4], b: u8;64      },
+            (6, 0, 0x02a) => ex!{|s| shl a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x02a) => ex!{|s| shl a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x02a) => ex!{|s| shl a: [u32;16], b: u128;4     },
+            (6, 3, 0x02a) => ex!{|s| shl a: [u32;16], b: u64;8      },
+            (6, 4, 0x02a) => ex!{|s| shl a: [u32;16], b: u32;16     },
+            (6, 5, 0x02a) => ex!{|s| shl a: [u32;16], b: u16;32     },
+            (6, 6, 0x02a) => ex!{|s| shl a: [u32;16], b: u8;64      },
 
             // shr_u
             (0, 0, 0x02b) => ex!{|s| shr_u a: u8,       b: u8;1       },
@@ -2705,20 +2896,20 @@ pub fn exec<'a>(
             (4, 3, 0x02b) => ex!{|s| shr_u a: u128,     b: u16;8      },
             (4, 4, 0x02b) => ex!{|s| shr_u a: u128,     b: u8;16      },
 
-            (5, 0, 0x02b) => ex!{|s| shr_u a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x02b) => ex!{|s| shr_u a: [u128;2], b: u128;2     },
-            (5, 2, 0x02b) => ex!{|s| shr_u a: [u128;2], b: u64;4      },
-            (5, 3, 0x02b) => ex!{|s| shr_u a: [u128;2], b: u32;8      },
-            (5, 4, 0x02b) => ex!{|s| shr_u a: [u128;2], b: u16;16     },
-            (5, 5, 0x02b) => ex!{|s| shr_u a: [u128;2], b: u8;32      },
+            (5, 0, 0x02b) => ex!{|s| shr_u a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x02b) => ex!{|s| shr_u a: [u32;8],  b: u128;2     },
+            (5, 2, 0x02b) => ex!{|s| shr_u a: [u32;8],  b: u64;4      },
+            (5, 3, 0x02b) => ex!{|s| shr_u a: [u32;8],  b: u32;8      },
+            (5, 4, 0x02b) => ex!{|s| shr_u a: [u32;8],  b: u16;16     },
+            (5, 5, 0x02b) => ex!{|s| shr_u a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x02b) => ex!{|s| shr_u a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x02b) => ex!{|s| shr_u a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x02b) => ex!{|s| shr_u a: [u128;4], b: u128;4     },
-            (6, 3, 0x02b) => ex!{|s| shr_u a: [u128;4], b: u64;8      },
-            (6, 4, 0x02b) => ex!{|s| shr_u a: [u128;4], b: u32;16     },
-            (6, 5, 0x02b) => ex!{|s| shr_u a: [u128;4], b: u16;32     },
-            (6, 6, 0x02b) => ex!{|s| shr_u a: [u128;4], b: u8;64      },
+            (6, 0, 0x02b) => ex!{|s| shr_u a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x02b) => ex!{|s| shr_u a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x02b) => ex!{|s| shr_u a: [u32;16], b: u128;4     },
+            (6, 3, 0x02b) => ex!{|s| shr_u a: [u32;16], b: u64;8      },
+            (6, 4, 0x02b) => ex!{|s| shr_u a: [u32;16], b: u32;16     },
+            (6, 5, 0x02b) => ex!{|s| shr_u a: [u32;16], b: u16;32     },
+            (6, 6, 0x02b) => ex!{|s| shr_u a: [u32;16], b: u8;64      },
 
             // shr_s
             (0, 0, 0x02c) => ex!{|s| shr_s a: u8,       b: u8;1       },
@@ -2741,20 +2932,20 @@ pub fn exec<'a>(
             (4, 3, 0x02c) => ex!{|s| shr_s a: u128,     b: u16;8      },
             (4, 4, 0x02c) => ex!{|s| shr_s a: u128,     b: u8;16      },
 
-            (5, 0, 0x02c) => ex!{|s| shr_s a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x02c) => ex!{|s| shr_s a: [u128;2], b: u128;2     },
-            (5, 2, 0x02c) => ex!{|s| shr_s a: [u128;2], b: u64;4      },
-            (5, 3, 0x02c) => ex!{|s| shr_s a: [u128;2], b: u32;8      },
-            (5, 4, 0x02c) => ex!{|s| shr_s a: [u128;2], b: u16;16     },
-            (5, 5, 0x02c) => ex!{|s| shr_s a: [u128;2], b: u8;32      },
+            (5, 0, 0x02c) => ex!{|s| shr_s a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x02c) => ex!{|s| shr_s a: [u32;8],  b: u128;2     },
+            (5, 2, 0x02c) => ex!{|s| shr_s a: [u32;8],  b: u64;4      },
+            (5, 3, 0x02c) => ex!{|s| shr_s a: [u32;8],  b: u32;8      },
+            (5, 4, 0x02c) => ex!{|s| shr_s a: [u32;8],  b: u16;16     },
+            (5, 5, 0x02c) => ex!{|s| shr_s a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x02c) => ex!{|s| shr_s a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x02c) => ex!{|s| shr_s a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x02c) => ex!{|s| shr_s a: [u128;4], b: u128;4     },
-            (6, 3, 0x02c) => ex!{|s| shr_s a: [u128;4], b: u64;8      },
-            (6, 4, 0x02c) => ex!{|s| shr_s a: [u128;4], b: u32;16     },
-            (6, 5, 0x02c) => ex!{|s| shr_s a: [u128;4], b: u16;32     },
-            (6, 6, 0x02c) => ex!{|s| shr_s a: [u128;4], b: u8;64      },
+            (6, 0, 0x02c) => ex!{|s| shr_s a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x02c) => ex!{|s| shr_s a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x02c) => ex!{|s| shr_s a: [u32;16], b: u128;4     },
+            (6, 3, 0x02c) => ex!{|s| shr_s a: [u32;16], b: u64;8      },
+            (6, 4, 0x02c) => ex!{|s| shr_s a: [u32;16], b: u32;16     },
+            (6, 5, 0x02c) => ex!{|s| shr_s a: [u32;16], b: u16;32     },
+            (6, 6, 0x02c) => ex!{|s| shr_s a: [u32;16], b: u8;64      },
 
             // rotl
             (0, 0, 0x02d) => ex!{|s| rotl a: u8,       b: u8;1       },
@@ -2777,20 +2968,20 @@ pub fn exec<'a>(
             (4, 3, 0x02d) => ex!{|s| rotl a: u128,     b: u16;8      },
             (4, 4, 0x02d) => ex!{|s| rotl a: u128,     b: u8;16      },
 
-            (5, 0, 0x02d) => ex!{|s| rotl a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x02d) => ex!{|s| rotl a: [u128;2], b: u128;2     },
-            (5, 2, 0x02d) => ex!{|s| rotl a: [u128;2], b: u64;4      },
-            (5, 3, 0x02d) => ex!{|s| rotl a: [u128;2], b: u32;8      },
-            (5, 4, 0x02d) => ex!{|s| rotl a: [u128;2], b: u16;16     },
-            (5, 5, 0x02d) => ex!{|s| rotl a: [u128;2], b: u8;32      },
+            (5, 0, 0x02d) => ex!{|s| rotl a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x02d) => ex!{|s| rotl a: [u32;8],  b: u128;2     },
+            (5, 2, 0x02d) => ex!{|s| rotl a: [u32;8],  b: u64;4      },
+            (5, 3, 0x02d) => ex!{|s| rotl a: [u32;8],  b: u32;8      },
+            (5, 4, 0x02d) => ex!{|s| rotl a: [u32;8],  b: u16;16     },
+            (5, 5, 0x02d) => ex!{|s| rotl a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x02d) => ex!{|s| rotl a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x02d) => ex!{|s| rotl a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x02d) => ex!{|s| rotl a: [u128;4], b: u128;4     },
-            (6, 3, 0x02d) => ex!{|s| rotl a: [u128;4], b: u64;8      },
-            (6, 4, 0x02d) => ex!{|s| rotl a: [u128;4], b: u32;16     },
-            (6, 5, 0x02d) => ex!{|s| rotl a: [u128;4], b: u16;32     },
-            (6, 6, 0x02d) => ex!{|s| rotl a: [u128;4], b: u8;64      },
+            (6, 0, 0x02d) => ex!{|s| rotl a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x02d) => ex!{|s| rotl a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x02d) => ex!{|s| rotl a: [u32;16], b: u128;4     },
+            (6, 3, 0x02d) => ex!{|s| rotl a: [u32;16], b: u64;8      },
+            (6, 4, 0x02d) => ex!{|s| rotl a: [u32;16], b: u32;16     },
+            (6, 5, 0x02d) => ex!{|s| rotl a: [u32;16], b: u16;32     },
+            (6, 6, 0x02d) => ex!{|s| rotl a: [u32;16], b: u8;64      },
 
             // rotr
             (0, 0, 0x02e) => ex!{|s| rotr a: u8,       b: u8;1       },
@@ -2813,20 +3004,20 @@ pub fn exec<'a>(
             (4, 3, 0x02e) => ex!{|s| rotr a: u128,     b: u16;8      },
             (4, 4, 0x02e) => ex!{|s| rotr a: u128,     b: u8;16      },
 
-            (5, 0, 0x02e) => ex!{|s| rotr a: [u128;2], b: [u128;2];1 },
-            (5, 1, 0x02e) => ex!{|s| rotr a: [u128;2], b: u128;2     },
-            (5, 2, 0x02e) => ex!{|s| rotr a: [u128;2], b: u64;4      },
-            (5, 3, 0x02e) => ex!{|s| rotr a: [u128;2], b: u32;8      },
-            (5, 4, 0x02e) => ex!{|s| rotr a: [u128;2], b: u16;16     },
-            (5, 5, 0x02e) => ex!{|s| rotr a: [u128;2], b: u8;32      },
+            (5, 0, 0x02e) => ex!{|s| rotr a: [u32;8],  b: [u32;8];1  },
+            (5, 1, 0x02e) => ex!{|s| rotr a: [u32;8],  b: u128;2     },
+            (5, 2, 0x02e) => ex!{|s| rotr a: [u32;8],  b: u64;4      },
+            (5, 3, 0x02e) => ex!{|s| rotr a: [u32;8],  b: u32;8      },
+            (5, 4, 0x02e) => ex!{|s| rotr a: [u32;8],  b: u16;16     },
+            (5, 5, 0x02e) => ex!{|s| rotr a: [u32;8],  b: u8;32      },
 
-            (6, 0, 0x02e) => ex!{|s| rotr a: [u128;4], b: [u128;4];1 },
-            (6, 1, 0x02e) => ex!{|s| rotr a: [u128;4], b: [u128;2];2 },
-            (6, 2, 0x02e) => ex!{|s| rotr a: [u128;4], b: u128;4     },
-            (6, 3, 0x02e) => ex!{|s| rotr a: [u128;4], b: u64;8      },
-            (6, 4, 0x02e) => ex!{|s| rotr a: [u128;4], b: u32;16     },
-            (6, 5, 0x02e) => ex!{|s| rotr a: [u128;4], b: u16;32     },
-            (6, 6, 0x02e) => ex!{|s| rotr a: [u128;4], b: u8;64      },
+            (6, 0, 0x02e) => ex!{|s| rotr a: [u32;16], b: [u32;16];1 },
+            (6, 1, 0x02e) => ex!{|s| rotr a: [u32;16], b: [u32;8];2  },
+            (6, 2, 0x02e) => ex!{|s| rotr a: [u32;16], b: u128;4     },
+            (6, 3, 0x02e) => ex!{|s| rotr a: [u32;16], b: u64;8      },
+            (6, 4, 0x02e) => ex!{|s| rotr a: [u32;16], b: u32;16     },
+            (6, 5, 0x02e) => ex!{|s| rotr a: [u32;16], b: u16;32     },
+            (6, 6, 0x02e) => ex!{|s| rotr a: [u32;16], b: u8;64      },
 
 
             //// unknown instruction? ////
@@ -3188,6 +3379,136 @@ mod tests {
         ins_rotl_par  { U32.rotl(2;  [0xff,0x02,0x03,0x04], [0x03,0x03,0x03,0x03]) => [0xff,0x10,0x18,0x20] }
         ins_rotr      { U32.rotr(0;  [0xff,0x02,0x03,0x04], [0x03,0x00,0x00,0x00]) => [0x5f,0x60,0x80,0xe0] }
         ins_rotr_par  { U32.rotr(2;  [0xff,0x02,0x03,0x04], [0x03,0x03,0x03,0x03]) => [0xff,0x40,0x60,0x80] }
+    }
+
+    // here are some really big ones
+    test_ins! {
+        ins_select_big_par { U512.select(6; 
+           [0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,
+            0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,
+            0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,
+            0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01],
+           [0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
+            0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,
+            0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,
+            0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f],
+           [0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4a,0x4b,0x4c,0x4d,0x4e,0x4f,
+            0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5a,0x5b,0x5c,0x5d,0x5e,0x5f,
+            0x60,0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68,0x69,0x6a,0x6b,0x6c,0x6d,0x6e,0x6f,
+            0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7a,0x7b,0x7c,0x7d,0x7e,0x7f]
+        ) => [
+            0x40,0x01,0x42,0x03,0x44,0x05,0x46,0x07,0x48,0x09,0x4a,0x0b,0x4c,0x0d,0x4e,0x0f,
+            0x50,0x11,0x52,0x13,0x54,0x15,0x56,0x17,0x58,0x19,0x5a,0x1b,0x5c,0x1d,0x5e,0x1f,
+            0x60,0x21,0x62,0x23,0x64,0x25,0x66,0x27,0x68,0x29,0x6a,0x2b,0x6c,0x2d,0x6e,0x2f,
+            0x70,0x31,0x72,0x33,0x74,0x35,0x76,0x37,0x78,0x39,0x7a,0x3b,0x7c,0x3d,0x7e,0x3f] }
+        ins_shuffle_big_par { U512.shuffle(6; 
+           [0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x10,0x11,0x12,0x13,0x14,0x15,0x16,
+            0x32,0x31,0x30,0x29,0x28,0x27,0x26,0x25,0x24,0x23,0x22,0x21,0x20,0x19,0x18,0x17,
+            0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,
+            0x64,0x63,0x62,0x61,0x60,0x59,0x58,0x57,0x56,0x55,0x54,0x53,0x52,0x51,0x50,0x49],
+           [0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
+            0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,
+            0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,
+            0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f],
+           [0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4a,0x4b,0x4c,0x4d,0x4e,0x4f,
+            0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5a,0x5b,0x5c,0x5d,0x5e,0x5f,
+            0x60,0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68,0x69,0x6a,0x6b,0x6c,0x6d,0x6e,0x6f,
+            0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7a,0x7b,0x7c,0x7d,0x7e,0x7f]
+        ) => [
+            0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x10,0x11,0x12,0x13,0x14,0x15,0x16,
+            0x32,0x31,0x30,0x29,0x28,0x27,0x26,0x25,0x24,0x23,0x22,0x21,0x20,0x19,0x18,0x17,
+            0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,
+            0x64,0x63,0x62,0x61,0x60,0x59,0x58,0x57,0x56,0x55,0x54,0x53,0x52,0x51,0x50,0x49] }
+
+        ins_add_big { U512.add(0; U512::ones(), U512::ones()) => [
+            0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff] }
+        ins_add_big_par { U512.add(4; U512::ones(), U512::ones()) => [
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff] }
+        ins_sub_big { U512.sub(0; U512::ones(), U512::one()) => [
+            0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff] }
+        ins_sub_big_par { U512.sub(4; U512::ones(), U512::splat(U32::one())) => [
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,
+            0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff,0xfe,0xff,0xff,0xff] }
+        ins_mul_big { U512.mul(0;
+           [0x72,0x34,0x21,0xd8,0xf0,0x73,0xc7,0xd5,0x1e,0x7e,0x5e,0xe6,0x94,0x11,0xda,0x8e,
+            0x1f,0x97,0xc5,0x76,0x0b,0xce,0x9d,0x02,0xeb,0xe2,0x14,0x19,0xd7,0x85,0x02,0x3a,
+            0xe9,0x0c,0xd0,0x20,0xbf,0x85,0xb7,0x27,0x8b,0x8a,0x3c,0x9e,0x07,0xea,0x0d,0xb6,
+            0x82,0x2e,0x02,0xd5,0xfb,0xc6,0x5e,0xcd,0x67,0xe1,0x5b,0xbc,0xcc,0x4c,0x48,0xa6],
+           [0xc6,0xac,0x8d,0x67,0x96,0xfb,0x17,0x9d,0x61,0xe7,0x27,0xb4,0x8c,0xd7,0xa7,0xcb,
+            0xfe,0xee,0x39,0xcd,0x7c,0xa8,0x80,0xc3,0x6a,0xf0,0x9e,0xa9,0x9e,0x22,0xca,0xa1,
+            0xa6,0x2d,0x9c,0x16,0xae,0xec,0x6f,0x5e,0x2d,0xa1,0xbf,0xd5,0x57,0x82,0x75,0xf2,
+            0x6e,0x2e,0x9a,0x7e,0x8a,0xbe,0x8d,0xde,0x88,0x4f,0x2b,0x2e,0xbe,0x2e,0x86,0xd3]
+        ) => [
+            0x2c,0x28,0xb5,0x39,0xad,0x64,0xe4,0xee,0x5a,0xda,0xd1,0x79,0xfc,0x26,0x7f,0x24,
+            0x99,0xe2,0x89,0xb8,0x8c,0xf5,0x3f,0x7f,0xc8,0x24,0xdd,0x63,0x2a,0xf2,0xd8,0x8e,
+            0xfe,0xc2,0x60,0x68,0xfe,0xc4,0x25,0x34,0xdd,0x91,0x89,0xa3,0xfb,0x08,0x4e,0x3c,
+            0x2a,0x98,0x0e,0x08,0xbb,0x7a,0xee,0x0b,0xc7,0xd6,0x10,0xa1,0x76,0xbb,0x5b,0xea] }
+        ins_mul_big_par { U512.mul(6;
+           [0x72,0x34,0x21,0xd8,0xf0,0x73,0xc7,0xd5,0x1e,0x7e,0x5e,0xe6,0x94,0x11,0xda,0x8e,
+            0x1f,0x97,0xc5,0x76,0x0b,0xce,0x9d,0x02,0xeb,0xe2,0x14,0x19,0xd7,0x85,0x02,0x3a,
+            0xe9,0x0c,0xd0,0x20,0xbf,0x85,0xb7,0x27,0x8b,0x8a,0x3c,0x9e,0x07,0xea,0x0d,0xb6,
+            0x82,0x2e,0x02,0xd5,0xfb,0xc6,0x5e,0xcd,0x67,0xe1,0x5b,0xbc,0xcc,0x4c,0x48,0xa6],
+           [0xc6,0xac,0x8d,0x67,0x96,0xfb,0x17,0x9d,0x61,0xe7,0x27,0xb4,0x8c,0xd7,0xa7,0xcb,
+            0xfe,0xee,0x39,0xcd,0x7c,0xa8,0x80,0xc3,0x6a,0xf0,0x9e,0xa9,0x9e,0x22,0xca,0xa1,
+            0xa6,0x2d,0x9c,0x16,0xae,0xec,0x6f,0x5e,0x2d,0xa1,0xbf,0xd5,0x57,0x82,0x75,0xf2,
+            0x6e,0x2e,0x9a,0x7e,0x8a,0xbe,0x8d,0xde,0x88,0x4f,0x2b,0x2e,0xbe,0x2e,0x86,0xd3]
+        ) => [
+            0x2c,0xf0,0x2d,0xe8,0xa0,0xc1,0xe1,0xa1,0x5e,0xb2,0x52,0xb8,0xf0,0x47,0x36,0x9a,
+            0xc2,0x62,0xdd,0x7e,0x54,0x30,0x80,0x86,0x4e,0xe0,0x58,0x81,0xb2,0xaa,0x94,0x7a,
+            0x16,0x1c,0xc0,0xc0,0xd2,0x9c,0x59,0x52,0x6f,0xca,0xc4,0x76,0x61,0xd4,0xf1,0x0c,
+            0xdc,0x44,0x34,0xd6,0x4e,0xf4,0xc6,0xc6,0xb8,0x6f,0x49,0xc8,0x68,0xa8,0xb0,0xd2] }
+
+        ins_and_big { U512.and(U512::ones(), U512::one()) => [
+            0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
+        ins_andnot_big { U512.andnot(U512::ones(), U512::one()) => [
+            0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff] }
+        ins_or_big { U512.or(U512::ones(), U512::one()) => [
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff] }
+        ins_xor_big { U512.xor(U512::ones(), U512::one()) => [
+            0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff] }
+        ins_shl_big { U512.shl(0; U512::one(), U512::extend_u(U32::from(123))) => [
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
+        ins_shr_big { U512.shr_u(0; U512::one(), U512::extend_u(U32::from(123))) => [
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
+        ins_rotl_big { U512.rotl(0; U512::one(), U512::extend_u(U32::from(123))) => [
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
+        ins_rotr_big { U512.rotr(0; U512::one(), U512::extend_u(U32::from(123))) => [
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
     }
 }
 

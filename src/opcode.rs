@@ -537,6 +537,15 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
     /// All bits set to one
     fn ones() -> Self;
 
+    /// Unsign-extend a smaller type
+    fn extend_u<U: OpU>(other: U) -> Self;
+
+    /// Sign-extend a smaller type
+    fn extend_s<U: OpU>(other: U) -> Self;
+
+    /// Splat a smaller type
+    fn splat<U: OpU>(other: U) -> Self;
+
     /// Test if self is zero
     fn is_zero(&self) -> bool {
         self == &Self::ones()
@@ -553,7 +562,7 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
     }
 
     /// Can we compress into an extend_const_u instruction?
-    fn is_extend_u_compressable(&self, npw2: u8) -> bool {
+    fn is_extend_u(&self, npw2: u8) -> bool {
         let bytes = self.to_le_bytes();
         let bytes = bytes.as_ref();
         let width = 1usize << npw2;
@@ -561,7 +570,7 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
     }
 
     /// Can we compress into an extend_const_s instruction?
-    fn is_extend_s_compressable(&self, npw2: u8) -> bool {
+    fn is_extend_s(&self, npw2: u8) -> bool {
         let bytes = self.to_le_bytes();
         let bytes = bytes.as_ref();
         let width = 1usize << npw2;
@@ -573,7 +582,7 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
     }
 
     /// Can we compress into a splat_const instruction?
-    fn is_splat_compressable(&self, npw2: u8) -> bool {
+    fn is_splat(&self, npw2: u8) -> bool {
         let bytes = self.to_le_bytes();
         let bytes = bytes.as_ref();
         let width = 1usize << npw2;
@@ -617,34 +626,58 @@ macro_rules! opu_impl {
         impl OpU for $u {
             const NPW2: u8 = $npw2;
 
-            /// raw byte representation
             type Bytes = [u8; $n];
 
-            /// to raw byte representation
             fn to_le_bytes(self) -> Self::Bytes {
                 self.0
             }
 
-            /// from raw byte representation
             fn from_le_bytes(bytes: Self::Bytes) -> Self {
                 Self(bytes)
             }
 
-            /// Zero
             fn zero() -> Self {
                 Self([0; $n])
             }
 
-            /// One
             fn one() -> Self {
-                let mut one = [0; $n];
-                one[0] = 1;
-                Self::try_from(one).unwrap()
+                let mut bytes = [0; $n];
+                bytes[0] = 1;
+                Self(bytes)
             }
 
-            /// All bits set to one
             fn ones() -> Self {
                 Self([0xff; $n])
+            }
+
+            fn extend_u<U: OpU>(other: U) -> Self {
+                let slice = other.to_le_bytes();
+                let slice = slice.as_ref();
+                let mut bytes = [0; $n];
+                bytes[..slice.len()].copy_from_slice(slice);
+                Self(bytes)
+            }
+
+            fn extend_s<U: OpU>(other: U) -> Self {
+                let slice = other.to_le_bytes();
+                let slice = slice.as_ref();
+                let mut bytes = if slice[slice.len()-1] & 0x80 == 0x80 {
+                    [0xff; $n]
+                } else {
+                    [0x00; $n]
+                };
+                bytes[..slice.len()].copy_from_slice(slice);
+                Self(bytes)
+            }
+
+            fn splat<U: OpU>(other: U) -> Self {
+                let slice = other.to_le_bytes();
+                let slice = slice.as_ref();
+                let mut bytes = [0; $n];
+                for i in (0..$n).step_by(slice.len()) {
+                    bytes[i..i+slice.len()].copy_from_slice(slice);
+                }
+                Self(bytes)
             }
         }
 
@@ -3103,17 +3136,17 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 {
                     if state.opt {
                         for npw2 in 0..T::NPW2 {
-                            if v.is_extend_u_compressable(npw2) {
+                            if v.is_extend_u(npw2) {
                                 best_npw2 = npw2;
                                 best_ins8 = OpCode::ExtendConst8U;
                                 best_ins  = OpCode::ExtendConstU;
                                 break;
-                            } else if v.is_extend_s_compressable(npw2) {
+                            } else if v.is_extend_s(npw2) {
                                 best_npw2 = npw2;
                                 best_ins8 = OpCode::ExtendConst8S;
                                 best_ins  = OpCode::ExtendConstS;
                                 break;
-                            } else if v.is_splat_compressable(npw2) {
+                            } else if v.is_splat(npw2) {
                                 best_npw2 = npw2;
                                 best_ins8 = OpCode::SplatConst8;
                                 best_ins  = OpCode::SplatConst;
