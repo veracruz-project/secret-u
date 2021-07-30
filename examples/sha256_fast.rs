@@ -53,28 +53,22 @@ fn sig1(x: SecretU32) -> SecretU32 {
 struct Sha256 {
     data: Vec<SecretU8>,
     bitlen: usize,
-    state: [SecretU32; 8],
+    state: SecretU32x8,
+    transform_lambda: Box<dyn Fn(SecretU32x8, SecretU8x64) -> SecretU32x8>,
 }
 
 impl Sha256 {
-    // TODO we REALLY need to allow tuples from compile statements
-    // as it is we can't really compile this
-    fn transform(&mut self) {
-        debug_assert!(self.data.len() == 64);
+    fn transform(state: SecretU32x8, data: SecretU8x64) -> SecretU32x8 {
         let m = {
-            let mut m = Vec::new();
-            let mut drain = self.data.drain(..);
-            for _ in 0..16 {
-                let a = drain.next().unwrap();
-                let b = drain.next().unwrap();
-                let c = drain.next().unwrap();
-                let d = drain.next().unwrap();
-                m.push(
-                    (SecretU32::from(a) << SecretU32::const_(24))
-                        | (SecretU32::from(b) << SecretU32::const_(16))
-                        | (SecretU32::from(c) << SecretU32::const_(8))
-                        | (SecretU32::from(d) << SecretU32::const_(0))
-                );
+            let mut m: Vec<SecretU32> = Vec::new();
+            let swap = SecretU8x4::const_lanes(3, 2, 1, 0);
+            for i in 0..16 {
+                let word = SecretU32x16::cast(data.clone()).extract(i);
+                m.push(SecretU32::cast(
+                    swap.clone().shuffle(
+                        SecretU8x4::cast(word.clone()),
+                        SecretU8x4::cast(word))
+                ));
             }
             for i in 16..64 {
                 m.push(
@@ -87,14 +81,14 @@ impl Sha256 {
             m
         };
 
-        let mut a = self.state[0].clone();
-        let mut b = self.state[1].clone();
-        let mut c = self.state[2].clone();
-        let mut d = self.state[3].clone();
-        let mut e = self.state[4].clone();
-        let mut f = self.state[5].clone();
-        let mut g = self.state[6].clone();
-        let mut h = self.state[7].clone();
+        let mut a = state.clone().extract(0);
+        let mut b = state.clone().extract(1);
+        let mut c = state.clone().extract(2);
+        let mut d = state.clone().extract(3);
+        let mut e = state.clone().extract(4);
+        let mut f = state.clone().extract(5);
+        let mut g = state.clone().extract(6);
+        let mut h = state.clone().extract(7);
 
         for i in 0..64 {
             let t1 = h.clone()
@@ -114,32 +108,31 @@ impl Sha256 {
             a = t1 + t2;
         }
 
-        // force eval here to keep the internal tree from exploding
-        // TODO do we actually need to? it'd be big, but only in bytecode right?
-        self.state[0] += a; self.state[0] = self.state[0].clone().eval();
-        self.state[1] += b; self.state[1] = self.state[1].clone().eval();
-        self.state[2] += c; self.state[2] = self.state[2].clone().eval();
-        self.state[3] += d; self.state[3] = self.state[3].clone().eval();
-        self.state[4] += e; self.state[4] = self.state[4].clone().eval();
-        self.state[5] += f; self.state[5] = self.state[5].clone().eval();
-        self.state[6] += g; self.state[6] = self.state[6].clone().eval();
-        self.state[7] += h; self.state[7] = self.state[7].clone().eval();
+        state + SecretU32x8::from_lanes(a, b, c, d, e, f, g, h)
     }
 
     pub fn new() -> Sha256 {
+        // compile the core transform
+        let transform_lambda = compile!(
+            |state: SecretU32x8, data: SecretU8x64| -> SecretU32x8 {
+                Self::transform(state, data)
+            }
+        );
+
         Sha256 {
             data: Vec::with_capacity(64),
             bitlen: 0,
-            state: [
-                SecretU32::const_(0x6a09e667),
-                SecretU32::const_(0xbb67ae85),
-                SecretU32::const_(0x3c6ef372),
-                SecretU32::const_(0xa54ff53a),
-                SecretU32::const_(0x510e527f),
-                SecretU32::const_(0x9b05688c),
-                SecretU32::const_(0x1f83d9ab),
-                SecretU32::const_(0x5be0cd19),
-            ]
+            state: SecretU32x8::new_lanes(
+                0x6a09e667,
+                0xbb67ae85,
+                0x3c6ef372,
+                0xa54ff53a,
+                0x510e527f,
+                0x9b05688c,
+                0x1f83d9ab,
+                0x5be0cd19,
+            ),
+            transform_lambda: Box::new(transform_lambda)
         }
     }
 
@@ -147,10 +140,24 @@ impl Sha256 {
         for b in data {
             self.data.push(b.clone());
             if self.data.len() == 64 {
-                self.transform();
+                self.state = (self.transform_lambda)(
+                    self.state.clone(),
+                    SecretU8x64::from_slice(&self.data)
+                );
                 self.bitlen += 512;
             }
         }
+    }
+
+    /// Updates can avoid an extra step of packing data if delivered
+    /// in 64-byte chunks
+    pub fn block_update(&mut self, data: SecretU8x64) {
+        assert!(self.data.len() == 0);
+        self.state = (self.transform_lambda)(
+            self.state.clone(),
+            data
+        );
+        self.bitlen += 512;
     }
 
     pub fn finalize(&mut self) -> [SecretU8; 32] {
@@ -168,7 +175,10 @@ impl Sha256 {
             while self.data.len() < 64 {
                 self.data.push(SecretU8::zero());
             }
-            self.transform();
+            self.state = (self.transform_lambda)(
+                self.state.clone(),
+                SecretU8x64::from_slice(&self.data)
+            );
             while self.data.len() < 64 {
                 self.data.push(SecretU8::zero());
             }
@@ -183,20 +193,23 @@ impl Sha256 {
         self.data.push(SecretU8::new((bitlen >> 16) as u8));
         self.data.push(SecretU8::new((bitlen >>  8) as u8));
         self.data.push(SecretU8::new((bitlen >>  0) as u8));
-        self.transform();
+        self.state = (self.transform_lambda)(
+            self.state.clone(),
+            SecretU8x64::from_slice(&self.data)
+        );
 
         // Since this implementation uses little endian byte ordering and SHA uses big endian,
         // reverse all the bytes when copying the final state to the output hash
         let mut hash: [SecretU8; 32] = Default::default();
         for i in 0..4 {
-            hash[i+ 0] = SecretU8::cast(self.state[0].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+ 4] = SecretU8::cast(self.state[1].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+ 8] = SecretU8::cast(self.state[2].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+12] = SecretU8::cast(self.state[3].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+16] = SecretU8::cast(self.state[4].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+20] = SecretU8::cast(self.state[5].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+24] = SecretU8::cast(self.state[6].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+28] = SecretU8::cast(self.state[7].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 0] = SecretU8::cast(self.state.clone().extract(0) >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 4] = SecretU8::cast(self.state.clone().extract(1) >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 8] = SecretU8::cast(self.state.clone().extract(2) >> SecretU32::const_(24-8*i as u32));
+            hash[i+12] = SecretU8::cast(self.state.clone().extract(3) >> SecretU32::const_(24-8*i as u32));
+            hash[i+16] = SecretU8::cast(self.state.clone().extract(4) >> SecretU32::const_(24-8*i as u32));
+            hash[i+20] = SecretU8::cast(self.state.clone().extract(5) >> SecretU32::const_(24-8*i as u32));
+            hash[i+24] = SecretU8::cast(self.state.clone().extract(6) >> SecretU32::const_(24-8*i as u32));
+            hash[i+28] = SecretU8::cast(self.state.clone().extract(7) >> SecretU32::const_(24-8*i as u32));
         }
         hash
     }
@@ -216,10 +229,12 @@ fn bench(path: &str) -> ! {
     loop {
         let mut block = [0; 64];
         let diff = file.read(&mut block).unwrap();
-        state.update(&block[..diff].into_iter()
-            .map(|b| SecretU8::new(*b))
-            .collect::<Vec<_>>());
-        if diff < 64 {
+        if diff == 64 {
+            state.block_update(SecretU8x64::new_slice(&block));
+        } else {
+            state.update(&block[..diff].into_iter()
+                .map(|b| SecretU8::new(*b))
+                .collect::<Vec<_>>());
             break;
         }
     }
