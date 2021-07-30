@@ -1,8 +1,7 @@
 //! Shamir's secret sharing example
 
 use secret_u::bitslice::static_bitslice;
-use secret_u::int::*;
-use secret_u::compile;
+use secret_u::*;
 
 // lookup tables for log and exp of polynomials in GF(256)
 

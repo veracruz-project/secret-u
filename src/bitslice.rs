@@ -17,7 +17,7 @@ mod tests {
 
     #[test]
     fn bitslice_abcd() {
-        use crate::int::*;
+        use crate::*;
         println!();
 
         let f = compile_object!(|x: SecretU8| -> SecretU8 {
@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn bitslice_div3() {
-        use crate::int::*;
+        use crate::*;
         println!();
 
         let f = compile_object!(|x: SecretU32| -> SecretBool {
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn bitslice_big() {
-        use crate::int::*;
+        use crate::*;
         println!();
 
         let f = compile_object!(|x: SecretU8| -> SecretU32 {
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn bitslice_hello() {
-        use crate::int::*;
+        use crate::*;
         println!();
 
         let f = compile_object!(|x: SecretU8| -> SecretU8 {
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn bitslice_multi() {
-        use crate::int::*;
+        use crate::*;
         println!();
 
         println!("hi b");
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn bitslice_parallel() {
-        use crate::int::*;
+        use crate::*;
         println!();
 
         let f = compile_object!(|a: SecretU8, b: SecretU8, c: SecretU8, d: SecretU8| -> SecretU32 {

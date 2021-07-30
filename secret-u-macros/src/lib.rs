@@ -14,6 +14,7 @@ use std::env;
 
 use boolean_expression as be;
 
+
 fn crate_() -> proc_macro2::TokenStream {
     if env::var("CARGO_CRATE_NAME").unwrap() == "secret_u" {
         quote! { crate }
@@ -208,7 +209,7 @@ impl Prim {
 
         let crate_ = crate_();
         parse_quote! {
-            #crate_::int::#ident
+            #crate_::num::#ident
         }
     }
 }
@@ -550,8 +551,8 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     let q = quote! {
         #[allow(non_snake_case)]
         #vis fn #name(#(#arg_tys),*) -> (#(#ret_tys),*) {
-            use #crate_::int::Cast;
-            use #crate_::int::SecretEq;
+            use #crate_::traits::Cast;
+            use #crate_::traits::Eq;
 
             let mut a: [#secret_ty; #a_width] = [
                 #(#a_args),*

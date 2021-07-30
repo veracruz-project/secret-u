@@ -365,7 +365,7 @@ impl fmt::Display for OpIns {
                     self.opcode(),
                     self.a(),
                     self.b(),
-                    self.p()
+                    self.p() & 0x7f
                 )
             }
 
@@ -374,7 +374,7 @@ impl fmt::Display for OpIns {
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
                     self.a(),
-                    self.p(),
+                    self.p() & 0x7f,
                     self.b()
                 )
             }
@@ -1226,6 +1226,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn select(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let p = p.node();
         let a = a.node();
         let b = b.node();
@@ -1235,6 +1236,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shuffle(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let p = p.node();
         let a = a.node();
         let b = b.node();
@@ -1279,6 +1281,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn all(lnpw2: u8, a: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1286,6 +1289,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn eq(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1294,6 +1298,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ne(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1302,6 +1307,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn lt_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1310,6 +1316,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn lt_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1318,6 +1325,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn gt_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1326,6 +1334,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn gt_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1334,6 +1343,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn le_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1342,6 +1352,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn le_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1350,6 +1361,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ge_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1358,6 +1370,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ge_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1366,6 +1379,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn min_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1374,6 +1388,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn min_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1382,6 +1397,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn max_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1390,6 +1406,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn max_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1398,6 +1415,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn neg(lnpw2: u8, a: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1405,6 +1423,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn abs(lnpw2: u8, a: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1419,6 +1438,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn clz(lnpw2: u8, a: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1426,6 +1446,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ctz(lnpw2: u8, a: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1433,6 +1454,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn popcnt(lnpw2: u8, a: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1440,6 +1462,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn add(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1448,6 +1471,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn sub(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1456,6 +1480,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn mul(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1496,6 +1521,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shl(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1504,6 +1530,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shr_u(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1512,6 +1539,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shr_s(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1520,6 +1548,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn rotl(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1528,6 +1557,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn rotr(lnpw2: u8, a: Self, b: Self) -> Self {
+        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1602,6 +1632,10 @@ impl<T: OpU> OpTree<T> {
             OpRoot::Const(v) => Ok(Self::const_(v)),
             OpRoot::Imm(v)   => Ok(Self::imm(v)),
             OpRoot::Tree(tree) => {
+                if tree.is_sym() {
+                    Err(Error::DeclassifyInCompile)?;
+                }
+
                 let (bytecode, mut stack) = tree.compile(false);
                 Self::try_exec(&bytecode, &mut stack)
             }
@@ -2967,6 +3001,11 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.borrow().compile_pass1(state);
                 b.borrow().compile_pass1(state);
             }
+            OpKind::Shuffle(_, p, a, b) if Rc::ptr_eq(&a.borrow(), &b.borrow()) => {
+                // avoid an unecessary slot alloc for this common case
+                p.borrow().compile_pass1(state);
+                a.borrow().compile_pass1(state);
+            }
             OpKind::Shuffle(_, p, a, b) => {
                 p.borrow().compile_pass1(state);
                 a.borrow().compile_pass1(state);
@@ -3227,6 +3266,39 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    self.slot.set(Some(slot));
+                    (slot, T::NPW2)
+                }
+            }
+            OpKind::Shuffle(lnpw2, p, a, b) if Rc::ptr_eq(&a.borrow(), &b.borrow()) => {
+                // avoid an unnecessary slot alloc for this common case
+                let p = p.borrow();
+                let a = a.borrow();
+                schedule! {
+                    let (p_slot, p_npw2) = p.compile_pass2(state);
+                    let (a_slot, a_npw2) = a.compile_pass2(state);
+                }
+                let p_refs = p.dec_refs();
+                let a_refs = a.dec_refs();
+
+                // can we reuse slots?
+                if a_refs == 0 {
+                    state.bytecode.push(u32::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, a_slot, a_slot
+                    )));
+                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
+                    self.slot.set(Some(a_slot));
+                    (a_slot, T::NPW2)
+                } else {
+                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                    state.bytecode.push(u32::from(OpIns::new(
+                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
+                    )));
+                    state.bytecode.push(u32::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, slot, a_slot
+                    )));
+                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(slot));
                     (slot, T::NPW2)
                 }

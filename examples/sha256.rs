@@ -3,7 +3,7 @@
 //! Based on implementation from here:
 //! https://github.com/B-Con/crypto-algorithms
 
-use secret_u::int::*;
+use secret_u::*;
 
 // helper functions and constants
 const K: [u32; 64] = [

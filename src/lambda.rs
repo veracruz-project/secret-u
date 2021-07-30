@@ -26,7 +26,7 @@ macro_rules! compile_object {
 
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
         $crate::lambda::paste! {
-            use $crate::int::SecretTree;
+            use $crate::traits::Tree;
             use $crate::opcode::OpTree;
             use std::io;
 
@@ -34,7 +34,7 @@ macro_rules! compile_object {
             struct SecretClosure {
                 // any arguments that may need patching
                 $(
-                    [<__sym_$($a)+>]: <$t as SecretTree>::Tree,
+                    [<__sym_$($a)+>]: <$t as Tree>::Tree,
                 )*
 
                 // bytecode and stack
@@ -57,7 +57,7 @@ macro_rules! compile_object {
                     // call user function with symbols
                     let v = f(
                         $(
-                            <$t as SecretTree>::from_tree([<__sym_$($a)+>].clone())
+                            <$t as Tree>::from_tree([<__sym_$($a)+>].clone())
                         ),*
                     );
 
@@ -165,7 +165,7 @@ macro_rules! compile {
 
 #[cfg(test)]
 mod tests {
-    use crate::int::*;
+    use crate::*;
     use std::io;
 
     #[test]

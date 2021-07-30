@@ -158,7 +158,7 @@ macro_rules! bytes_impl {
             }
         }
     };
-    ([$t:ty; $n:expr] => $ones:expr, $zero:expr) => {
+    ([$t:ty; $n:expr] => $zero:expr, $ones:expr) => {
         impl Bytes for [$t;$n] {
             const ONES: Self = $ones;
             const ZERO: Self = $zero;
