@@ -893,7 +893,7 @@ macro_rules! secret_m_impl {
 
             /// Find if any lanes are true
             pub fn any(self) -> SecretBool {
-                SecretBool::defer(Rc::new(OpTree::any(self.0)))
+                SecretBool::defer(Rc::new(OpTree::all(0, self.0)))
             }
 
             /// Find if all lanes are true

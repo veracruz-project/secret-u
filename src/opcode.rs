@@ -91,41 +91,40 @@ pub enum OpCode {
     Splat         = 0x000b0000,
 
     None          = 0x000c0000,
-    Any           = 0x000d0000,
-    All           = 0x000e0000,
-    Eq            = 0x000f0000,
-    Ne            = 0x00100000,
-    LtU           = 0x00110000,
-    LtS           = 0x00120000,
-    GtU           = 0x00130000,
-    GtS           = 0x00140000,
-    LeU           = 0x00150000,
-    LeS           = 0x00160000,
-    GeU           = 0x00170000,
-    GeS           = 0x00180000,
-    MinU          = 0x00190000,
-    MinS          = 0x001a0000,
-    MaxU          = 0x001b0000,
-    MaxS          = 0x001c0000,
+    All           = 0x000d0000,
+    Eq            = 0x000e0000,
+    Ne            = 0x000f0000,
+    LtU           = 0x00100000,
+    LtS           = 0x00110000,
+    GtU           = 0x00120000,
+    GtS           = 0x00130000,
+    LeU           = 0x00140000,
+    LeS           = 0x00150000,
+    GeU           = 0x00160000,
+    GeS           = 0x00170000,
+    MinU          = 0x00180000,
+    MinS          = 0x00190000,
+    MaxU          = 0x001a0000,
+    MaxS          = 0x001b0000,
 
-    Neg           = 0x001d0000,
-    Abs           = 0x001e0000,
-    Not           = 0x001f0000,
-    Clz           = 0x00200000,
-    Ctz           = 0x00210000,
-    Popcnt        = 0x00220000,
-    Add           = 0x00230000,
-    Sub           = 0x00240000,
-    Mul           = 0x00250000,
-    And           = 0x00260000,
-    Andnot        = 0x00270000,
-    Or            = 0x00280000,
-    Xor           = 0x00290000,
-    Shl           = 0x002a0000,
-    ShrU          = 0x002b0000,
-    ShrS          = 0x002c0000,
-    Rotl          = 0x002d0000,
-    Rotr          = 0x002e0000,
+    Neg           = 0x001c0000,
+    Abs           = 0x001d0000,
+    Not           = 0x001e0000,
+    Clz           = 0x001f0000,
+    Ctz           = 0x00200000,
+    Popcnt        = 0x00210000,
+    Add           = 0x00220000,
+    Sub           = 0x00230000,
+    Mul           = 0x00240000,
+    And           = 0x00250000,
+    Andnot        = 0x00260000,
+    Or            = 0x00270000,
+    Xor           = 0x00280000,
+    Shl           = 0x00290000,
+    ShrU          = 0x002a0000,
+    ShrS          = 0x002b0000,
+    Rotl          = 0x002c0000,
+    Rotr          = 0x002d0000,
 }
 
 impl fmt::Display for OpCode {
@@ -150,7 +149,6 @@ impl fmt::Display for OpCode {
             OpCode::Splat         => "splat",
 
             OpCode::None          => "none",
-            OpCode::Any           => "any",
             OpCode::All           => "all",
             OpCode::Eq            => "eq",
             OpCode::Ne            => "ne",
@@ -313,41 +311,40 @@ impl TryFrom<u32> for OpIns {
             0x00b => OpCode::Splat,
 
             0x00c => OpCode::None,
-            0x00d => OpCode::Any,
-            0x00e => OpCode::All,
-            0x00f => OpCode::Eq,
-            0x010 => OpCode::Ne,
-            0x011 => OpCode::LtU,
-            0x012 => OpCode::LtS,
-            0x013 => OpCode::GtU,
-            0x014 => OpCode::GtS,
-            0x015 => OpCode::LeU,
-            0x016 => OpCode::LeS,
-            0x017 => OpCode::GeU,
-            0x018 => OpCode::GeS,
-            0x019 => OpCode::MinU,
-            0x01a => OpCode::MinS,
-            0x01b => OpCode::MaxU,
-            0x01c => OpCode::MaxS,
+            0x00d => OpCode::All,
+            0x00e => OpCode::Eq,
+            0x00f => OpCode::Ne,
+            0x010 => OpCode::LtU,
+            0x011 => OpCode::LtS,
+            0x012 => OpCode::GtU,
+            0x013 => OpCode::GtS,
+            0x014 => OpCode::LeU,
+            0x015 => OpCode::LeS,
+            0x016 => OpCode::GeU,
+            0x017 => OpCode::GeS,
+            0x018 => OpCode::MinU,
+            0x019 => OpCode::MinS,
+            0x01a => OpCode::MaxU,
+            0x01b => OpCode::MaxS,
 
-            0x01d => OpCode::Neg,
-            0x01f => OpCode::Abs,
-            0x01e => OpCode::Not,
-            0x020 => OpCode::Clz,
-            0x021 => OpCode::Ctz,
-            0x022 => OpCode::Popcnt,
-            0x023 => OpCode::Add,
-            0x024 => OpCode::Sub,
-            0x025 => OpCode::Mul,
-            0x026 => OpCode::And,
-            0x027 => OpCode::Andnot,
-            0x028 => OpCode::Or,
-            0x029 => OpCode::Xor,
-            0x02a => OpCode::Shl,
-            0x02b => OpCode::ShrU,
-            0x02c => OpCode::ShrS,
-            0x02d => OpCode::Rotl,
-            0x02e => OpCode::Rotr,
+            0x01c => OpCode::Neg,
+            0x01e => OpCode::Abs,
+            0x01d => OpCode::Not,
+            0x01f => OpCode::Clz,
+            0x020 => OpCode::Ctz,
+            0x021 => OpCode::Popcnt,
+            0x022 => OpCode::Add,
+            0x023 => OpCode::Sub,
+            0x024 => OpCode::Mul,
+            0x025 => OpCode::And,
+            0x026 => OpCode::Andnot,
+            0x027 => OpCode::Or,
+            0x028 => OpCode::Xor,
+            0x029 => OpCode::Shl,
+            0x02a => OpCode::ShrU,
+            0x02b => OpCode::ShrS,
+            0x02c => OpCode::Rotl,
+            0x02d => OpCode::Rotr,
 
             _ => Err(Error::InvalidOpcode(ins))?,
         };
@@ -725,7 +722,6 @@ pub enum OpKind<T: OpU> {
     Splat(RefCell<Rc<dyn DynOpNode>>),
 
     None(RefCell<Rc<OpNode<T>>>),
-    Any(RefCell<Rc<OpNode<T>>>),
     All(u8, RefCell<Rc<OpNode<T>>>),
     Eq(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     Ne(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
@@ -1271,13 +1267,6 @@ impl<T: OpU> OpTree<T> {
         let flags = a.flags();
         let depth = a.depth();
         Self::from_kind(OpKind::None(RefCell::new(a)), flags, depth)
-    }
-
-    pub fn any(a: Self) -> Self {
-        let a = a.node();
-        let flags = a.flags();
-        let depth = a.depth();
-        Self::from_kind(OpKind::Any(RefCell::new(a)), flags, depth)
     }
 
     pub fn all(lnpw2: u8, a: Self) -> Self {
@@ -2052,9 +2041,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             OpKind::None(a) => {
                 a.borrow().disas_pass1();
             }
-            OpKind::Any(a) => {
-                a.borrow().disas_pass1();
-            }
             OpKind::All(_, a) => {
                 a.borrow().disas_pass1();
             }
@@ -2251,10 +2237,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             ),
 
             OpKind::None(a) => format!("(u{}.none {})",
-                8 << T::NPW2,
-                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
-            ),
-            OpKind::Any(a) => format!("(u{}.any {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
@@ -2471,9 +2453,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             OpKind::None(a) => {
                 a.borrow().check_refs();
             }
-            OpKind::Any(a) => {
-                a.borrow().check_refs();
-            }
             OpKind::All(_, a) => {
                 a.borrow().check_refs();
             }
@@ -2673,10 +2652,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             }
 
             OpKind::None(a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-            }
-            OpKind::Any(a) => {
                 let mut a = a.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
@@ -3023,9 +2998,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             }
 
             OpKind::None(a) => {
-                a.borrow().compile_pass1(state);
-            }
-            OpKind::Any(a) => {
                 a.borrow().compile_pass1(state);
             }
             OpKind::All(_, a) => {
@@ -3440,19 +3412,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u32::from(OpIns::new(
                     T::NPW2, 0, OpCode::None, 0, slot, a_slot
-                )));
-                self.slot.set(Some(slot));
-                (slot, T::NPW2)
-            }
-            OpKind::Any(a) => {
-                let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-
-                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, 0, OpCode::Any, 0, slot, a_slot
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
