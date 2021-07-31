@@ -2,10 +2,11 @@
 
 use secret_u::bitslice::static_bitslice;
 use secret_u::*;
+use std::iter;
 
 // lookup tables for log and exp of polynomials in GF(256)
 
-#[static_bitslice]
+#[static_bitslice(parallel=32)]
 const GF256_LOG: [u8; 256] = [
     0xff, 0x00, 0x19, 0x01, 0x32, 0x02, 0x1a, 0xc6,
     0x4b, 0xc7, 0x1b, 0x68, 0x33, 0xee, 0xdf, 0x03,
@@ -41,7 +42,7 @@ const GF256_LOG: [u8; 256] = [
     0x0d, 0x63, 0x8c, 0x80, 0xc0, 0xf7, 0x70, 0x07,
 ];
 
-#[static_bitslice]
+#[static_bitslice(parallel=32)]
 const GF256_EXP: [u8; 510] = [
     0x01, 0x03, 0x05, 0x0f, 0x11, 0x33, 0x55, 0xff,
     0x1a, 0x2e, 0x72, 0x96, 0xa1, 0xf8, 0x13, 0x35,
@@ -111,34 +112,34 @@ const GF256_EXP: [u8; 510] = [
 ];
 
 /// multiply in GF(256)
-fn gf256_mul(a: SecretU8, b: SecretU8) -> SecretU8 {
-    (a.clone().eq(SecretU8::zero()) | b.clone().eq(SecretU8::zero()))
+fn gf256_mul(a: SecretU8x32, b: SecretU8x32) -> SecretU8x32 {
+    (a.clone().eq(SecretU8x32::zero()) | b.clone().eq(SecretU8x32::zero()))
         .select(
-            SecretU8::zero(),
+            SecretU8x32::zero(),
             GF256_EXP(
-                SecretU16::from(GF256_LOG(a)) + SecretU16::from(GF256_LOG(b))
+                SecretU16x32::from(GF256_LOG(a)) + SecretU16x32::from(GF256_LOG(b))
             )
         )
 }
 
 /// divide in GF(256)
-fn gf256_div(a: SecretU8, b: SecretU8) -> SecretU8 {
+fn gf256_div(a: SecretU8x32, b: SecretU8x32) -> SecretU8x32 {
     // multiply a against inverse b
-    gf256_mul(a, GF256_EXP(SecretU16::from(SecretU8::ones() - GF256_LOG(b))))
+    gf256_mul(a, GF256_EXP(SecretU16x32::from(SecretU8x32::ones() - GF256_LOG(b))))
 }
 
 // lazily compiled functions
 thread_local! {
     #[allow(non_upper_case_globals)]
-    static gf256_interpolate_step: Box<dyn Fn(SecretU8, SecretU8, SecretU8) -> SecretU8> = {
-        Box::new(compile!(|li: SecretU8, x0: SecretU8, x1: SecretU8| -> SecretU8 {
-            gf256_mul(li, gf256_div(x1.clone(), x0 ^ x1))
+    static gf256_interpolate_step: Box<dyn Fn(SecretU8x32, SecretU8, SecretU8) -> SecretU8x32> = {
+        Box::new(compile!(|li: SecretU8x32, x0: SecretU8, x1: SecretU8| -> SecretU8x32 {
+            gf256_mul(li, gf256_div(SecretU8x32::splat(x1.clone()), SecretU8x32::splat(x0 ^ x1)))
         }))
     };
 
     #[allow(non_upper_case_globals)]
-    static gf256_interpolate_sum: Box<dyn Fn(SecretU8, SecretU8, SecretU8) -> SecretU8> = {
-        Box::new(compile!(|y: SecretU8, li: SecretU8, y0: SecretU8| -> SecretU8 {
+    static gf256_interpolate_sum: Box<dyn Fn(SecretU8x32, SecretU8x32, SecretU8x32) -> SecretU8x32> = {
+        Box::new(compile!(|y: SecretU8x32, li: SecretU8x32, y0: SecretU8x32| -> SecretU8x32 {
             y ^ gf256_mul(li, y0)
         }))
     };
@@ -146,12 +147,12 @@ thread_local! {
 
 
 /// find f(0) using Lagrange interpolation
-fn gf256_interpolate(xs: &[SecretU8], ys: &[SecretU8]) -> SecretU8 {
+fn gf256_interpolate(xs: &[SecretU8], ys: &[SecretU8x32]) -> SecretU8x32 {
     assert!(xs.len() == ys.len());
 
-    let mut y = SecretU8::zero();
+    let mut y = SecretU8x32::zero();
     for (i, (x0, y0)) in xs.iter().zip(ys).enumerate() {
-        let mut li = SecretU8::one();
+        let mut li = SecretU8x32::one();
         for (j, (x1, _y1)) in xs.iter().zip(ys).enumerate() {
             if i != j {
                 li = gf256_interpolate_step.with(|f| f(li, x0.clone(), x1.clone()));
@@ -180,13 +181,31 @@ fn shares_reconstruct<S: AsRef<[SecretU8]>>(shares: &[S]) -> Vec<SecretU8> {
     let xs: Vec<SecretU8> = shares.iter()
         .map(|v| v.as_ref()[0].clone())
         .collect();
-    for i in 1..len {
-        let ys: Vec<SecretU8> = shares.iter()
-            .map(|v| v.as_ref()[i].clone())
+    for i in (1..len).step_by(32) {
+        // pad to 32 bytes if necessary
+        let ys: Vec<SecretU8x32> = shares.iter()
+            .map(|v| {
+                let slice = &v.as_ref()[i..];
+                if slice.len() > 32 {
+                    SecretU8x32::from_slice(slice)
+                } else {
+                    SecretU8x32::from_slice(
+                        &slice.iter()
+                            .chain(iter::repeat(&SecretU8::zero()))
+                            .take(32)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    )
+                }
+            })
             .collect();
-        secret.push(gf256_interpolate(&xs, &ys));
+        secret.append(
+            &mut gf256_interpolate(&xs, &ys)
+                .to_vec()
+        );
     }
 
+    secret.truncate(len-1);
     secret
 }
 

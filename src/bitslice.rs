@@ -159,24 +159,19 @@ mod tests {
         use crate::*;
         println!();
 
-        let f = compile_object!(|a: SecretU8, b: SecretU8, c: SecretU8, d: SecretU8| -> SecretU32 {
-            let (a, b, c, d) = par(a, b, c, d);
-            // marshall into u32
-            (SecretU32::from(a) << SecretU32::const_(24))
-                | (SecretU32::from(b) << SecretU32::const_(16))
-                | (SecretU32::from(c) << SecretU32::const_(8))
-                | (SecretU32::from(d) << SecretU32::const_(0))
+        let f = compile_object!(|xs: SecretU8x4| -> SecretU8x4 {
+            par(xs)
         });
 
         f.disas(io::stdout()).unwrap();
 
-        let a = f.call(
-            SecretU8::new(0),
-            SecretU8::new(1),
-            SecretU8::new(2),
-            SecretU8::new(3)
-        ).declassify();
+        let a = f.call(SecretU8x4::new_lanes(
+            0,
+            1,
+            2,
+            3
+        )).declassify_lanes();
         println!("{:?}", a);
-        assert_eq!(a, 0x12345678);
+        assert_eq!(a, (0x12, 0x34, 0x56, 0x78));
     }
 }

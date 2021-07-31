@@ -179,7 +179,8 @@ impl Sha256 {
                 self.state.clone(),
                 SecretU8x64::from_slice(&self.data)
             );
-            while self.data.len() < 64 {
+            self.data.clear();
+            while self.data.len() < 56 {
                 self.data.push(SecretU8::zero());
             }
         }

@@ -156,6 +156,17 @@ impl Prim {
         }
     }
 
+    fn from_width(width: usize) -> Prim {
+        match width {
+            width if width <= 8   => Prim::U8,
+            width if width <= 16  => Prim::U16,
+            width if width <= 32  => Prim::U32,
+            width if width <= 64  => Prim::U64,
+            width if width <= 128 => Prim::U128,
+            _ => panic!("width > u128?"),
+        }
+    }
+
     fn width(&self) -> usize {
         match self {
             Prim::Bool => 1,
@@ -212,6 +223,31 @@ impl Prim {
             #crate_::num::#ident
         }
     }
+
+    fn secret_parallel_ty(&self, parallel: usize) -> syn::Type {
+        if parallel == 1 {
+            return self.secret_ty();
+        }
+
+        let ident = match self {
+            Prim::Bool => ident!("SecretBoolx{}", parallel),
+            Prim::U8   => ident!("SecretU8x{}",   parallel),
+            Prim::U16  => ident!("SecretU16x{}",  parallel),
+            Prim::U32  => ident!("SecretU32x{}",  parallel),
+            Prim::U64  => ident!("SecretU64x{}",  parallel),
+            Prim::U128 => ident!("SecretU128x{}", parallel),
+            Prim::I8   => ident!("SecretI8x{}",   parallel),
+            Prim::I16  => ident!("SecretI16x{}",  parallel),
+            Prim::I32  => ident!("SecretI32x{}",  parallel),
+            Prim::I64  => ident!("SecretI64x{}",  parallel),
+            Prim::I128 => ident!("SecretI128x{}", parallel),
+        };
+
+        let crate_ = crate_();
+        parse_quote! {
+            #crate_::num::#ident
+        }
+    }
 }
 
 fn build_transpose(
@@ -221,7 +257,10 @@ fn build_transpose(
     width: usize
 ) -> Vec<syn::Stmt> {
     let dim = width/2;
-    let mask = lit!((1 << dim) - 1);
+    let mask = lit!(
+        1usize.checked_shl(dim as u32)
+            .map_or(usize::MAX, |mask| mask - 1)
+    );
 
     parse_quote! {
         let mut dim = #dim;
@@ -362,8 +401,7 @@ fn build_bitexpr(
 ///
 /// Result:
 /// ```
-/// fn table(in0: SecretU16, in1: SecretU16, in2: SecretU16, in3: SecretU16)
-///     -> (SecretU16, SecretU16, SecretU16, SecretU16)
+/// fn table(in: SecretU16x4) -> (SecretU16x4)
 /// ```
 ///
 #[proc_macro_attribute]
@@ -469,32 +507,37 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
         bail!(table.expr, "expected array of size {}, found one of size {}", size, elems.len());
     }
 
+    if let Some(parallel) = args.parallel {
+        if !parallel.is_power_of_two() {
+            bail!(_, "parallel must be a power of two");
+        }
+    }
+
     // find best types
+    let parallel = args.parallel.unwrap_or(1);
     let elem_ty = Prim::from_len(elems.len());
-    let mid_ty = max_by_key(elem_ty, ret_ty, |x| x.width());
+    let mid_ty = Prim::from_width(max(max(elem_ty.width(), ret_ty.width()), parallel));
     let index_ty = index_ty.unwrap_or(elem_ty);
 
     // build function
-    let parallel = args.parallel.unwrap_or(1);
     let prim_ty = mid_ty.prim_ty();
     let secret_ty = mid_ty.secret_ty();
-    let index_secret_ty = index_ty.secret_ty();
-    let ret_secret_ty = ret_ty.secret_ty();
+    let index_secret_ty = index_ty.secret_parallel_ty(parallel);
+    let ret_secret_ty = ret_ty.secret_parallel_ty(parallel);
+    let ret_lane_secret_ty = ret_ty.secret_ty();
     let a_width = find_in_width(&elems, parallel);
     let b_width = find_out_width(&elems, parallel);
 
-    let arg_tys = (0..parallel).map(|i| -> syn::FnArg {
-        let a = ident!("a{}", i);
-        parse_quote! { #a: #index_secret_ty }
-    });
-    let ret_tys = (0..parallel).map(|_| -> syn::Type {
-        parse_quote! { #ret_secret_ty }
-    });
-
     // create variables
+    // TODO can we use simds throughout?
+    // TODO can we use a shuffle to do majority of transpose?
     let a_args = (0..parallel)
         .map(|i| -> syn::Expr {
-            let a = ident!("a{}", i);
+            let a: syn::Expr = if parallel == 1 {
+                parse_quote! { a }
+            } else {
+                parse_quote! { a.clone().extract(#i) }
+            };
             if mid_ty.width() > index_ty.width() {
                 parse_quote! { #secret_ty::from(#a) }
             } else if mid_ty.width() < index_ty.width() {
@@ -510,11 +553,11 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     let b_rets = (0..parallel)
         .map(|i| -> syn::Expr {
             // mask off extra bits introduced by bitwise not
-            let ret: syn::Expr = if b_width == ret_ty.width() {
+            let ret: syn::Expr = if b_width >= ret_ty.width() {
                 let i = lit!(i);
                 parse_quote! { b[#i].clone() }
             } else {
-                let mask = lit!((1 << b_width) - 1);
+                let mask = lit!((1usize << b_width) - 1);
                 let i = lit!(i);
                 parse_quote! { #secret_ty::const_(#mask) & b[#i].clone() }
             };
@@ -522,13 +565,22 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
             if ret_ty == Prim::Bool {
                 parse_quote! { (#ret & #secret_ty::one()).eq(#secret_ty::one()) }
             } else if ret_ty.width() > mid_ty.width() {
-                parse_quote! { #ret_secret_ty::from(#ret) }
+                parse_quote! { #ret_lane_secret_ty::from(#ret) }
             } else if ret_ty.width() < mid_ty.width() {
-                parse_quote! { #ret_secret_ty::cast(#ret) }
+                parse_quote! { #ret_lane_secret_ty::cast(#ret) }
             } else {
                 parse_quote! { #ret }
             }
         });
+    let ret: syn::Expr = if parallel > 1 {
+        parse_quote! { 
+            #ret_secret_ty::from_slice(&[#(#b_rets),*])
+        }
+    } else {
+        parse_quote! { 
+            #(#b_rets)*
+        }
+    };
 
     // transposes
     let a_transpose = build_transpose(&ident!("a"), &prim_ty, &secret_ty, a_width);
@@ -550,7 +602,7 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
     let crate_ = crate_();
     let q = quote! {
         #[allow(non_snake_case)]
-        #vis fn #name(#(#arg_tys),*) -> (#(#ret_tys),*) {
+        #vis fn #name(a: #index_secret_ty) -> #ret_secret_ty {
             use #crate_::traits::Cast;
             use #crate_::traits::Eq;
 
@@ -566,7 +618,7 @@ pub fn static_bitslice(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#b_transpose)*
 
-            (#(#b_rets),*)
+            (#ret)
         }
     };
 

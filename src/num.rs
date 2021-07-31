@@ -837,6 +837,13 @@ macro_rules! secret_m_impl {
                 x
             }
 
+            /// Extract all lanes
+            pub fn to_lanes(self) -> ($(secret_m_impl!(@p $a: SecretBool),)+) {
+                ($(
+                    self.clone().extract($i),
+                )+)
+            }
+
             /// Build from lanes, panicking if the slice length does not match
             pub fn from_slice(slice: &[SecretBool]) -> Self {
                 Self::try_from_slice(slice).unwrap()
@@ -853,6 +860,13 @@ macro_rules! secret_m_impl {
                 } else {
                     None
                 }
+            }
+
+            /// Extract all lanes
+            pub fn to_vec(self) -> Vec<SecretBool> {
+                vec![$(
+                    self.clone().extract($i),
+                )+]
             }
 
             /// Splat a given value to all lanes
@@ -1308,6 +1322,13 @@ macro_rules! secret_x_impl {
                 x
             }
 
+            /// Extract all lanes
+            pub fn to_lanes(self) -> ($(secret_m_impl!(@p $a: $v),)+) {
+                ($(
+                    self.clone().extract($i),
+                )+)
+            }
+
             /// Build from lanes, panicking if the slice length does not match
             pub fn from_slice(slice: &[$v]) -> Self {
                 Self::try_from_slice(slice).unwrap()
@@ -1326,9 +1347,16 @@ macro_rules! secret_x_impl {
                 }
             }
 
+            /// Extract all lanes
+            pub fn to_vec(self) -> Vec<$v> {
+                vec![$(
+                    self.clone().extract($i),
+                )+]
+            }
+
             /// Splat a given value to all lanes
-            pub fn splat(value: SecretBool) -> Self {
-                Self(OpTree::splat(value.resolve::<$V>()))
+            pub fn splat(value: $v) -> Self {
+                Self(OpTree::splat(value.0))
             }
 
             /// Extract a specific lane

@@ -163,7 +163,7 @@ impl Sha256 {
                 self.data.push(0);
             }
             self.transform();
-            while self.data.len() < 64 {
+            while self.data.len() < 56 {
                 self.data.push(0);
             }
         }
