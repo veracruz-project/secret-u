@@ -33,12 +33,20 @@ bench-sha256:
 
 .PHONY: bench-sss
 bench-sss:
-	# build (assuming builds are cached)
+	# build (need to move so different configurations don't overwrite each other)
 	cargo build --release --example sss
 	cargo build --release --example sss_simd
+	cp target/release/examples/sss 	    target/release/examples/sss_shuffle
+	cp target/release/examples/sss_simd target/release/examples/sss_simd_shuffle
+	cargo build --release --example sss		 --features example-bitslice-tables
+	cargo build --release --example sss_simd --features example-bitslice-tables
+	cp target/release/examples/sss 	    target/release/examples/sss_bitslice
+	cp target/release/examples/sss_simd target/release/examples/sss_simd_bitslice
 	# run, measuring execution time
-	time cargo run --release --example sss
-	time cargo run --release --example sss_simd
+	time ./target/release/examples/sss_shuffle
+	time ./target/release/examples/sss_simd_shuffle
+	time ./target/release/examples/sss_bitslice
+	time ./target/release/examples/sss_simd_bitslice
 
 .PHONY: clean
 clean:

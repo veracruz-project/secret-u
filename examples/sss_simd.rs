@@ -1,12 +1,16 @@
 //! Shamir's secret sharing example
 
-use secret_u::bitslice::static_bitslice;
+#[cfg(feature="example-bitslice-tables")]
+use secret_u::bitslice::bitslice_table;
+#[cfg(not(feature="example-bitslice-tables"))]
+use secret_u::bitslice::shuffle_table as bitslice_table;
+
 use secret_u::*;
 use std::iter;
 
 // lookup tables for log and exp of polynomials in GF(256)
 
-#[static_bitslice(parallel=32)]
+#[bitslice_table(parallel=32)]
 const GF256_LOG: [u8; 256] = [
     0xff, 0x00, 0x19, 0x01, 0x32, 0x02, 0x1a, 0xc6,
     0x4b, 0xc7, 0x1b, 0x68, 0x33, 0xee, 0xdf, 0x03,
@@ -42,7 +46,7 @@ const GF256_LOG: [u8; 256] = [
     0x0d, 0x63, 0x8c, 0x80, 0xc0, 0xf7, 0x70, 0x07,
 ];
 
-#[static_bitslice(parallel=32)]
+#[bitslice_table(parallel=32)]
 const GF256_EXP: [u8; 510] = [
     0x01, 0x03, 0x05, 0x0f, 0x11, 0x33, 0x55, 0xff,
     0x1a, 0x2e, 0x72, 0x96, 0xa1, 0xf8, 0x13, 0x35,

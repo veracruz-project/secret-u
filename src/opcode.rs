@@ -548,7 +548,7 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
 
     /// Test if self is zero
     fn is_zero(&self) -> bool {
-        self == &Self::ones()
+        self == &Self::zero()
     }
 
     /// Test if self is one

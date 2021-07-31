@@ -48,6 +48,11 @@ bitslice-simplify-identities = []
 # simplify by BDD (use this if you want compilation to take forever
 bitslice-simplify-bdd = []
 
+# use bitslice_table in examples instead of shuffle_tables, shuffle_tables
+# is considerably faster to compile, but likely slower to execute, so
+# shuffle_tables is prefered for development
+example-bitslice-tables = []
+
 
 [dependencies]
 secret-u-macros = { path = "secret-u-macros", default-features = false }
