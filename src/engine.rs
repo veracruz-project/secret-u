@@ -17,6 +17,8 @@ use num_traits::sign::Signed;
 
 #[cfg(feature="debug-trace")]
 use crate::opcode::OpIns;
+#[cfg(feature="debug-cycle-count")]
+use std::cell::Cell;
 
 
 /// Trait to help with treating as generic byte arrays,
@@ -1013,6 +1015,13 @@ impl<'a> State<'a> {
         // zero memory outside of register to avoid leaking info
         self.slice_mut::<u8, _>(ret_size..)?.fill(0x00);
 
+        // print accumulative cycle count so far
+        #[cfg(feature="debug-cycle-count")]
+        {
+            let cycles = CYCLE_COUNT.with(|c| c.get());
+            println!("engine-cycle-count: {}", cycles);
+        }
+
         // return ret value, consuming our lifetime
         self.state.get(..ret_size).ok_or(Error::OutOfBounds)
     }
@@ -1471,6 +1480,10 @@ macro_rules! ex {
     }};
 }
 
+#[cfg(feature="debug-cycle-count")]
+thread_local! {
+    static CYCLE_COUNT: Cell<u64> = Cell::new(0);
+}
 
 
 /// Simple non-constant crypto-VM for testing 
@@ -1499,6 +1512,9 @@ pub fn exec<'a>(
     loop {
         let ins: u32 = unsafe { *pc };
         pc = unsafe { pc.add(1) };
+
+        #[cfg(feature="debug-cycle-count")]
+        CYCLE_COUNT.with(|c| c.set(c.get() + 1));
 
         #[cfg(feature="debug-trace")]
         {

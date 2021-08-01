@@ -38,6 +38,8 @@ debug-trees = []
 debug-bytecode = []
 # show VM execution
 debug-trace = []
+# show total number of instructions executed after each exec
+debug-cycle-count = []
 # show proc macro generation
 debug-proc-macros = ["secret-u-macros/debug-proc-macros"]
 # check internal refs correctly return to 0, note this is very expensive
