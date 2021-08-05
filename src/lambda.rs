@@ -4,6 +4,10 @@ pub use paste::paste;
 pub use aligned_utils::bytes::AlignedBytes;
 
 
+// proc_macros provided by secret_u_macros
+pub use secret_u_macros::lazy_compile;
+
+
 /// A macro for compiling parameterized, secret expressions into 
 /// bytecode for fast repeated execution, resulting in a SecretClosure
 /// instead of callable Fn.
