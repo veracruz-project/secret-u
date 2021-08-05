@@ -630,6 +630,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let crate_ = crate_();
     let q = quote! {
+        #[inline(never)]
         #[allow(non_snake_case)]
         #vis fn #name(a: #index_secret_ty) -> #ret_secret_ty {
             use #crate_::traits::Cast;

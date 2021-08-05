@@ -34,12 +34,16 @@ bench-sha256:
 .PHONY: bench-sss
 bench-sss:
 	# build (need to move so different configurations don't overwrite each other)
-	cargo build --release --example sss
-	cargo build --release --example sss_simd
+	cargo build --release --example sss		 --features debug-cycle-count
+	cargo build --release --example sss_simd --features debug-cycle-count
 	cp target/release/examples/sss 	    target/release/examples/sss_shuffle
 	cp target/release/examples/sss_simd target/release/examples/sss_simd_shuffle
-	cargo build --release --example sss		 --features example-bitslice-tables
-	cargo build --release --example sss_simd --features example-bitslice-tables
+	$(strip RUSTFLAGS="-C lto=no" \
+		cargo build -v --release --example sss \
+			--features debug-cycle-count,example-bitslice-tables )
+	$(strip RUSTFLAGS="-C lto=no" \
+		cargo build -v --release --example sss_simd \
+			--features debug-cycle-count,example-bitslice-tables )
 	cp target/release/examples/sss 	    target/release/examples/sss_bitslice
 	cp target/release/examples/sss_simd target/release/examples/sss_simd_bitslice
 	# run, measuring execution time

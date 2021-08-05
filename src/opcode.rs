@@ -83,48 +83,46 @@ pub enum OpCode {
     ExtendConstU  = 0x00030000,
     ExtendConstS  = 0x00040000,
     SplatConst    = 0x00050000,
-    ExtendConst8U = 0x00060000,
-    ExtendConst8S = 0x00070000,
-    SplatConst8   = 0x00080000,
-    ExtendU       = 0x00090000,
-    ExtendS       = 0x000a0000,
-    Splat         = 0x000b0000,
+    ExtendU       = 0x00060000,
+    ExtendS       = 0x00070000,
+    Splat         = 0x00080000,
+    SplatC        = 0x00090000,
 
-    None          = 0x000c0000,
-    All           = 0x000d0000,
-    Eq            = 0x000e0000,
-    Ne            = 0x000f0000,
-    LtU           = 0x00100000,
-    LtS           = 0x00110000,
-    GtU           = 0x00120000,
-    GtS           = 0x00130000,
-    LeU           = 0x00140000,
-    LeS           = 0x00150000,
-    GeU           = 0x00160000,
-    GeS           = 0x00170000,
-    MinU          = 0x00180000,
-    MinS          = 0x00190000,
-    MaxU          = 0x001a0000,
-    MaxS          = 0x001b0000,
+    None          = 0x000a0000,
+    All           = 0x000b0000,
+    Eq            = 0x000c0000,
+    Ne            = 0x000d0000,
+    LtU           = 0x000e0000,
+    LtS           = 0x000f0000,
+    GtU           = 0x00100000,
+    GtS           = 0x00110000,
+    LeU           = 0x00120000,
+    LeS           = 0x00130000,
+    GeU           = 0x00140000,
+    GeS           = 0x00150000,
+    MinU          = 0x00160000,
+    MinS          = 0x00170000,
+    MaxU          = 0x00180000,
+    MaxS          = 0x00190000,
 
-    Neg           = 0x001c0000,
-    Abs           = 0x001d0000,
-    Not           = 0x001e0000,
-    Clz           = 0x001f0000,
-    Ctz           = 0x00200000,
-    Popcnt        = 0x00210000,
-    Add           = 0x00220000,
-    Sub           = 0x00230000,
-    Mul           = 0x00240000,
-    And           = 0x00250000,
-    Andnot        = 0x00260000,
-    Or            = 0x00270000,
-    Xor           = 0x00280000,
-    Shl           = 0x00290000,
-    ShrU          = 0x002a0000,
-    ShrS          = 0x002b0000,
-    Rotl          = 0x002c0000,
-    Rotr          = 0x002d0000,
+    Neg           = 0x001a0000,
+    Abs           = 0x001b0000,
+    Not           = 0x001c0000,
+    Clz           = 0x001d0000,
+    Ctz           = 0x001e0000,
+    Popcnt        = 0x001f0000,
+    Add           = 0x00200000,
+    Sub           = 0x00210000,
+    Mul           = 0x00220000,
+    And           = 0x00230000,
+    Andnot        = 0x00240000,
+    Or            = 0x00250000,
+    Xor           = 0x00260000,
+    Shl           = 0x00270000,
+    ShrU          = 0x00280000,
+    ShrS          = 0x00290000,
+    Rotl          = 0x002a0000,
+    Rotr          = 0x002b0000,
 }
 
 impl fmt::Display for OpCode {
@@ -141,12 +139,10 @@ impl fmt::Display for OpCode {
             OpCode::ExtendConstU  => "extend_const_u",
             OpCode::ExtendConstS  => "extend_const_s",
             OpCode::SplatConst    => "splat_const",
-            OpCode::ExtendConst8U => "extend_const8_u",
-            OpCode::ExtendConst8S => "extend_const8_s",
-            OpCode::SplatConst8   => "splat_const8",
             OpCode::ExtendU       => "extend_u",
             OpCode::ExtendS       => "extend_s",
             OpCode::Splat         => "splat",
+            OpCode::SplatC        => "splat_c",
 
             OpCode::None          => "none",
             OpCode::All           => "all",
@@ -303,48 +299,46 @@ impl TryFrom<u32> for OpIns {
             0x003 => OpCode::ExtendConstU,
             0x004 => OpCode::ExtendConstS,
             0x005 => OpCode::SplatConst,
-            0x006 => OpCode::ExtendConst8U,
-            0x007 => OpCode::ExtendConst8S,
-            0x008 => OpCode::SplatConst8,
-            0x009 => OpCode::ExtendU,
-            0x00a => OpCode::ExtendS,
-            0x00b => OpCode::Splat,
+            0x006 => OpCode::ExtendU,
+            0x007 => OpCode::ExtendS,
+            0x008 => OpCode::Splat,
+            0x009 => OpCode::SplatC,
 
-            0x00c => OpCode::None,
-            0x00d => OpCode::All,
-            0x00e => OpCode::Eq,
-            0x00f => OpCode::Ne,
-            0x010 => OpCode::LtU,
-            0x011 => OpCode::LtS,
-            0x012 => OpCode::GtU,
-            0x013 => OpCode::GtS,
-            0x014 => OpCode::LeU,
-            0x015 => OpCode::LeS,
-            0x016 => OpCode::GeU,
-            0x017 => OpCode::GeS,
-            0x018 => OpCode::MinU,
-            0x019 => OpCode::MinS,
-            0x01a => OpCode::MaxU,
-            0x01b => OpCode::MaxS,
+            0x00a => OpCode::None,
+            0x00b => OpCode::All,
+            0x00c => OpCode::Eq,
+            0x00d => OpCode::Ne,
+            0x00e => OpCode::LtU,
+            0x00f => OpCode::LtS,
+            0x010 => OpCode::GtU,
+            0x011 => OpCode::GtS,
+            0x012 => OpCode::LeU,
+            0x013 => OpCode::LeS,
+            0x014 => OpCode::GeU,
+            0x015 => OpCode::GeS,
+            0x016 => OpCode::MinU,
+            0x017 => OpCode::MinS,
+            0x018 => OpCode::MaxU,
+            0x019 => OpCode::MaxS,
 
-            0x01c => OpCode::Neg,
-            0x01e => OpCode::Abs,
-            0x01d => OpCode::Not,
-            0x01f => OpCode::Clz,
-            0x020 => OpCode::Ctz,
-            0x021 => OpCode::Popcnt,
-            0x022 => OpCode::Add,
-            0x023 => OpCode::Sub,
-            0x024 => OpCode::Mul,
-            0x025 => OpCode::And,
-            0x026 => OpCode::Andnot,
-            0x027 => OpCode::Or,
-            0x028 => OpCode::Xor,
-            0x029 => OpCode::Shl,
-            0x02a => OpCode::ShrU,
-            0x02b => OpCode::ShrS,
-            0x02c => OpCode::Rotl,
-            0x02d => OpCode::Rotr,
+            0x01a => OpCode::Neg,
+            0x01c => OpCode::Abs,
+            0x01b => OpCode::Not,
+            0x01d => OpCode::Clz,
+            0x01e => OpCode::Ctz,
+            0x01f => OpCode::Popcnt,
+            0x020 => OpCode::Add,
+            0x021 => OpCode::Sub,
+            0x022 => OpCode::Mul,
+            0x023 => OpCode::And,
+            0x024 => OpCode::Andnot,
+            0x025 => OpCode::Or,
+            0x026 => OpCode::Xor,
+            0x027 => OpCode::Shl,
+            0x028 => OpCode::ShrU,
+            0x029 => OpCode::ShrS,
+            0x02a => OpCode::Rotl,
+            0x02b => OpCode::Rotr,
 
             _ => Err(Error::InvalidOpcode(ins))?,
         };
@@ -404,14 +398,14 @@ impl fmt::Display for OpIns {
             }
 
             // special format for moves because they are so common
-            OpCode::ExtendConst8U if self.lnpw2() == 0 => {
-                write!(fmt, "u{}.move_const8 r{}",
+            OpCode::SplatC if self.lnpw2() == 0 => {
+                write!(fmt, "u{}.move_c r{}",
                     self.width(),
                     self.a()
                 )
             }
 
-            OpCode::ExtendConst8U | OpCode::ExtendConst8S | OpCode::SplatConst8 => {
+            OpCode::SplatC => {
                 write!(fmt, "u{}.{} r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
@@ -479,6 +473,7 @@ pub fn disas<W: io::Write>(
                     OpCode::ExtendConstU | OpCode::ExtendConstS | OpCode::SplatConst => {
                         let const_size = max(1, ins.lsize()/4);
                         write!(out, "    {:08x} {}, 0x", u32::from(ins), ins)?;
+                        // fetch from instruction stream
                         for j in (0..const_size).rev() {
                             write!(out, "{:0w$x}",
                                 &bytecode[i+j],
@@ -491,8 +486,17 @@ pub fn disas<W: io::Write>(
                             i += 1;
                         }
                     }
-                    OpCode::ExtendConst8U | OpCode::ExtendConst8S | OpCode::SplatConst8 => {
-                        writeln!(out, "    {:08x} {}, 0x{:02x}", u32::from(ins), ins, ins.b())?;
+                    OpCode::SplatC => {
+                        write!(out, "    {:08x} {}, 0x", u32::from(ins), ins)?;
+                        for _ in 0 .. ins.lsize()-1 {
+                            // sign extend?
+                            if ins.b() & 0x80 == 0x80 {
+                                write!(out, "ff")?;
+                            } else {
+                                write!(out, "00")?;
+                            }
+                        }
+                        writeln!(out, "{:02x}", ins.b())?;
                     }
                     _ => {
                         writeln!(out, "    {:08x} {}", u32::from(ins), ins)?;
@@ -3139,28 +3143,27 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             OpKind::Const(v) => {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 #[allow(unused_mut)] let mut best_npw2 = T::NPW2;
-                #[allow(unused_mut)] let mut best_ins8 = OpCode::ExtendConst8U;
-                #[allow(unused_mut)] let mut best_ins = OpCode::ExtendConstU;
+                #[allow(unused_mut)] let mut best_ins = OpCode::ExtendConstS;
 
                 // can we use a smaller encoding?
                 #[cfg(feature="opt-compress-consts")]
                 {
                     if state.opt {
                         for npw2 in 0..T::NPW2 {
-                            if v.is_extend_u(npw2) {
+                            // note these are in decreasing order of efficient
+                            // encodings (splat and extend_s can leverage
+                            // splat_c, but not extend_u)
+                            if v.is_extend_s(npw2) {
                                 best_npw2 = npw2;
-                                best_ins8 = OpCode::ExtendConst8U;
-                                best_ins  = OpCode::ExtendConstU;
-                                break;
-                            } else if v.is_extend_s(npw2) {
-                                best_npw2 = npw2;
-                                best_ins8 = OpCode::ExtendConst8S;
                                 best_ins  = OpCode::ExtendConstS;
                                 break;
                             } else if v.is_splat(npw2) {
                                 best_npw2 = npw2;
-                                best_ins8 = OpCode::SplatConst8;
                                 best_ins  = OpCode::SplatConst;
+                                break;
+                            } else if v.is_extend_u(npw2) {
+                                best_npw2 = npw2;
+                                best_ins  = OpCode::ExtendConstU;
                                 break;
                             }
                         }
@@ -3168,14 +3171,24 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
 
                 // fall back to uncompressed encodings
-                if best_npw2 == 0 {
-                    // u8s can fit directly in instruction
-
+                //
+                // note signed-extended and splatted u8s can fit in a splat_c
+                // instruction, we could actually fit combinations of
+                // signed-extends and splats, but those would be more
+                // complicated to find
+                if best_npw2 == 0 && best_ins == OpCode::ExtendConstS {
                     let mut buf = Vec::from(v.to_le_bytes().as_ref());
                     buf.truncate(1);
 
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, T::NPW2, best_ins8, 0, slot, buf[0]
+                        T::NPW2, 0, OpCode::SplatC, 0, slot, buf[0]
+                    )));
+                } else if best_npw2 == 0 && best_ins == OpCode::SplatConst {
+                    let mut buf = Vec::from(v.to_le_bytes().as_ref());
+                    buf.truncate(1);
+
+                    state.bytecode.push(u32::from(OpIns::new(
+                        T::NPW2, T::NPW2, OpCode::SplatC, 0, slot, buf[0]
                     )));
                 } else {
                     // encode const into bytecode stream
