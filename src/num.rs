@@ -6,6 +6,7 @@ use crate::error::Error;
 use std::rc::Rc;
 use std::mem::size_of;
 use std::convert::TryFrom;
+use std::borrow::Cow;
 
 use std::ops::Not;
 use std::ops::BitAnd;
@@ -69,12 +70,12 @@ impl SecretBool {
     /// Extracts the secret value into a non-secret value, this
     /// effectively "leaks" the secret value, but is necessary
     /// to actually do anything
-    pub fn declassify(self) -> bool {
+    pub fn declassify(&self) -> bool {
         self.try_declassify().unwrap()
     }
 
     /// Same as declassify but propagating internal VM errors
-    pub fn try_declassify(self) -> Result<bool, Error> {
+    pub fn try_declassify(&self) -> Result<bool, Error> {
         Ok(self.resolve::<U8>().try_eval()?.result::<u8>() != 0)
     }
 
@@ -104,7 +105,7 @@ impl SecretBool {
     }
 
     /// Reduce a deferred SecretBool down into a U8 if necessary
-    fn resolve<U: OpU>(self) -> OpTree<U> {
+    fn resolve<'a, U: OpU>(&'a self) -> Cow<'a, OpTree<U>> {
         OpTree::dyn_cast_s(self.deferred())
     }
 
@@ -118,7 +119,7 @@ impl SecretBool {
 }
 
 impl Eval for SecretBool {
-    fn try_eval(self) -> Result<Self, Error> {
+    fn try_eval(&self) -> Result<Self, Error> {
         let tree = self.resolve::<U8>();
         Ok(Self::from_tree(tree.try_eval()?))
     }
@@ -131,7 +132,7 @@ impl Tree for SecretBool {
         Self(DeferredTree::Resolved(tree))
     }
 
-    fn tree(self) -> OpTree<U8> {
+    fn tree(&self) -> Cow<'_, OpTree<U8>> {
         self.resolve::<U8>()
     }
 }
@@ -228,9 +229,9 @@ impl Ord for SecretBool {
 impl Select<SecretBool> for SecretBool {
     fn select(p: SecretBool, a: Self, b: Self) -> Self {
         Self::from_tree(OpTree::select(0,
-            p.resolve::<U8>(),
-            a.resolve::<U8>(),
-            b.resolve::<U8>()
+            p.resolve::<U8>().into_owned(),
+            a.resolve::<U8>().into_owned(),
+            b.resolve::<U8>().into_owned()
         ))
     }
 }
@@ -272,12 +273,12 @@ macro_rules! secret_u_impl {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
-            pub fn declassify_le_bytes(self) -> [u8; $n] {
+            pub fn declassify_le_bytes(&self) -> [u8; $n] {
                 self.try_declassify_le_bytes().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
-            pub fn try_declassify_le_bytes(self) -> Result<[u8; $n], Error> {
+            pub fn try_declassify_le_bytes(&self) -> Result<[u8; $n], Error> {
                 Ok(self.try_eval()?.0.result())
             }
 
@@ -301,12 +302,12 @@ macro_rules! secret_u_impl {
                 /// Extracts the secret value into a non-secret value, this
                 /// effectively "leaks" the secret value, but is necessary
                 /// to actually do anything
-                pub fn declassify(self) -> $p {
+                pub fn declassify(&self) -> $p {
                     self.try_declassify().unwrap()
                 }
 
                 /// Same as declassify but propagating internal VM errors
-                pub fn try_declassify(self) -> Result<$p, Error> {
+                pub fn try_declassify(&self) -> Result<$p, Error> {
                     Ok(self.try_eval()?.0.result())
                 }
 
@@ -399,7 +400,7 @@ macro_rules! secret_u_impl {
         }
 
         impl Eval for $t {
-            fn try_eval(self) -> Result<Self, Error> {
+            fn try_eval(&self) -> Result<Self, Error> {
                 Ok(Self::from_tree(self.tree().try_eval()?))
             }
         }
@@ -411,8 +412,8 @@ macro_rules! secret_u_impl {
                 Self(tree)
             }
 
-            fn tree(self) -> OpTree<$U> {
-                self.0
+            fn tree<'a>(&'a self) -> Cow<'a, OpTree<$U>> {
+                Cow::Borrowed(&self.0)
             }
         }
 
@@ -627,7 +628,7 @@ macro_rules! secret_u_impl {
         impl Select<SecretBool> for $t {
             fn select(p: SecretBool, a: Self, b: Self) -> Self {
                 Self(OpTree::select(0,
-                    p.resolve(),
+                    p.resolve().into_owned(),
                     a.0,
                     b.0
                 ))
@@ -660,7 +661,7 @@ secret_u_impl! { SecretI512(U512; [u8; 64];     {|()  }) }
 macro_rules! secret_m_impl {
     (@p $a:ident: $p:ty) => { $p };
     (@from_lanes $x:ident $a:ident:$i:literal $($rest:tt)*) => {
-        let $x = Self($a.resolve());
+        let $x = Self($a.resolve().into_owned());
         secret_m_impl!(@from_lanes2 $x $($rest)*);
     };
     (@from_lanes2 $x:ident $a:ident:$i:literal $($rest:tt)*) => {
@@ -714,12 +715,12 @@ macro_rules! secret_m_impl {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
-            pub fn declassify_lanes(self) -> ($(secret_m_impl!(@p $a: $p),)+) {
+            pub fn declassify_lanes(&self) -> ($(secret_m_impl!(@p $a: $p),)+) {
                 self.try_declassify_lanes().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
-            pub fn try_declassify_lanes(self) -> Result<($(secret_m_impl!(@p $a: $p),)+), Error> {
+            pub fn try_declassify_lanes(&self) -> Result<($(secret_m_impl!(@p $a: $p),)+), Error> {
                 let bytes: [u8; $n] = self.try_eval()?.0.result();
                 Ok(($(
                     !<$V>::from_le_bytes(
@@ -771,12 +772,12 @@ macro_rules! secret_m_impl {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
-            pub fn declassify_vec(self) -> Vec<$p> {
+            pub fn declassify_vec(&self) -> Vec<$p> {
                 self.try_declassify_vec().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
-            pub fn try_declassify_vec(self) -> Result<Vec<$p>, Error> {
+            pub fn try_declassify_vec(&self) -> Result<Vec<$p>, Error> {
                 let bytes: [u8; $n] = self.try_eval()?.0.result();
                 Ok(vec![$(
                     !<$V>::from_le_bytes(
@@ -871,7 +872,7 @@ macro_rules! secret_m_impl {
 
             /// Splat a given value to all lanes
             pub fn splat(value: SecretBool) -> Self {
-                Self(OpTree::splat(value.resolve::<$V>()))
+                Self(OpTree::splat(value.resolve::<$V>().into_owned()))
             }
 
             /// Extract a specific lane
@@ -883,7 +884,7 @@ macro_rules! secret_m_impl {
             /// Replace a specific lane
             pub fn replace(self, lane: usize, value: SecretBool) -> Self {
                 assert!(lane < (1 << $npw2));
-                Self(OpTree::replace::<$V>(lane as u8, self.0, value.resolve()))
+                Self(OpTree::replace::<$V>(lane as u8, self.0, value.resolve().into_owned()))
             }
 
             /// Find if no lanes are true
@@ -911,7 +912,7 @@ macro_rules! secret_m_impl {
         }
 
         impl Eval for $t {
-            fn try_eval(self) -> Result<Self, Error> {
+            fn try_eval(&self) -> Result<Self, Error> {
                 Ok(Self::from_tree(self.tree().try_eval()?))
             }
         }
@@ -923,8 +924,8 @@ macro_rules! secret_m_impl {
                 Self(tree)
             }
 
-            fn tree(self) -> OpTree<$U> {
-                self.0
+            fn tree<'a>(&'a self) -> Cow<'a, OpTree<$U>> {
+                Cow::Borrowed(&self.0)
             }
         }
 
@@ -1170,12 +1171,12 @@ macro_rules! secret_x_impl {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
-            pub fn declassify_le_bytes(self) -> [u8; $n] {
+            pub fn declassify_le_bytes(&self) -> [u8; $n] {
                 self.try_declassify_le_bytes().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
-            pub fn try_declassify_le_bytes(self) -> Result<[u8; $n], Error> {
+            pub fn try_declassify_le_bytes(&self) -> Result<[u8; $n], Error> {
                 Ok(self.try_eval()?.0.result())
             }
 
@@ -1204,12 +1205,12 @@ macro_rules! secret_x_impl {
                 /// Extracts the secret value into a non-secret value, this
                 /// effectively "leaks" the secret value, but is necessary
                 /// to actually do anything
-                pub fn declassify_lanes(self) -> ($(secret_m_impl!(@p $pa: $p),)+) {
+                pub fn declassify_lanes(&self) -> ($(secret_m_impl!(@p $pa: $p),)+) {
                     self.try_declassify_lanes().unwrap()
                 }
 
                 /// Same as declassify but propagating internal VM errors
-                pub fn try_declassify_lanes(self) -> Result<($(secret_m_impl!(@p $pa: $p),)+), Error> {
+                pub fn try_declassify_lanes(&self) -> Result<($(secret_m_impl!(@p $pa: $p),)+), Error> {
                     let bytes: [u8; $n] = self.try_eval()?.0.result();
                     Ok(($(
                         <$p>::from_le_bytes(
@@ -1257,12 +1258,12 @@ macro_rules! secret_x_impl {
                 /// Extracts the secret value into a non-secret value, this
                 /// effectively "leaks" the secret value, but is necessary
                 /// to actually do anything
-                pub fn declassify_vec(self) -> Vec<$p> {
+                pub fn declassify_vec(&self) -> Vec<$p> {
                     self.try_declassify_vec().unwrap()
                 }
 
                 /// Same as declassify but propagating internal VM errors
-                pub fn try_declassify_vec(self) -> Result<Vec<$p>, Error> {
+                pub fn try_declassify_vec(&self) -> Result<Vec<$p>, Error> {
                     let bytes: [u8; $n] = self.try_eval()?.0.result();
                     Ok(vec![$(
                         <$p>::from_le_bytes(
@@ -1522,7 +1523,7 @@ macro_rules! secret_x_impl {
         }
 
         impl Eval for $t {
-            fn try_eval(self) -> Result<Self, Error> {
+            fn try_eval(&self) -> Result<Self, Error> {
                 Ok(Self::from_tree(self.tree().try_eval()?))
             }
         }
@@ -1534,8 +1535,8 @@ macro_rules! secret_x_impl {
                 Self(tree)
             }
 
-            fn tree(self) -> OpTree<$U> {
-                self.0
+            fn tree<'a>(&'a self) -> Cow<'a, OpTree<$U>> {
+                Cow::Borrowed(&self.0)
             }
         }
 
@@ -1878,7 +1879,7 @@ macro_rules! from_impl {
     (@from FB $from:ident for $to:ident) => {
         impl From<$from> for $to {
             fn from(v: $from) -> $to {
-                Self(OpTree::and(v.resolve(), <$to>::one().0))
+                Self(OpTree::and(v.resolve().into_owned(), <$to>::one().0))
             }
         }
     };
@@ -2609,7 +2610,7 @@ mod tests {
         let a = SecretBool::new(true);
         let b = SecretBool::new(true);
         let x = (a.clone() & b.clone()).eq(a | b);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, true);
@@ -2621,7 +2622,7 @@ mod tests {
         let a = SecretBool::new(true);
         let b = SecretBool::new(false);
         let x = (a.clone() | b.clone()).select(a, b);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, true);
@@ -2634,13 +2635,13 @@ mod tests {
         let b = SecretU32::new(10);
         let x = !a.clone().gt(b.clone());
 
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, false);
 
         let x = (!a.clone().gt(b.clone())).select(a, b);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 10);
@@ -2651,7 +2652,7 @@ mod tests {
         println!();
         let a = SecretI32::new(-100);
         let x = a.abs();
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 100);
@@ -2664,7 +2665,7 @@ mod tests {
         let b = SecretU32::new(4);
         let c = SecretU32::new(5);
         let x = (a.clone()*a + b.clone()*b) - (c.clone()*c);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 0);
@@ -2677,7 +2678,7 @@ mod tests {
         let b = SecretI32::new(-4);
         let c = SecretI32::new(-5);
         let x = (a.clone()*a + b.clone()*b) - (c.clone()*c);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 0);
@@ -2692,13 +2693,13 @@ mod tests {
             let sb = SecretU32::new(b);
             let sc = SecretU32::new(c);
             let x = sb.clone().lt(sc.clone());
-            x.clone().tree().disas(io::stdout()).unwrap();
+            x.tree().disas(io::stdout()).unwrap();
             let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, b < c);
 
             let x = sa.clamp(sb, sc);
-            x.clone().tree().disas(io::stdout()).unwrap();
+            x.tree().disas(io::stdout()).unwrap();
             let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, a.clamp(b, c));
@@ -2716,19 +2717,19 @@ mod tests {
         fn test_clz(n: u32) {
             let a = SecretU32::new(n);
             let x = a.clone().leading_zeros();
-            x.clone().tree().disas(io::stdout()).unwrap();
+            x.tree().disas(io::stdout()).unwrap();
             let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, n.leading_zeros());
 
             let x = a.clone().is_power_of_two();
-            x.clone().tree().disas(io::stdout()).unwrap();
+            x.tree().disas(io::stdout()).unwrap();
             let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, n.is_power_of_two());
 
             let x = a.next_power_of_two();
-            x.clone().tree().disas(io::stdout()).unwrap();
+            x.tree().disas(io::stdout()).unwrap();
             let v = x.declassify();
             println!("{}", v);
             assert_eq!(v, n.next_power_of_two());
@@ -2750,7 +2751,7 @@ mod tests {
             32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
             48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63);
         let x = a.horizontal_max();
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 63);
@@ -2758,7 +2759,7 @@ mod tests {
         let a = SecretU32x16::new_lanes(
             0,   1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15);
         let x = a.horizontal_sum();
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 120);
@@ -2770,7 +2771,7 @@ mod tests {
 
         let a = SecretU32x16::new_lanes(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
         let x = SecretU8x16::cast(a);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_vec();
         println!("{:?}", v);
         assert_eq!(v, vec![0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
@@ -2780,14 +2781,14 @@ mod tests {
             SecretU256::from(SecretU16::new(2000))
         );
         let x = SecretU16x2::cast(a);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
         assert_eq!(v, (1000, 2000));
 
         let a = SecretU8x16::new_lanes(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
         let x = SecretU32x16::from(a);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_vec();
         println!("{:?}", v);
         assert_eq!(v, vec![0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
@@ -2795,14 +2796,14 @@ mod tests {
         let a = SecretU16x2::new_lanes(1000, 2000);
         let b = SecretU256x2::from(a);
         let x = SecretU32x2::cast(b);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
         assert_eq!(v, (1000, 2000));
 
         let a = SecretI32x16::new_lanes(-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16);
         let x = SecretI8x16::cast(a);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_vec();
         println!("{:?}", v);
         assert_eq!(v, vec![-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
@@ -2812,14 +2813,14 @@ mod tests {
             SecretI256::from(SecretI16::new(-2000))
         );
         let x = SecretI16x2::cast(a);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
         assert_eq!(v, (-1000, -2000));
 
         let a = SecretI8x16::new_lanes(-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16);
         let x = SecretI32x16::from(a);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_vec();
         println!("{:?}", v);
         assert_eq!(v, vec![-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
@@ -2827,7 +2828,7 @@ mod tests {
         let a = SecretI16x2::new_lanes(-1000, -2000);
         let b = SecretI256x2::from(a);
         let x = SecretI32x2::cast(b);
-        x.clone().tree().disas(io::stdout()).unwrap();
+        x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
         assert_eq!(v, (-1000, -2000));

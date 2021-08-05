@@ -1,6 +1,7 @@
 //! Traits implemented by secret types
 
 use crate::error::Error;
+use std::borrow::Cow;
 
 
 /// A trait for types that can eq as long as the result remains secret
@@ -48,17 +49,20 @@ pub trait Eval: Sized {
     /// but this can be useful for flattening the internal
     /// tree manually to avoid growing too larger during a
     /// computation
-    fn eval(self) -> Self {
+    fn eval(&self) -> Self {
         self.try_eval().unwrap()
     }
 
     /// Same as eval but propagating internal VM errors
-    fn try_eval(self) -> Result<Self, Error>;
+    fn try_eval(&self) -> Result<Self, Error>;
 }
 
 /// A trait for objects backed by an internal OpTree, this is used
 /// for compiling down to bytecode
-pub trait Tree: Sized {
+pub trait Tree: Sized
+where
+    <Self as Tree>::Tree: Clone
+{
     /// Internal tree representation
     type Tree;
 
@@ -67,7 +71,7 @@ pub trait Tree: Sized {
 
     /// Get internal tree, we can do this without worry
     /// since we internally ensure the value is only ever zeros or ones
-    fn tree(self) -> Self::Tree;
+    fn tree<'a>(&'a self) -> Cow<'a, Self::Tree>;
 }
 
 /// A trait that capture potentially-truncating conversions

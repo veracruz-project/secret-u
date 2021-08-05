@@ -54,7 +54,7 @@ struct Sha256 {
     data: Vec<SecretU8>,
     bitlen: usize,
     state: SecretU32x8,
-    transform_lambda: Box<dyn Fn(SecretU32x8, SecretU8x64) -> SecretU32x8>,
+    transform_lambda: Box<dyn Fn(&SecretU32x8, &SecretU8x64) -> SecretU32x8>,
 }
 
 impl Sha256 {
@@ -141,8 +141,8 @@ impl Sha256 {
             self.data.push(b.clone());
             if self.data.len() == 64 {
                 self.state = (self.transform_lambda)(
-                    self.state.clone(),
-                    SecretU8x64::from_slice(&self.data)
+                    &self.state,
+                    &SecretU8x64::from_slice(&self.data)
                 );
                 self.bitlen += 512;
             }
@@ -154,8 +154,8 @@ impl Sha256 {
     pub fn block_update(&mut self, data: SecretU8x64) {
         assert!(self.data.len() == 0);
         self.state = (self.transform_lambda)(
-            self.state.clone(),
-            data
+            &self.state,
+            &data
         );
         self.bitlen += 512;
     }
@@ -176,8 +176,8 @@ impl Sha256 {
                 self.data.push(SecretU8::zero());
             }
             self.state = (self.transform_lambda)(
-                self.state.clone(),
-                SecretU8x64::from_slice(&self.data)
+                &self.state,
+                &SecretU8x64::from_slice(&self.data)
             );
             self.data.clear();
             while self.data.len() < 56 {
@@ -195,8 +195,8 @@ impl Sha256 {
         self.data.push(SecretU8::new((bitlen >>  8) as u8));
         self.data.push(SecretU8::new((bitlen >>  0) as u8));
         self.state = (self.transform_lambda)(
-            self.state.clone(),
-            SecretU8x64::from_slice(&self.data)
+            &self.state,
+            &SecretU8x64::from_slice(&self.data)
         );
 
         // Since this implementation uses little endian byte ordering and SHA uses big endian,

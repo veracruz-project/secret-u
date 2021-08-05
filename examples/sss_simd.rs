@@ -135,14 +135,14 @@ fn gf256_div(a: SecretU8x32, b: SecretU8x32) -> SecretU8x32 {
 // lazily compiled functions
 thread_local! {
     #[allow(non_upper_case_globals)]
-    static gf256_interpolate_step: Box<dyn Fn(SecretU8x32, SecretU8, SecretU8) -> SecretU8x32> = {
+    static gf256_interpolate_step: Box<dyn Fn(&SecretU8x32, &SecretU8, &SecretU8) -> SecretU8x32> = {
         Box::new(compile!(|li: SecretU8x32, x0: SecretU8, x1: SecretU8| -> SecretU8x32 {
             gf256_mul(li, gf256_div(SecretU8x32::splat(x1.clone()), SecretU8x32::splat(x0 ^ x1)))
         }))
     };
 
     #[allow(non_upper_case_globals)]
-    static gf256_interpolate_sum: Box<dyn Fn(SecretU8x32, SecretU8x32, SecretU8x32) -> SecretU8x32> = {
+    static gf256_interpolate_sum: Box<dyn Fn(&SecretU8x32, &SecretU8x32, &SecretU8x32) -> SecretU8x32> = {
         Box::new(compile!(|y: SecretU8x32, li: SecretU8x32, y0: SecretU8x32| -> SecretU8x32 {
             y ^ gf256_mul(li, y0)
         }))
@@ -159,11 +159,11 @@ fn gf256_interpolate(xs: &[SecretU8], ys: &[SecretU8x32]) -> SecretU8x32 {
         let mut li = SecretU8x32::one();
         for (j, (x1, _y1)) in xs.iter().zip(ys).enumerate() {
             if i != j {
-                li = gf256_interpolate_step.with(|f| f(li, x0.clone(), x1.clone()));
+                li = gf256_interpolate_step.with(|f| f(&li, &x0, &x1));
             }
         }
 
-        y = gf256_interpolate_sum.with(|f| f(y, li, y0.clone()));
+        y = gf256_interpolate_sum.with(|f| f(&y, &li, &y0));
     }
 
     y

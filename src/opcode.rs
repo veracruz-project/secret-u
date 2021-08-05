@@ -19,6 +19,7 @@ use std::collections::BTreeSet;
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::borrow::Cow;
 
 use aligned_utils::bytes::AlignedBytes;
 
@@ -1022,7 +1023,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         if other.npw2() < self.npw2() {
             other.dyn_and(self)
         } else {
-            Rc::new(Self::and(self.clone(), OpTree::dyn_cast_s(other)))
+            Rc::new(Self::and(self.clone(), OpTree::dyn_cast_s(other).into_owned()))
         }
     }
 
@@ -1031,7 +1032,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         if other.npw2() < self.npw2() {
             other.dyn_notand(self)
         } else {
-            Rc::new(Self::andnot(self.clone(), OpTree::dyn_cast_s(other)))
+            Rc::new(Self::andnot(self.clone(), OpTree::dyn_cast_s(other).into_owned()))
         }
     }
 
@@ -1040,7 +1041,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         if other.npw2() < self.npw2() {
             other.dyn_andnot(self)
         } else {
-            Rc::new(Self::andnot(OpTree::dyn_cast_s(other), self.clone()))
+            Rc::new(Self::andnot(OpTree::dyn_cast_s(other).into_owned(), self.clone()))
         }
     }
 
@@ -1049,7 +1050,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         if other.npw2() < self.npw2() {
             other.dyn_or(self)
         } else {
-            Rc::new(Self::or(self.clone(), OpTree::dyn_cast_s(other)))
+            Rc::new(Self::or(self.clone(), OpTree::dyn_cast_s(other).into_owned()))
         }
     }
 
@@ -1058,7 +1059,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         if other.npw2() < self.npw2() {
             other.dyn_xor(self)
         } else {
-            Rc::new(Self::xor(self.clone(), OpTree::dyn_cast_s(other)))
+            Rc::new(Self::xor(self.clone(), OpTree::dyn_cast_s(other).into_owned()))
         }
     }
 }
@@ -1133,47 +1134,46 @@ impl<T: OpU> OpTree<T> {
 
     /// Forcefully downcast into a different OpTree, panicking if types
     /// do not match
-    pub fn dyn_downcast(a: &dyn DynOpTree) -> Self {
+    pub fn dyn_downcast<'a>(a: &'a dyn DynOpTree) -> &'a Self {
         assert_eq!(a.npw2(), T::NPW2);
-        let b: &Self = unsafe { &*(a as *const dyn DynOpTree as *const Self) };
-        b.clone()
+        unsafe { &*(a as *const dyn DynOpTree as *const Self) }
     }
 
     /// Helper for choosing the most efficient cast between trees of
     /// different types, including returning the tree as is with only
     /// the type information stripped
-    pub fn dyn_cast_u(a: &dyn DynOpTree) -> Self {
+    pub fn dyn_cast_u<'a>(a: &'a dyn DynOpTree) -> Cow<'a, Self> {
         if T::NPW2 > a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::ExtendU(RefCell::new(a)), flags, depth)
+            Cow::Owned(Self::from_kind(OpKind::ExtendU(RefCell::new(a)), flags, depth))
         } else if T::NPW2 < a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth)
+            Cow::Owned(Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth))
         } else {
-            Self::dyn_downcast(a)
+            Cow::Borrowed(Self::dyn_downcast(a))
         }
     }
 
     /// Helper for choosing the most efficient cast between trees of
     /// different types, including returning the tree as is with only
     /// the type information stripped
-    pub fn dyn_cast_s(a: &dyn DynOpTree) -> Self {
+    pub fn dyn_cast_s<'a>(a: &'a dyn DynOpTree) -> Cow<'a, Self> {
         if T::NPW2 > a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::ExtendS(RefCell::new(a)), flags, depth)
+            Cow::Owned(Self::from_kind(OpKind::ExtendS(RefCell::new(a)), flags, depth))
         } else if T::NPW2 < a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth)
+            Cow::Owned(Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth))
         } else {
-            Self::dyn_downcast(a)
+            Cow::Borrowed(Self::dyn_downcast(a))
         }
     }
 
@@ -1615,15 +1615,15 @@ impl<T: OpU> OpTree<T> {
     }
 
     /// compile and execute if OpTree is not already an immediate
-    pub fn eval(self) -> Self {
+    pub fn eval(&self) -> Self {
         self.try_eval().unwrap()
     }
 
     /// compile and execute if OpTree is not already an immediate
-    pub fn try_eval(self) -> Result<Self, Error> {
-        match self.0.into_inner() {
-            OpRoot::Const(v) => Ok(Self::const_(v)),
-            OpRoot::Imm(v)   => Ok(Self::imm(v)),
+    pub fn try_eval(&self) -> Result<Self, Error> {
+        match self.0.borrow().deref() {
+            OpRoot::Const(v) => Ok(Self::const_(*v)),
+            OpRoot::Imm(v)   => Ok(Self::imm(*v)),
             OpRoot::Tree(tree) => {
                 if tree.is_sym() {
                     Err(Error::DeclassifyInCompile)?;
