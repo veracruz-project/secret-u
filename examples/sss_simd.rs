@@ -1,9 +1,9 @@
 //! Shamir's secret sharing example
 
 #[cfg(feature="example-bitslice-tables")]
-use secret_u::bitslice::bitslice_table;
+use secret_u::table::bitslice_table;
 #[cfg(not(feature="example-bitslice-tables"))]
-use secret_u::bitslice::shuffle_table as bitslice_table;
+use secret_u::table::shuffle_table as bitslice_table;
 
 use secret_u::*;
 use std::iter;

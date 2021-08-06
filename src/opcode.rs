@@ -1708,7 +1708,7 @@ impl<T: OpU> OpNode<T> {
     /// high-level compile into bytecode, stack, and initial stack pointer
     pub fn compile(&self, opt: bool) -> (Vec<u32>, AlignedBytes) {
         // debug?
-        #[cfg(feature="debug-trees")]
+        #[cfg(feature="debug-ast")]
         {
             println!("tree:");
             self.disas(io::stdout()).unwrap();

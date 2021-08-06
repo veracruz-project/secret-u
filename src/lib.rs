@@ -6,7 +6,7 @@ pub mod engine;
 pub mod traits;
 pub mod num;
 pub mod lambda;
-pub mod bitslice;
+pub mod table;
 
 pub use error::*;
 pub use num::*;

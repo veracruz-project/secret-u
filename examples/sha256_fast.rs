@@ -151,13 +151,15 @@ impl Sha256 {
 
     /// Updates can avoid an extra step of packing data if delivered
     /// in 64-byte chunks
-    pub fn block_update(&mut self, data: SecretU8x64) {
+    pub fn update_aligned(&mut self, data: &[SecretU8x64]) {
         assert!(self.data.len() == 0);
-        self.state = (self.transform_lambda)(
-            &self.state,
-            &data
-        );
-        self.bitlen += 512;
+        for chunk in data {
+            self.state = (self.transform_lambda)(
+                &self.state,
+                &chunk
+            );
+            self.bitlen += 512;
+        }
     }
 
     pub fn finalize(&mut self) -> [SecretU8; 32] {
@@ -231,7 +233,7 @@ fn bench(path: &str) -> ! {
         let mut block = [0; 64];
         let diff = file.read(&mut block).unwrap();
         if diff == 64 {
-            state.block_update(SecretU8x64::new_slice(&block));
+            state.update_aligned(&[SecretU8x64::new_slice(&block)]);
         } else {
             state.update(&block[..diff].into_iter()
                 .map(|b| SecretU8::new(*b))

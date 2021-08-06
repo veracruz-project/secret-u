@@ -90,6 +90,16 @@ impl SecretBool {
         Self::from_tree(if v { OpTree::<U8>::ones() } else { OpTree::<U8>::zero() })
     }
 
+    /// A constant, non-secret false
+    pub fn false_() -> Self {
+        Self::from_tree(OpTree::zero())
+    }
+
+    /// A constant, non-secret true
+    pub fn true_() -> Self {
+        Self::from_tree(OpTree::ones())
+    }
+
     /// Create a deferred SecretBool, the actual type will resolved until
     /// needed to avoid unecessary truncates/extends
     fn defer(tree: Rc<dyn DynOpTree>) -> Self {

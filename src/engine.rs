@@ -1015,6 +1015,16 @@ impl<'a> State<'a> {
         // zero memory outside of register to avoid leaking info
         self.slice_mut::<u8, _>(ret_size..)?.fill(0x00);
 
+        #[cfg(feature="debug-trace")]
+        {
+            println!("result:");
+            print!("    0x");
+            for i in (0..ret_size).rev() {
+                print!("{:02x}", self.state.get(i).ok_or(Error::OutOfBounds)?);
+            }
+            println!();
+        }
+
         // print accumulative cycle count so far
         #[cfg(feature="debug-cycle-count")]
         {
@@ -1497,6 +1507,11 @@ pub fn exec<'a>(
 
     // setup state
     let mut s = State::from(state);
+
+    #[cfg(feature="debug-trace")]
+    {
+        println!("trace:");
+    }
 
     // core loop
     loop {

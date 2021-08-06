@@ -32,8 +32,8 @@ opt-fold-nops = ["opt-fold-consts"]
 # reduces bytecode size and may result in faster code
 opt-compress-consts = []
 
-# show trees before compilation
-debug-trees = []
+# show ast before compilation
+debug-ast = []
 # show bytecode output by compilation
 debug-bytecode = []
 # show VM execution
