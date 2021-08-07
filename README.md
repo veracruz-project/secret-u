@@ -643,6 +643,13 @@ recompilation.
   This may be more difficult than an interpreter, but there's nothing stopping
   the engine from JITing constant-time instructions.
 
+- Leverage SIMD instructions in the execution engine
+
+  Currently, the execution engine only simulates SIMD instructions. This has
+  a small benefit, as it does decrease the amount of bytecode that needs to be
+  decoded, but in theory the operations could be truely parallelized via actual
+  SIMD hardware.
+
 - Secret containers/tuples
 
   Currently there is some overhead packing/unpacking secret-u types, a

@@ -407,6 +407,49 @@ macro_rules! secret_u_impl {
             pub fn rotate_right(self, other: $t) -> $t {
                 Self(OpTree::rotr(0, self.0, other.0))
             }
+
+            pub fn reverse_bits(mut self) -> $t {
+                // reverse bytes
+                if Self::SIZE > 1 {
+                    self = self.reverse_bytes();
+                }
+
+                // reverse bits in bytes
+                let mut mask = 0xffu8;
+                for sh in [4,2,1] {
+                    mask ^= (mask << sh);
+                    let sh_s = Self::cast(SecretU8::const_(sh));
+                    let mask_s = Self::const_le_bytes([mask; Self::SIZE]);
+                    // fall back to OpTree to avoid signed-bitshifts
+                    self = Self(OpTree::or(
+                        OpTree::and(
+                            OpTree::shr_u(0, self.0.clone(), sh_s.0.clone()),
+                            mask_s.0.clone(),
+                        ),
+                        OpTree::andnot(
+                            OpTree::shl(0, self.0, sh_s.0),
+                            mask_s.0
+                        )
+                    ));
+                }
+
+                self
+            }
+
+            pub fn reverse_bytes(self) -> $t {
+                let mut bytes = [0xff; Self::SIZE];
+                for i in 0..Self::SIZE {
+                    // this works because i can be at most 64, < u8
+                    bytes[i] = u8::try_from(Self::SIZE-1 - i).unwrap();
+                }
+
+                Self(OpTree::shuffle(
+                    <$U>::NPW2,
+                    OpTree::const_(bytes),
+                    self.0.clone(),
+                    self.0
+                ))
+            }
         }
 
         impl Eval for $t {
@@ -897,6 +940,30 @@ macro_rules! secret_m_impl {
                 Self(OpTree::replace::<$V>(lane as u8, self.0, value.resolve().into_owned()))
             }
 
+            /// Reverse lanes
+            pub fn reverse_lanes(self) -> Self {
+                let mut lanes = [0xff; Self::SIZE];
+                for i in 0..Self::LANES {
+                    // this works because i can be at most 64, < u8
+                    let off = i*(Self::SIZE/Self::LANES);
+                    lanes[off] = u8::try_from(Self::LANES-1 - i).unwrap();
+                    lanes[off + 1 .. off + (Self::SIZE/Self::LANES)]
+                        .fill(0x00);
+                }
+
+                <$o>::const_le_bytes(lanes).shuffle(self.clone(), self)
+            }
+
+            /// A constant, non-secret false in each lane
+            pub fn false_() -> Self {
+                Self(OpTree::zero())
+            }
+
+            /// A constant, non-secret true in each lane
+            pub fn true_() -> Self {
+                Self(OpTree::ones())
+            }
+
             /// Find if no lanes are true
             pub fn none(self) -> SecretBool {
                 SecretBool::defer(Rc::new(OpTree::none(self.0)))
@@ -1382,6 +1449,20 @@ macro_rules! secret_x_impl {
                 Self(OpTree::replace::<$V>(lane as u8, self.0, value.0))
             }
 
+            /// Reverse lanes
+            pub fn reverse_lanes(self) -> Self {
+                let mut lanes = [0xff; Self::SIZE];
+                for i in 0..Self::LANES {
+                    // this works because i can be at most 64, < u8
+                    let off = i*(Self::SIZE/Self::LANES);
+                    lanes[off] = u8::try_from(Self::LANES-1 - i).unwrap();
+                    lanes[off + 1 .. off + (Self::SIZE/Self::LANES)]
+                        .fill(0x00);
+                }
+
+                Self::const_le_bytes(lanes).shuffle(self.clone(), self)
+            }
+
             /// A constant, non-secret 0, in all lanes
             pub fn zero() -> Self {
                 Self(OpTree::zero())
@@ -1455,6 +1536,51 @@ macro_rules! secret_x_impl {
 
             pub fn rotate_right(self, other: $t) -> $t {
                 Self(OpTree::rotr($npw2, self.0, other.0))
+            }
+
+            pub fn reverse_bits(mut self) -> $t {
+                // reverse bytes
+                if Self::SIZE/Self::LANES > 1 {
+                    self = self.reverse_bytes();
+                }
+
+                // reverse bits in bytes
+                let mut mask = 0xffu8;
+                for sh in [4,2,1] {
+                    mask ^= (mask << sh);
+                    let sh_s = Self::splat(<$v>::cast(SecretU8::const_(sh)));
+                    let mask_s = Self::splat(<$v>::const_le_bytes([mask; Self::SIZE/Self::LANES]));
+                    // fall back to OpTree to avoid signed-bitshifts
+                    self = Self(OpTree::or(
+                        OpTree::and(
+                            OpTree::shr_u($npw2, self.0.clone(), sh_s.0.clone()),
+                            mask_s.0.clone(),
+                        ),
+                        OpTree::andnot(
+                            OpTree::shl($npw2, self.0, sh_s.0),
+                            mask_s.0
+                        )
+                    ));
+                }
+
+                self
+            }
+
+            pub fn reverse_bytes(self) -> $t {
+                let mut bytes = [0xff; Self::SIZE];
+                for j in (0..Self::SIZE).step_by(Self::SIZE/Self::LANES) {
+                    for i in 0..Self::SIZE/Self::LANES {
+                        // this works because i can be at most 64, < u8
+                        bytes[j+i] = u8::try_from(j + (Self::SIZE/Self::LANES)-1 - i).unwrap();
+                    }
+                }
+
+                Self(OpTree::shuffle(
+                    <$U>::NPW2,
+                    OpTree::const_(bytes),
+                    self.0.clone(),
+                    self.0
+                ))
             }
 
             /// Apply an operation horizontally, reducing the input to a single lane
@@ -2500,112 +2626,276 @@ from_impl! { SecretU16x32(FV SecretU8x32,                                       
 from_impl! { SecretU8x64 (                                                                                                                       ) }
 
 // signed from signed
-from_impl! { SecretI8x1  (                CX SecretI16x1,  CX SecretI32x1,  CX SecretI64x1,  CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1 ) }
-from_impl! { SecretI16x1 (FZ SecretI8x1,                   CX SecretI32x1,  CX SecretI64x1,  CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1 ) }
-from_impl! { SecretI32x1 (FZ SecretI8x1,  FZ SecretI16x1,                   CX SecretI64x1,  CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1 ) }
-from_impl! { SecretI64x1 (FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,                   CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1 ) }
-from_impl! { SecretI128x1(FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,  FZ SecretI64x1,                    CX SecretI256x1,  CX SecretI512x1 ) }
-from_impl! { SecretI256x1(FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,  FZ SecretI64x1,  FZ SecretI128x1,                    CX SecretI512x1 ) }
-from_impl! { SecretI512x1(FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,  FZ SecretI64x1,  FZ SecretI128x1,  FZ SecretI256x1,                  ) }
+from_impl! { SecretI8x1  (                CX SecretI16x1,  CX SecretI32x1,  CX SecretI64x1,  CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1) }
+from_impl! { SecretI16x1 (FZ SecretI8x1,                   CX SecretI32x1,  CX SecretI64x1,  CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1) }
+from_impl! { SecretI32x1 (FZ SecretI8x1,  FZ SecretI16x1,                   CX SecretI64x1,  CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1) }
+from_impl! { SecretI64x1 (FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,                   CX SecretI128x1,  CX SecretI256x1,  CX SecretI512x1) }
+from_impl! { SecretI128x1(FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,  FZ SecretI64x1,                    CX SecretI256x1,  CX SecretI512x1) }
+from_impl! { SecretI256x1(FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,  FZ SecretI64x1,  FZ SecretI128x1,                    CX SecretI512x1) }
+from_impl! { SecretI512x1(FZ SecretI8x1,  FZ SecretI16x1,  FZ SecretI32x1,  FZ SecretI64x1,  FZ SecretI128x1,  FZ SecretI256x1,                 ) }
 
-from_impl! { SecretI8x2  (                CX SecretI16x2,  CX SecretI32x2,  CX SecretI64x2,  CX SecretI128x2,  CX SecretI256x2,                  ) }
-from_impl! { SecretI16x2 (FZ SecretI8x2,                   CX SecretI32x2,  CX SecretI64x2,  CX SecretI128x2,  CX SecretI256x2,                  ) }
-from_impl! { SecretI32x2 (FZ SecretI8x2,  FZ SecretI16x2,                   CX SecretI64x2,  CX SecretI128x2,  CX SecretI256x2,                  ) }
-from_impl! { SecretI64x2 (FZ SecretI8x2,  FZ SecretI16x2,  FZ SecretI32x2,                   CX SecretI128x2,  CX SecretI256x2,                  ) }
-from_impl! { SecretI128x2(FZ SecretI8x2,  FZ SecretI16x2,  FZ SecretI32x2,  FZ SecretI64x2,                    CX SecretI256x2,                  ) }
-from_impl! { SecretI256x2(FZ SecretI8x2,  FZ SecretI16x2,  FZ SecretI32x2,  FZ SecretI64x2,  FZ SecretI128x2,                                    ) }
+from_impl! { SecretI8x2  (                CX SecretI16x2,  CX SecretI32x2,  CX SecretI64x2,  CX SecretI128x2,  CX SecretI256x2,                 ) }
+from_impl! { SecretI16x2 (FZ SecretI8x2,                   CX SecretI32x2,  CX SecretI64x2,  CX SecretI128x2,  CX SecretI256x2,                 ) }
+from_impl! { SecretI32x2 (FZ SecretI8x2,  FZ SecretI16x2,                   CX SecretI64x2,  CX SecretI128x2,  CX SecretI256x2,                 ) }
+from_impl! { SecretI64x2 (FZ SecretI8x2,  FZ SecretI16x2,  FZ SecretI32x2,                   CX SecretI128x2,  CX SecretI256x2,                 ) }
+from_impl! { SecretI128x2(FZ SecretI8x2,  FZ SecretI16x2,  FZ SecretI32x2,  FZ SecretI64x2,                    CX SecretI256x2,                 ) }
+from_impl! { SecretI256x2(FZ SecretI8x2,  FZ SecretI16x2,  FZ SecretI32x2,  FZ SecretI64x2,  FZ SecretI128x2,                                   ) }
 
-from_impl! { SecretI8x4  (                CX SecretI16x4,  CX SecretI32x4,  CX SecretI64x4,  CX SecretI128x4,                                    ) }
-from_impl! { SecretI16x4 (FZ SecretI8x4,                   CX SecretI32x4,  CX SecretI64x4,  CX SecretI128x4,                                    ) }
-from_impl! { SecretI32x4 (FZ SecretI8x4,  FZ SecretI16x4,                   CX SecretI64x4,  CX SecretI128x4,                                    ) }
-from_impl! { SecretI64x4 (FZ SecretI8x4,  FZ SecretI16x4,  FZ SecretI32x4,                   CX SecretI128x4,                                    ) }
-from_impl! { SecretI128x4(FZ SecretI8x4,  FZ SecretI16x4,  FZ SecretI32x4,  FZ SecretI64x4,                                                      ) }
+from_impl! { SecretI8x4  (                CX SecretI16x4,  CX SecretI32x4,  CX SecretI64x4,  CX SecretI128x4,                                   ) }
+from_impl! { SecretI16x4 (FZ SecretI8x4,                   CX SecretI32x4,  CX SecretI64x4,  CX SecretI128x4,                                   ) }
+from_impl! { SecretI32x4 (FZ SecretI8x4,  FZ SecretI16x4,                   CX SecretI64x4,  CX SecretI128x4,                                   ) }
+from_impl! { SecretI64x4 (FZ SecretI8x4,  FZ SecretI16x4,  FZ SecretI32x4,                   CX SecretI128x4,                                   ) }
+from_impl! { SecretI128x4(FZ SecretI8x4,  FZ SecretI16x4,  FZ SecretI32x4,  FZ SecretI64x4,                                                     ) }
 
-from_impl! { SecretI8x8  (                CX SecretI16x8,  CX SecretI32x8,  CX SecretI64x8,                                                      ) }
-from_impl! { SecretI16x8 (FZ SecretI8x8,                   CX SecretI32x8,  CX SecretI64x8,                                                      ) }
-from_impl! { SecretI32x8 (FZ SecretI8x8,  FZ SecretI16x8,                   CX SecretI64x8,                                                      ) }
-from_impl! { SecretI64x8 (FZ SecretI8x8,  FZ SecretI16x8,  FZ SecretI32x8,                                                                       ) }
+from_impl! { SecretI8x8  (                CX SecretI16x8,  CX SecretI32x8,  CX SecretI64x8,                                                     ) }
+from_impl! { SecretI16x8 (FZ SecretI8x8,                   CX SecretI32x8,  CX SecretI64x8,                                                     ) }
+from_impl! { SecretI32x8 (FZ SecretI8x8,  FZ SecretI16x8,                   CX SecretI64x8,                                                     ) }
+from_impl! { SecretI64x8 (FZ SecretI8x8,  FZ SecretI16x8,  FZ SecretI32x8,                                                                      ) }
 
-from_impl! { SecretI8x16 (                CX SecretI16x16, CX SecretI32x16,                                                                      ) }
-from_impl! { SecretI16x16(FZ SecretI8x16,                  CX SecretI32x16,                                                                      ) }
-from_impl! { SecretI32x16(FZ SecretI8x16, FZ SecretI16x16,                                                                                       ) }
+from_impl! { SecretI8x16 (                CX SecretI16x16, CX SecretI32x16,                                                                     ) }
+from_impl! { SecretI16x16(FZ SecretI8x16,                  CX SecretI32x16,                                                                     ) }
+from_impl! { SecretI32x16(FZ SecretI8x16, FZ SecretI16x16,                                                                                      ) }
 
-from_impl! { SecretI8x32 (                CX SecretI16x32,                                                                                       ) }
-from_impl! { SecretI16x32(FZ SecretI8x32,                                                                                                        ) }
+from_impl! { SecretI8x32 (                CX SecretI16x32,                                                                                      ) }
+from_impl! { SecretI16x32(FZ SecretI8x32,                                                                                                       ) }
 
-from_impl! { SecretI8x64 (                                                                                                                       ) }
+from_impl! { SecretI8x64 (                                                                                                                      ) }
 
 // masks from masks
-from_impl! { SecretM8x1  (                CX SecretM16x1,  CX SecretM32x1,  CX SecretM64x1,  CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1 ) }
-from_impl! { SecretM16x1 (FZ SecretM8x1,                   CX SecretM32x1,  CX SecretM64x1,  CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1 ) }
-from_impl! { SecretM32x1 (FZ SecretM8x1,  FZ SecretM16x1,                   CX SecretM64x1,  CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1 ) }
-from_impl! { SecretM64x1 (FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,                   CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1 ) }
-from_impl! { SecretM128x1(FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,  FZ SecretM64x1,                    CX SecretM256x1,  CX SecretM512x1 ) }
-from_impl! { SecretM256x1(FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,  FZ SecretM64x1,  FZ SecretM128x1,                    CX SecretM512x1 ) }
-from_impl! { SecretM512x1(FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,  FZ SecretM64x1,  FZ SecretM128x1,  FZ SecretM256x1,                  ) }
+from_impl! { SecretM8x1  (                CX SecretM16x1,  CX SecretM32x1,  CX SecretM64x1,  CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1) }
+from_impl! { SecretM16x1 (FZ SecretM8x1,                   CX SecretM32x1,  CX SecretM64x1,  CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1) }
+from_impl! { SecretM32x1 (FZ SecretM8x1,  FZ SecretM16x1,                   CX SecretM64x1,  CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1) }
+from_impl! { SecretM64x1 (FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,                   CX SecretM128x1,  CX SecretM256x1,  CX SecretM512x1) }
+from_impl! { SecretM128x1(FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,  FZ SecretM64x1,                    CX SecretM256x1,  CX SecretM512x1) }
+from_impl! { SecretM256x1(FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,  FZ SecretM64x1,  FZ SecretM128x1,                    CX SecretM512x1) }
+from_impl! { SecretM512x1(FZ SecretM8x1,  FZ SecretM16x1,  FZ SecretM32x1,  FZ SecretM64x1,  FZ SecretM128x1,  FZ SecretM256x1,                 ) }
 
-from_impl! { SecretM8x2  (                CX SecretM16x2,  CX SecretM32x2,  CX SecretM64x2,  CX SecretM128x2,  CX SecretM256x2,                  ) }
-from_impl! { SecretM16x2 (FZ SecretM8x2,                   CX SecretM32x2,  CX SecretM64x2,  CX SecretM128x2,  CX SecretM256x2,                  ) }
-from_impl! { SecretM32x2 (FZ SecretM8x2,  FZ SecretM16x2,                   CX SecretM64x2,  CX SecretM128x2,  CX SecretM256x2,                  ) }
-from_impl! { SecretM64x2 (FZ SecretM8x2,  FZ SecretM16x2,  FZ SecretM32x2,                   CX SecretM128x2,  CX SecretM256x2,                  ) }
-from_impl! { SecretM128x2(FZ SecretM8x2,  FZ SecretM16x2,  FZ SecretM32x2,  FZ SecretM64x2,                    CX SecretM256x2,                  ) }
-from_impl! { SecretM256x2(FZ SecretM8x2,  FZ SecretM16x2,  FZ SecretM32x2,  FZ SecretM64x2,  FZ SecretM128x2,                                    ) }
+from_impl! { SecretM8x2  (                CX SecretM16x2,  CX SecretM32x2,  CX SecretM64x2,  CX SecretM128x2,  CX SecretM256x2,                 ) }
+from_impl! { SecretM16x2 (FZ SecretM8x2,                   CX SecretM32x2,  CX SecretM64x2,  CX SecretM128x2,  CX SecretM256x2,                 ) }
+from_impl! { SecretM32x2 (FZ SecretM8x2,  FZ SecretM16x2,                   CX SecretM64x2,  CX SecretM128x2,  CX SecretM256x2,                 ) }
+from_impl! { SecretM64x2 (FZ SecretM8x2,  FZ SecretM16x2,  FZ SecretM32x2,                   CX SecretM128x2,  CX SecretM256x2,                 ) }
+from_impl! { SecretM128x2(FZ SecretM8x2,  FZ SecretM16x2,  FZ SecretM32x2,  FZ SecretM64x2,                    CX SecretM256x2,                 ) }
+from_impl! { SecretM256x2(FZ SecretM8x2,  FZ SecretM16x2,  FZ SecretM32x2,  FZ SecretM64x2,  FZ SecretM128x2,                                   ) }
 
-from_impl! { SecretM8x4  (                CX SecretM16x4,  CX SecretM32x4,  CX SecretM64x4,  CX SecretM128x4,                                    ) }
-from_impl! { SecretM16x4 (FZ SecretM8x4,                   CX SecretM32x4,  CX SecretM64x4,  CX SecretM128x4,                                    ) }
-from_impl! { SecretM32x4 (FZ SecretM8x4,  FZ SecretM16x4,                   CX SecretM64x4,  CX SecretM128x4,                                    ) }
-from_impl! { SecretM64x4 (FZ SecretM8x4,  FZ SecretM16x4,  FZ SecretM32x4,                   CX SecretM128x4,                                    ) }
-from_impl! { SecretM128x4(FZ SecretM8x4,  FZ SecretM16x4,  FZ SecretM32x4,  FZ SecretM64x4,                                                      ) }
+from_impl! { SecretM8x4  (                CX SecretM16x4,  CX SecretM32x4,  CX SecretM64x4,  CX SecretM128x4,                                   ) }
+from_impl! { SecretM16x4 (FZ SecretM8x4,                   CX SecretM32x4,  CX SecretM64x4,  CX SecretM128x4,                                   ) }
+from_impl! { SecretM32x4 (FZ SecretM8x4,  FZ SecretM16x4,                   CX SecretM64x4,  CX SecretM128x4,                                   ) }
+from_impl! { SecretM64x4 (FZ SecretM8x4,  FZ SecretM16x4,  FZ SecretM32x4,                   CX SecretM128x4,                                   ) }
+from_impl! { SecretM128x4(FZ SecretM8x4,  FZ SecretM16x4,  FZ SecretM32x4,  FZ SecretM64x4,                                                     ) }
 
-from_impl! { SecretM8x8  (                CX SecretM16x8,  CX SecretM32x8,  CX SecretM64x8,                                                      ) }
-from_impl! { SecretM16x8 (FZ SecretM8x8,                   CX SecretM32x8,  CX SecretM64x8,                                                      ) }
-from_impl! { SecretM32x8 (FZ SecretM8x8,  FZ SecretM16x8,                   CX SecretM64x8,                                                      ) }
-from_impl! { SecretM64x8 (FZ SecretM8x8,  FZ SecretM16x8,  FZ SecretM32x8,                                                                       ) }
+from_impl! { SecretM8x8  (                CX SecretM16x8,  CX SecretM32x8,  CX SecretM64x8,                                                     ) }
+from_impl! { SecretM16x8 (FZ SecretM8x8,                   CX SecretM32x8,  CX SecretM64x8,                                                     ) }
+from_impl! { SecretM32x8 (FZ SecretM8x8,  FZ SecretM16x8,                   CX SecretM64x8,                                                     ) }
+from_impl! { SecretM64x8 (FZ SecretM8x8,  FZ SecretM16x8,  FZ SecretM32x8,                                                                      ) }
 
-from_impl! { SecretM8x16 (                CX SecretM16x16, CX SecretM32x16,                                                                      ) }
-from_impl! { SecretM16x16(FZ SecretM8x16,                  CX SecretM32x16,                                                                      ) }
-from_impl! { SecretM32x16(FZ SecretM8x16, FZ SecretM16x16,                                                                                       ) }
+from_impl! { SecretM8x16 (                CX SecretM16x16, CX SecretM32x16,                                                                     ) }
+from_impl! { SecretM16x16(FZ SecretM8x16,                  CX SecretM32x16,                                                                     ) }
+from_impl! { SecretM32x16(FZ SecretM8x16, FZ SecretM16x16,                                                                                      ) }
 
-from_impl! { SecretM8x32 (                CX SecretM16x32,                                                                                       ) }
-from_impl! { SecretM16x32(FZ SecretM8x32,                                                                                                        ) }
+from_impl! { SecretM8x32 (                CX SecretM16x32,                                                                                      ) }
+from_impl! { SecretM16x32(FZ SecretM8x32,                                                                                                       ) }
 
-from_impl! { SecretM8x64 (                                                                                                                       ) }
+from_impl! { SecretM8x64 (                                                                                                                      ) }
 
 // signed from unsigned
-from_impl! { SecretI8x1  (                                                                                                                       ) }
-from_impl! { SecretI16x1 (FV SecretU8x1,                                                                                                         ) }
-from_impl! { SecretI32x1 (FV SecretU8x1,  FV SecretU16x1,                                                                                        ) }
-from_impl! { SecretI64x1 (FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,                                                                       ) }
-from_impl! { SecretI128x1(FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,  FV SecretU64x1,                                                      ) }
-from_impl! { SecretI256x1(FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,  FV SecretU64x1,  FV SecretU128x1,                                    ) }
-from_impl! { SecretI512x1(FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,  FV SecretU64x1,  FV SecretU128x1,  FV SecretU256x1,                  ) }
+from_impl! { SecretI8x1  (                                                                                                                      ) }
+from_impl! { SecretI16x1 (FV SecretU8x1,                                                                                                        ) }
+from_impl! { SecretI32x1 (FV SecretU8x1,  FV SecretU16x1,                                                                                       ) }
+from_impl! { SecretI64x1 (FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,                                                                      ) }
+from_impl! { SecretI128x1(FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,  FV SecretU64x1,                                                     ) }
+from_impl! { SecretI256x1(FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,  FV SecretU64x1,  FV SecretU128x1,                                   ) }
+from_impl! { SecretI512x1(FV SecretU8x1,  FV SecretU16x1,  FV SecretU32x1,  FV SecretU64x1,  FV SecretU128x1,  FV SecretU256x1,                 ) }
 
-from_impl! { SecretI8x2  (                                                                                                                       ) }
-from_impl! { SecretI16x2 (FV SecretU8x2,                                                                                                         ) }
-from_impl! { SecretI32x2 (FV SecretU8x2,  FV SecretU16x2,                                                                                        ) }
-from_impl! { SecretI64x2 (FV SecretU8x2,  FV SecretU16x2,  FV SecretU32x2,                                                                       ) }
-from_impl! { SecretI128x2(FV SecretU8x2,  FV SecretU16x2,  FV SecretU32x2,  FV SecretU64x2,                                                      ) }
-from_impl! { SecretI256x2(FV SecretU8x2,  FV SecretU16x2,  FV SecretU32x2,  FV SecretU64x2,  FV SecretU128x2,                                    ) }
+from_impl! { SecretI8x2  (                                                                                                                      ) }
+from_impl! { SecretI16x2 (FV SecretU8x2,                                                                                                        ) }
+from_impl! { SecretI32x2 (FV SecretU8x2,  FV SecretU16x2,                                                                                       ) }
+from_impl! { SecretI64x2 (FV SecretU8x2,  FV SecretU16x2,  FV SecretU32x2,                                                                      ) }
+from_impl! { SecretI128x2(FV SecretU8x2,  FV SecretU16x2,  FV SecretU32x2,  FV SecretU64x2,                                                     ) }
+from_impl! { SecretI256x2(FV SecretU8x2,  FV SecretU16x2,  FV SecretU32x2,  FV SecretU64x2,  FV SecretU128x2,                                   ) }
 
-from_impl! { SecretI8x4  (                                                                                                                       ) }
-from_impl! { SecretI16x4 (FV SecretU8x4,                                                                                                         ) }
-from_impl! { SecretI32x4 (FV SecretU8x4,  FV SecretU16x4,                                                                                        ) }
-from_impl! { SecretI64x4 (FV SecretU8x4,  FV SecretU16x4,  FV SecretU32x4,                                                                       ) }
-from_impl! { SecretI128x4(FV SecretU8x4,  FV SecretU16x4,  FV SecretU32x4,  FV SecretU64x4,                                                      ) }
+from_impl! { SecretI8x4  (                                                                                                                      ) }
+from_impl! { SecretI16x4 (FV SecretU8x4,                                                                                                        ) }
+from_impl! { SecretI32x4 (FV SecretU8x4,  FV SecretU16x4,                                                                                       ) }
+from_impl! { SecretI64x4 (FV SecretU8x4,  FV SecretU16x4,  FV SecretU32x4,                                                                      ) }
+from_impl! { SecretI128x4(FV SecretU8x4,  FV SecretU16x4,  FV SecretU32x4,  FV SecretU64x4,                                                     ) }
 
-from_impl! { SecretI8x8  (                                                                                                                       ) }
-from_impl! { SecretI16x8 (FV SecretU8x8,                                                                                                         ) }
-from_impl! { SecretI32x8 (FV SecretU8x8,  FV SecretU16x8,                                                                                        ) }
-from_impl! { SecretI64x8 (FV SecretU8x8,  FV SecretU16x8,  FV SecretU32x8,                                                                       ) }
+from_impl! { SecretI8x8  (                                                                                                                      ) }
+from_impl! { SecretI16x8 (FV SecretU8x8,                                                                                                        ) }
+from_impl! { SecretI32x8 (FV SecretU8x8,  FV SecretU16x8,                                                                                       ) }
+from_impl! { SecretI64x8 (FV SecretU8x8,  FV SecretU16x8,  FV SecretU32x8,                                                                      ) }
 
-from_impl! { SecretI8x16 (                                                                                                                       ) }
-from_impl! { SecretI16x16(FV SecretU8x16,                                                                                                        ) }
-from_impl! { SecretI32x16(FV SecretU8x16, FV SecretU16x16,                                                                                       ) }
+from_impl! { SecretI8x16 (                                                                                                                      ) }
+from_impl! { SecretI16x16(FV SecretU8x16,                                                                                                       ) }
+from_impl! { SecretI32x16(FV SecretU8x16, FV SecretU16x16,                                                                                      ) }
 
-from_impl! { SecretI8x32 (                                                                                                                       ) }
-from_impl! { SecretI16x32(FV SecretU8x32,                                                                                                        ) }
+from_impl! { SecretI8x32 (                                                                                                                      ) }
+from_impl! { SecretI16x32(FV SecretU8x32,                                                                                                       ) }
 
-from_impl! { SecretI8x64 (                                                                                                                       ) }
+from_impl! { SecretI8x64 (                                                                                                                      ) }
+
+// lane truncating
+from_impl! { SecretU8x1  (CT SecretU8x2,   CT SecretU8x4,   CT SecretU8x8,   CT SecretU8x16,   CT SecretU8x32,   CT SecretU8x64) }
+from_impl! { SecretU16x1 (CT SecretU16x2,  CT SecretU16x4,  CT SecretU16x8,  CT SecretU16x16,  CT SecretU16x32,                ) }
+from_impl! { SecretU32x1 (CT SecretU32x2,  CT SecretU32x4,  CT SecretU32x8,  CT SecretU32x16,                                  ) }
+from_impl! { SecretU64x1 (CT SecretU64x2,  CT SecretU64x4,  CT SecretU64x8,                                                    ) }
+from_impl! { SecretU128x1(CT SecretU128x2, CT SecretU128x4,                                                                    ) }
+from_impl! { SecretU256x1(CT SecretU256x2,                                                                                     ) }
+
+from_impl! { SecretU8x2  (                 CT SecretU8x4,   CT SecretU8x8,   CT SecretU8x16,   CT SecretU8x32,   CT SecretU8x64) }
+from_impl! { SecretU16x2 (                 CT SecretU16x4,  CT SecretU16x8,  CT SecretU16x16,  CT SecretU16x32,                ) }
+from_impl! { SecretU32x2 (                 CT SecretU32x4,  CT SecretU32x8,  CT SecretU32x16,                                  ) }
+from_impl! { SecretU64x2 (                 CT SecretU64x4,  CT SecretU64x8,                                                    ) }
+from_impl! { SecretU128x2(                 CT SecretU128x4,                                                                    ) }
+
+from_impl! { SecretU8x4  (                                  CT SecretU8x8,   CT SecretU8x16,   CT SecretU8x32,   CT SecretU8x64) }
+from_impl! { SecretU16x4 (                                  CT SecretU16x8,  CT SecretU16x16,  CT SecretU16x32,                ) }
+from_impl! { SecretU32x4 (                                  CT SecretU32x8,  CT SecretU32x16,                                  ) }
+from_impl! { SecretU64x4 (                                  CT SecretU64x8,                                                    ) }
+
+from_impl! { SecretU8x8  (                                                   CT SecretU8x16,   CT SecretU8x32,   CT SecretU8x64) }
+from_impl! { SecretU16x8 (                                                   CT SecretU16x16,  CT SecretU16x32,                ) }
+from_impl! { SecretU32x8 (                                                   CT SecretU32x16,                                  ) }
+
+from_impl! { SecretU8x16 (                                                                     CT SecretU8x32,   CT SecretU8x64) }
+from_impl! { SecretU16x16(                                                                     CT SecretU16x32,                ) }
+
+from_impl! { SecretU8x32 (                                                                                       CT SecretU8x64) }
+
+from_impl! { SecretI8x1  (CT SecretI8x2,   CT SecretI8x4,   CT SecretI8x8,   CT SecretI8x16,   CT SecretI8x32,   CT SecretI8x64) }
+from_impl! { SecretI16x1 (CT SecretI16x2,  CT SecretI16x4,  CT SecretI16x8,  CT SecretI16x16,  CT SecretI16x32,                ) }
+from_impl! { SecretI32x1 (CT SecretI32x2,  CT SecretI32x4,  CT SecretI32x8,  CT SecretI32x16,                                  ) }
+from_impl! { SecretI64x1 (CT SecretI64x2,  CT SecretI64x4,  CT SecretI64x8,                                                    ) }
+from_impl! { SecretI128x1(CT SecretI128x2, CT SecretI128x4,                                                                    ) }
+from_impl! { SecretI256x1(CT SecretI256x2,                                                                                     ) }
+
+from_impl! { SecretI8x2  (                 CT SecretI8x4,   CT SecretI8x8,   CT SecretI8x16,   CT SecretI8x32,   CT SecretI8x64) }
+from_impl! { SecretI16x2 (                 CT SecretI16x4,  CT SecretI16x8,  CT SecretI16x16,  CT SecretI16x32,                ) }
+from_impl! { SecretI32x2 (                 CT SecretI32x4,  CT SecretI32x8,  CT SecretI32x16,                                  ) }
+from_impl! { SecretI64x2 (                 CT SecretI64x4,  CT SecretI64x8,                                                    ) }
+from_impl! { SecretI128x2(                 CT SecretI128x4,                                                                    ) }
+
+from_impl! { SecretI8x4  (                                  CT SecretI8x8,   CT SecretI8x16,   CT SecretI8x32,   CT SecretI8x64) }
+from_impl! { SecretI16x4 (                                  CT SecretI16x8,  CT SecretI16x16,  CT SecretI16x32,                ) }
+from_impl! { SecretI32x4 (                                  CT SecretI32x8,  CT SecretI32x16,                                  ) }
+from_impl! { SecretI64x4 (                                  CT SecretI64x8,                                                    ) }
+
+from_impl! { SecretI8x8  (                                                   CT SecretI8x16,   CT SecretI8x32,   CT SecretI8x64) }
+from_impl! { SecretI16x8 (                                                   CT SecretI16x16,  CT SecretI16x32,                ) }
+from_impl! { SecretI32x8 (                                                   CT SecretI32x16,                                  ) }
+
+from_impl! { SecretI8x16 (                                                                     CT SecretI8x32,   CT SecretI8x64) }
+from_impl! { SecretI16x16(                                                                     CT SecretI16x32,                ) }
+
+from_impl! { SecretI8x32 (                                                                                       CT SecretI8x64) }
+
+from_impl! { SecretM8x1  (CT SecretM8x2,   CT SecretM8x4,   CT SecretM8x8,   CT SecretM8x16,   CT SecretM8x32,   CT SecretM8x64) }
+from_impl! { SecretM16x1 (CT SecretM16x2,  CT SecretM16x4,  CT SecretM16x8,  CT SecretM16x16,  CT SecretM16x32,                ) }
+from_impl! { SecretM32x1 (CT SecretM32x2,  CT SecretM32x4,  CT SecretM32x8,  CT SecretM32x16,                                  ) }
+from_impl! { SecretM64x1 (CT SecretM64x2,  CT SecretM64x4,  CT SecretM64x8,                                                    ) }
+from_impl! { SecretM128x1(CT SecretM128x2, CT SecretM128x4,                                                                    ) }
+from_impl! { SecretM256x1(CT SecretM256x2,                                                                                     ) }
+
+from_impl! { SecretM8x2  (                 CT SecretM8x4,   CT SecretM8x8,   CT SecretM8x16,   CT SecretM8x32,   CT SecretM8x64) }
+from_impl! { SecretM16x2 (                 CT SecretM16x4,  CT SecretM16x8,  CT SecretM16x16,  CT SecretM16x32,                ) }
+from_impl! { SecretM32x2 (                 CT SecretM32x4,  CT SecretM32x8,  CT SecretM32x16,                                  ) }
+from_impl! { SecretM64x2 (                 CT SecretM64x4,  CT SecretM64x8,                                                    ) }
+from_impl! { SecretM128x2(                 CT SecretM128x4,                                                                    ) }
+
+from_impl! { SecretM8x4  (                                  CT SecretM8x8,   CT SecretM8x16,   CT SecretM8x32,   CT SecretM8x64) }
+from_impl! { SecretM16x4 (                                  CT SecretM16x8,  CT SecretM16x16,  CT SecretM16x32,                ) }
+from_impl! { SecretM32x4 (                                  CT SecretM32x8,  CT SecretM32x16,                                  ) }
+from_impl! { SecretM64x4 (                                  CT SecretM64x8,                                                    ) }
+
+from_impl! { SecretM8x8  (                                                   CT SecretM8x16,   CT SecretM8x32,   CT SecretM8x64) }
+from_impl! { SecretM16x8 (                                                   CT SecretM16x16,  CT SecretM16x32,                ) }
+from_impl! { SecretM32x8 (                                                   CT SecretM32x16,                                  ) }
+
+from_impl! { SecretM8x16 (                                                                     CT SecretM8x32,   CT SecretM8x64) }
+from_impl! { SecretM16x16(                                                                     CT SecretM16x32,                ) }
+
+from_impl! { SecretM8x32 (                                                                                       CT SecretM8x64) }
+
+// lane extending
+from_impl! { SecretU8x2  (FU SecretU8x1                                                                                     ) }
+from_impl! { SecretU16x2 (FU SecretU16x1                                                                                    ) }
+from_impl! { SecretU32x2 (FU SecretU32x1                                                                                    ) }
+from_impl! { SecretU64x2 (FU SecretU64x1                                                                                    ) }
+from_impl! { SecretU128x2(FU SecretU128x1                                                                                   ) }
+from_impl! { SecretU256x2(FU SecretU256x1                                                                                   ) }
+
+from_impl! { SecretU8x4  (FU SecretU8x1,   FU SecretU8x2                                                                    ) }
+from_impl! { SecretU16x4 (FU SecretU16x1,  FU SecretU16x2                                                                   ) }
+from_impl! { SecretU32x4 (FU SecretU32x1,  FU SecretU32x2                                                                   ) }
+from_impl! { SecretU64x4 (FU SecretU64x1,  FU SecretU64x2                                                                   ) }
+from_impl! { SecretU128x4(FU SecretU128x1, FU SecretU128x2                                                                  ) }
+
+from_impl! { SecretU8x8  (FU SecretU8x1,   FU SecretU8x2,   FU SecretU8x4                                                   ) }
+from_impl! { SecretU16x8 (FU SecretU16x1,  FU SecretU16x2,  FU SecretU16x4                                                  ) }
+from_impl! { SecretU32x8 (FU SecretU32x1,  FU SecretU32x2,  FU SecretU32x4                                                  ) }
+from_impl! { SecretU64x8 (FU SecretU64x1,  FU SecretU64x2,  FU SecretU64x4                                                  ) }
+
+from_impl! { SecretU8x16 (FU SecretU8x1,   FU SecretU8x2,   FU SecretU8x4,   FU SecretU8x8                                  ) }
+from_impl! { SecretU16x16(FU SecretU16x1,  FU SecretU16x2,  FU SecretU16x4,  FU SecretU16x8                                 ) }
+from_impl! { SecretU32x16(FU SecretU32x1,  FU SecretU32x2,  FU SecretU32x4,  FU SecretU32x8                                 ) }
+
+from_impl! { SecretU8x32 (FU SecretU8x1,   FU SecretU8x2,   FU SecretU8x4,   FU SecretU8x8,   FU SecretU8x16                ) }
+from_impl! { SecretU16x32(FU SecretU16x1,  FU SecretU16x2,  FU SecretU16x4,  FU SecretU16x8,  FU SecretU16x16               ) }
+
+from_impl! { SecretU8x64 (FU SecretU8x1,   FU SecretU8x2,   FU SecretU8x4,   FU SecretU8x8,   FU SecretU8x16, FU SecretU8x32) }
+
+from_impl! { SecretI8x2  (FU SecretI8x1                                                                                     ) }
+from_impl! { SecretI16x2 (FU SecretI16x1                                                                                    ) }
+from_impl! { SecretI32x2 (FU SecretI32x1                                                                                    ) }
+from_impl! { SecretI64x2 (FU SecretI64x1                                                                                    ) }
+from_impl! { SecretI128x2(FU SecretI128x1                                                                                   ) }
+from_impl! { SecretI256x2(FU SecretI256x1                                                                                   ) }
+
+from_impl! { SecretI8x4  (FU SecretI8x1,   FU SecretI8x2                                                                    ) }
+from_impl! { SecretI16x4 (FU SecretI16x1,  FU SecretI16x2                                                                   ) }
+from_impl! { SecretI32x4 (FU SecretI32x1,  FU SecretI32x2                                                                   ) }
+from_impl! { SecretI64x4 (FU SecretI64x1,  FU SecretI64x2                                                                   ) }
+from_impl! { SecretI128x4(FU SecretI128x1, FU SecretI128x2                                                                  ) }
+
+from_impl! { SecretI8x8  (FU SecretI8x1,   FU SecretI8x2,   FU SecretI8x4                                                   ) }
+from_impl! { SecretI16x8 (FU SecretI16x1,  FU SecretI16x2,  FU SecretI16x4                                                  ) }
+from_impl! { SecretI32x8 (FU SecretI32x1,  FU SecretI32x2,  FU SecretI32x4                                                  ) }
+from_impl! { SecretI64x8 (FU SecretI64x1,  FU SecretI64x2,  FU SecretI64x4                                                  ) }
+
+from_impl! { SecretI8x16 (FU SecretI8x1,   FU SecretI8x2,   FU SecretI8x4,   FU SecretI8x8                                  ) }
+from_impl! { SecretI16x16(FU SecretI16x1,  FU SecretI16x2,  FU SecretI16x4,  FU SecretI16x8                                 ) }
+from_impl! { SecretI32x16(FU SecretI32x1,  FU SecretI32x2,  FU SecretI32x4,  FU SecretI32x8                                 ) }
+
+from_impl! { SecretI8x32 (FU SecretI8x1,   FU SecretI8x2,   FU SecretI8x4,   FU SecretI8x8,   FU SecretI8x16                ) }
+from_impl! { SecretI16x32(FU SecretI16x1,  FU SecretI16x2,  FU SecretI16x4,  FU SecretI16x8,  FU SecretI16x16               ) }
+
+from_impl! { SecretI8x64 (FU SecretI8x1,   FU SecretI8x2,   FU SecretI8x4,   FU SecretI8x8,   FU SecretI8x16, FU SecretI8x32) }
+
+from_impl! { SecretM8x2  (FU SecretM8x1                                                                                     ) }
+from_impl! { SecretM16x2 (FU SecretM16x1                                                                                    ) }
+from_impl! { SecretM32x2 (FU SecretM32x1                                                                                    ) }
+from_impl! { SecretM64x2 (FU SecretM64x1                                                                                    ) }
+from_impl! { SecretM128x2(FU SecretM128x1                                                                                   ) }
+from_impl! { SecretM256x2(FU SecretM256x1                                                                                   ) }
+
+from_impl! { SecretM8x4  (FU SecretM8x1,   FU SecretM8x2                                                                    ) }
+from_impl! { SecretM16x4 (FU SecretM16x1,  FU SecretM16x2                                                                   ) }
+from_impl! { SecretM32x4 (FU SecretM32x1,  FU SecretM32x2                                                                   ) }
+from_impl! { SecretM64x4 (FU SecretM64x1,  FU SecretM64x2                                                                   ) }
+from_impl! { SecretM128x4(FU SecretM128x1, FU SecretM128x2                                                                  ) }
+
+from_impl! { SecretM8x8  (FU SecretM8x1,   FU SecretM8x2,   FU SecretM8x4                                                   ) }
+from_impl! { SecretM16x8 (FU SecretM16x1,  FU SecretM16x2,  FU SecretM16x4                                                  ) }
+from_impl! { SecretM32x8 (FU SecretM32x1,  FU SecretM32x2,  FU SecretM32x4                                                  ) }
+from_impl! { SecretM64x8 (FU SecretM64x1,  FU SecretM64x2,  FU SecretM64x4                                                  ) }
+
+from_impl! { SecretM8x16 (FU SecretM8x1,   FU SecretM8x2,   FU SecretM8x4,   FU SecretM8x8                                  ) }
+from_impl! { SecretM16x16(FU SecretM16x1,  FU SecretM16x2,  FU SecretM16x4,  FU SecretM16x8                                 ) }
+from_impl! { SecretM32x16(FU SecretM32x1,  FU SecretM32x2,  FU SecretM32x4,  FU SecretM32x8                                 ) }
+
+from_impl! { SecretM8x32 (FU SecretM8x1,   FU SecretM8x2,   FU SecretM8x4,   FU SecretM8x8,   FU SecretM8x16                ) }
+from_impl! { SecretM16x32(FU SecretM16x1,  FU SecretM16x2,  FU SecretM16x4,  FU SecretM16x8,  FU SecretM16x16               ) }
+
+from_impl! { SecretM8x64 (FU SecretM8x1,   FU SecretM8x2,   FU SecretM8x4,   FU SecretM8x8,   FU SecretM8x16, FU SecretM8x32) }
 
 
 
@@ -2749,6 +3039,46 @@ mod tests {
         test_clz(1);
         test_clz(2);
         test_clz(3);
+    }
+
+    #[test]
+    fn int_reverse() {
+        println!();
+
+        let a = SecretU32::new(0x12345678);
+        let x = a.clone().reverse_bytes();
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify();
+        println!("{}", v);
+        assert_eq!(v, 0x78563412);
+
+        let a = SecretU32::new(0x12345678);
+        let x = a.clone().reverse_bits();
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify();
+        println!("{}", v);
+        assert_eq!(v, 0x1e6a2c48);
+
+        let a = SecretU16x2::cast(SecretU32::new(0x12345678));
+        let x = SecretU32::cast(a.clone().reverse_lanes());
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify();
+        println!("{}", v);
+        assert_eq!(v, 0x56781234);
+
+        let a = SecretU16x2::cast(SecretU32::new(0x12345678));
+        let x = SecretU32::cast(a.clone().reverse_bytes());
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify();
+        println!("{}", v);
+        assert_eq!(v, 0x34127856);
+
+        let a = SecretU16x2::cast(SecretU32::new(0x12345678));
+        let x = SecretU32::cast(a.clone().reverse_bits());
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify();
+        println!("{}", v);
+        assert_eq!(v, 0x2c481e6a);
     }
 
     #[test]
