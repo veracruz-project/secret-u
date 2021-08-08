@@ -14,7 +14,7 @@ use secret_u::table::shuffle_table as bitslice_table;
 // AES constants
 
 // sbox constants
-#[bitslice_table(parallel=16)]
+#[bitslice_table(parallel=64)]
 const SBOX: [u8; 256] = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -50,13 +50,13 @@ struct Aes {
     iv: SecretU8x16,
 
     // current streaming state
-    state: SecretU8x16,
+    state: SecretU8x64,
     si: usize,
 
     // compiled bytecode
-    compiled_cipher: Option<Box<dyn Fn(&SecretU8x16) -> SecretU8x16>>,
+    compiled_cipher: Option<Box<dyn Fn(&SecretU8x16) -> SecretU8x64>>,
     compiled_inc: Option<Box<dyn Fn(&SecretU8x16) -> SecretU8x16>>,
-    compiled_xor: Option<Box<dyn Fn(&SecretU8x16, &SecretU8x16) -> SecretU8x16>>,
+    compiled_xor: Option<Box<dyn Fn(&SecretU8x64, &SecretU8x64) -> SecretU8x64>>,
 }
 
 impl Aes {
@@ -74,8 +74,8 @@ impl Aes {
             round_key: vec![],
             iv: iv,
 
-            state: SecretU8x16::zero(),
-            si: 16,
+            state: SecretU8x64::zero(),
+            si: 64,
 
             compiled_cipher: None,
             compiled_inc: None,
@@ -86,24 +86,40 @@ impl Aes {
 
         // compile cipher
         self_.compiled_cipher = Some(Box::new(compile!(
-            |x: SecretU8x16| -> SecretU8x16 {
+            |x: SecretU8x16| -> SecretU8x64 {
+                // operate on 4 ivs at a time
+                let x0 = x.clone();
+                let x  = SecretU128::cast(x.reverse_lanes());
+                let x1 = x.clone() + SecretU128::const_(1);
+                let x2 = x.clone() + SecretU128::const_(2);
+                let x3 = x.clone() + SecretU128::const_(3);
+                let x1 = SecretU8x16::cast(x1).reverse_lanes();
+                let x2 = SecretU8x16::cast(x2).reverse_lanes();
+                let x3 = SecretU8x16::cast(x3).reverse_lanes();
+                let x = SecretU8x64::cast(SecretU128x4::from_lanes(
+                    SecretU128::cast(x0),
+                    SecretU128::cast(x1),
+                    SecretU128::cast(x2),
+                    SecretU128::cast(x3),
+                ));
+
                 self_.cipher(x)
             }
         )));
 
         // compiled iv increment
         self_.compiled_inc = Some(Box::new(compile!(
-            |mut x: SecretU8x16| -> SecretU8x16 {
-                // need to reverse due to big-endian addition
-                x = x.reverse_lanes();
-                x = SecretU8x16::cast(SecretU128::cast(x) + SecretU128::one());
-                x.reverse_lanes()
+            |x: SecretU8x16| -> SecretU8x16 {
+                // skip 4 at a time
+                let x = SecretU128::cast(x.reverse_lanes());
+                let x = x + SecretU128::const_(4);
+                SecretU8x16::cast(x).reverse_lanes()
             }
         )));
 
         // compiled xor
         self_.compiled_xor = Some(Box::new(compile!(
-            |x: SecretU8x16, y: SecretU8x16| -> SecretU8x16 {
+            |x: SecretU8x64, y: SecretU8x64| -> SecretU8x64 {
                 x ^ y
             }
         )));
@@ -145,14 +161,14 @@ impl Aes {
                 // applies the S-box to each of the four bytes to produce an output word.
 
                 // Function Subword()
-                temp = SecretU8x4::cast(SBOX(SecretU8x16::from(temp)));
+                temp = SecretU8x4::cast(SBOX(SecretU8x64::from(temp)));
 
                 temp ^= SecretU8x4::const_lanes(RCON[i/self.words], 0, 0, 0);
             }
 
             if key.len() == 32 && i % self.words == 4 {
                 // Function Subword()
-                temp = SecretU8x4::cast(SBOX(SecretU8x16::from(temp)));
+                temp = SecretU8x4::cast(SBOX(SecretU8x64::from(temp)));
             }
 
             let k = i-self.words;
@@ -181,59 +197,70 @@ impl Aes {
 
     // This function adds the round key to state.
     // The round key is added to the state by an XOR function.
-    fn add_round_key(&self, round: usize, state: SecretU8x16) -> SecretU8x16 {
-        state ^ self.round_key[round].clone()
+    fn add_round_key(&self, round: usize, state: SecretU8x64) -> SecretU8x64 {
+        state ^ SecretU8x64::cast(SecretU128x4::splat(SecretU128::cast(
+            self.round_key[round].clone()
+        )))
     }
 
     // The SubBytes Function Substitutes the values in the
     // state matrix with values in an S-box.
-    fn sub_bytes(&self, state: SecretU8x16) -> SecretU8x16 {
+    fn sub_bytes(&self, state: SecretU8x64) -> SecretU8x64 {
         SBOX(state)
     }
 
     // The ShiftRows() function shifts the rows in the state to the left.
     // Each row is shifted with different offset.
     // Offset = Row number. So the first row is not shifted.
-    fn shift_rows(&self, state: SecretU8x16) -> SecretU8x16 {
+    fn shift_rows(&self, state: SecretU8x64) -> SecretU8x64 {
         // we can use a complex shuffle here
-        SecretU8x16::const_lanes(
+        let lanes: [u8; 16] = [
              0,  5, 10, 15,
              4,  9, 14,  3,
              8, 13,  2,  7,
             12,  1,  6, 11,
+        ];
+
+        // do 4 in parallel
+        SecretU8x64::const_slice(
+            &(0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
         ).shuffle(state.clone(), state)
     }
 
     // MixColumns function mixes the columns of the state matrix
-    fn mix_columns(&self, state: SecretU8x16) -> SecretU8x16 {
-        fn xtime(x: SecretU8x16) -> SecretU8x16 {
-            (x.clone() << SecretU8x16::const_splat(1))
+    fn mix_columns(&self, state: SecretU8x64) -> SecretU8x64 {
+        fn xtime(x: SecretU8x64) -> SecretU8x64 {
+            (x.clone() << SecretU8x64::const_splat(1))
                 ^ (
-                    ((x >> SecretU8x16::const_splat(7)) & SecretU8x16::const_splat(1))
-                        * SecretU8x16::const_splat(0x1b)
+                    ((x >> SecretU8x64::const_splat(7)) & SecretU8x64::const_splat(1))
+                        * SecretU8x64::const_splat(0x1b)
                 )
         }
 
-        let sum = SecretU32x4::cast(state.clone());
-        let sum = (sum.clone() >> SecretU32x4::const_splat(8)) ^ sum;
-        let sum = (sum.clone() >> SecretU32x4::const_splat(16)) ^ sum;
-        let sum = SecretU8x16::cast(sum);
-        let sum = SecretU8x16::const_lanes(
+        let sum = SecretU32x16::cast(state.clone());
+        let sum = (sum.clone() >> SecretU32x16::const_splat(8)) ^ sum;
+        let sum = (sum.clone() >> SecretU32x16::const_splat(16)) ^ sum;
+        let sum = SecretU8x64::cast(sum);
+        let lanes: [u8; 16] = [
              0,  0,  0,  0,
              4,  4,  4,  4,
              8,  8,  8,  8,
             12, 12, 12, 12,
+        ];
+        let sum = SecretU8x64::const_slice(
+            &(0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
         ).shuffle(sum.clone(), sum);
 
-        let rot = SecretU8x16::cast(
-            SecretU32x4::cast(state.clone()).rotate_right(SecretU32x4::const_splat(8))
+        let rot = SecretU8x64::cast(
+            SecretU32x16::cast(state.clone()).rotate_right(SecretU32x16::const_splat(8))
         );
 
-        state.clone() ^ xtime(SecretU8x16::cast(state.clone() ^ rot)) ^ sum
+        state.clone() ^ xtime(SecretU8x64::cast(state.clone() ^ rot)) ^ sum
+
     }
 
     /// Cipher is the main function that encrypts the PlainText.
-    fn cipher(&self, mut state: SecretU8x16) -> SecretU8x16 {
+    fn cipher(&self, mut state: SecretU8x64) -> SecretU8x64 {
         // Add the First round key to the state before starting the self.rounds.
         state = self.add_round_key(0, state);
 
@@ -256,8 +283,8 @@ impl Aes {
     }
 
     #[allow(unused)]
-    pub fn encrypt_aligned(&mut self, data: &mut [SecretU8x16]) {
-        assert!(self.si == 16);
+    pub fn encrypt_aligned(&mut self, data: &mut [SecretU8x64]) {
+        assert!(self.si == 64);
 
         for i in 0..data.len() {
             // encrypt ctr
@@ -273,7 +300,7 @@ impl Aes {
     #[allow(unused)]
     pub fn encrypt(&mut self, data: &mut [SecretU8]) {
         for i in 0..data.len() {
-            if self.si == 16 {
+            if self.si == 64 {
                 self.si = 0;
 
                 // encrypt ctr
@@ -289,7 +316,7 @@ impl Aes {
     }
 
     #[allow(unused)]
-    pub fn decrypt_aligned(&mut self, data: &mut [SecretU8x16]) {
+    pub fn decrypt_aligned(&mut self, data: &mut [SecretU8x64]) {
         self.encrypt_aligned(data);
     }
 
@@ -331,17 +358,9 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         let mut block = [0; 64];
         let diff = in_file.read(&mut block).unwrap();
         if diff == 64 {
-            let mut block_s = [
-                SecretU8x16::new_slice(&block[ 0..16]),
-                SecretU8x16::new_slice(&block[16..32]),
-                SecretU8x16::new_slice(&block[32..48]),
-                SecretU8x16::new_slice(&block[48..64]),
-            ];
+            let mut block_s = [SecretU8x64::new_slice(&block)];
             state.encrypt_aligned(&mut block_s);
-            block[ 0..16].copy_from_slice(&block_s[0].declassify_le_bytes());
-            block[16..32].copy_from_slice(&block_s[1].declassify_le_bytes());
-            block[32..48].copy_from_slice(&block_s[2].declassify_le_bytes());
-            block[48..64].copy_from_slice(&block_s[3].declassify_le_bytes());
+            block.copy_from_slice(&block_s[0].declassify_le_bytes());
         } else {
             let mut block_s = block[..diff].into_iter()
                 .map(|b| SecretU8::new(*b))

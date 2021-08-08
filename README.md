@@ -582,7 +582,12 @@ See the examples in the examples folder for some examples:
   - https://github.com/B-Con/crypto-algorithms
   - https://github.com/kokke/tiny-AES-c
 
-- [aes](examples/aes.rs) - An implementation of AES using secret-u types.
+- [aes](examples/aes.rs) - An implementation of AES CTR mode using
+  secret-u types.
+
+- [aes_more_simd](examples/aes_more_simd.rs) - A version of AES that operates
+  on 64-byte blocks instead of 16-byte blocks, using SIMD to encrypt multiple
+  16-byte blocks in parallel.
 
 - [sss](examples/sss.rs) - An implementation of Shamir's secret sharing
   scheme in GF(256), this makes heavy use of secret-u's bitslice_table and
@@ -631,17 +636,21 @@ $ make bench-aes
 
 On my machine:
 ```
-aes_reference  0m0.035s
-aes_shuffle    0m0.835s
-aes_bitslice   1m2.617s
+aes_reference           0m0.038s
+aes_shuffle             0m0.605s
+aes_bitslice            0m30.387s
+aes_more_simd_shuffle   0m0.279s
+aes_more_simd_bitslice  0m12.005s
 ```
 
 `aes_reference` again is not constant-time, and native, so it being the fastest
-is not surprising. At the time of writing `aes_shuffle` uses array lookups in
-the prototype engine, which is not truely constant-time, but also not leveraging
-SIMD hardware. `aes_bitslice` uses a bitsliced representation for SBOXs, which is
-the main source of slowdown.
+is not surprising. The `aes_more_simd_*` versions operate on 64-byte blocks in
+parallel, instead of 16-byte blocks, and we see a proportional performance
+increase.
 
+At the time of writing `aes_shuffle` uses array lookups in the prototype engine,
+which is not truely constant-time, but it is also not leveraging
+SIMD hardware.
 
 ## Prior art
 

@@ -39,6 +39,10 @@ bench-aes:
 	cp target/release/examples/aes target/release/examples/aes_shuffle
 	RUST_MIN_STACK=16777216 cargo build --release --example aes --features example-bitslice-tables
 	cp target/release/examples/aes target/release/examples/aes_bitslice
+	cargo build --release --example aes_more_simd
+	cp target/release/examples/aes_more_simd target/release/examples/aes_more_simd_shuffle
+	RUST_MIN_STACK=16777216 cargo build --release --example aes_more_simd --features example-bitslice-tables
+	cp target/release/examples/aes_more_simd target/release/examples/aes_more_simd_bitslice
 	# run, measuring execution time
 	$(strip \
 		time ./target/release/examples/aes_reference \
@@ -81,7 +85,7 @@ bench-sss:
 	$(strip RUST_MIN_STACK=16777216 \
 		cargo build --release --example sss \
 		--features example-bitslice-tables)
-	$(strip RUST_MIN_STACK=134217728 \
+	$(strip RUST_MIN_STACK=16777216 \
 		cargo build --release --example sss_simd \
 		--features example-bitslice-tables )
 	cp target/release/examples/sss 	    target/release/examples/sss_bitslice

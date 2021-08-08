@@ -27,21 +27,6 @@ fn crate_() -> proc_macro2::TokenStream {
 
 // use the boolean_expression crate for bitexpr simplification
 
-fn find_in_width(table: &[u128], parallel: usize) -> usize {
-    let width = table.len().next_power_of_two().trailing_zeros() as usize;
-    let width = max(width, parallel);
-    // the width needs itself to be a power of two for our transpose to work
-    width.next_power_of_two()
-}
-
-fn find_out_width(table: &[u128], parallel: usize) -> usize {
-    let width = (table.iter().max().copied().unwrap_or(0) + 1)
-        .next_power_of_two().trailing_zeros() as usize;
-    let width = max(width, parallel);
-    // the width needs itself to be a power of two for our transpose to work
-    width.next_power_of_two()
-}
-
 fn find_bitexpr(table: &[u128], width: usize, bit: usize) -> be::Expr<u8> {
     // build naive expr
     let mut ors = be::Expr::Const(false);
@@ -569,8 +554,15 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
     let index_secret_ty = index_ty.secret_parallel_ty(parallel);
     let ret_secret_ty = ret_ty.secret_parallel_ty(parallel);
     let ret_lane_secret_ty = ret_ty.secret_ty();
-    let a_width = find_in_width(&elems, parallel);
-    let b_width = find_out_width(&elems, parallel);
+    //let a_width = find_in_width(&elems, parallel);
+    //let b_width = find_out_width(&elems, parallel);
+    let a_width = elems.len().next_power_of_two().trailing_zeros() as usize;
+    // the width needs itself to be a power of two for our transpose to work
+    let a_par_width = max(a_width, parallel).next_power_of_two();
+    let b_width = (elems.iter().max().copied().unwrap_or(0) + 1)
+        .next_power_of_two().trailing_zeros() as usize;
+    // the width needs itself to be a power of two for our transpose to work
+    let b_par_width = max(b_width, parallel).next_power_of_two();
 
     // create variables
     // TODO can we use simds throughout?
@@ -592,14 +584,14 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .chain(
             iter::repeat(parse_quote! { #secret_ty::zero() })
-                .take(a_width - parallel)
+                .take(a_par_width - parallel)
         );
-    let a_unpack = (0..a_width)
+    let a_unpack = (0..a_par_width)
         .map(|i| -> syn::Stmt {
             let a = ident!("a{}", i);
             parse_quote! { let #a = a[#i].clone(); }
         });
-    let b_pack = (0..b_width)
+    let b_pack = (0..b_par_width)
         .map(|i| -> syn::Expr {
             let b = ident!("b{}", i);
             parse_quote! { #b }
@@ -607,11 +599,11 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
     let b_rets = (0..parallel)
         .map(|i| -> syn::Expr {
             // mask off extra bits introduced by bitwise not
-            let ret: syn::Expr = if b_width >= ret_ty.width() {
+            let ret: syn::Expr = if b_par_width >= ret_ty.width() {
                 let i = lit!(i);
                 parse_quote! { b[#i].clone() }
             } else {
-                let mask = lit!((1usize << b_width) - 1);
+                let mask = lit!((1usize << b_par_width) - 1);
                 let i = lit!(i);
                 parse_quote! { #secret_ty::const_(#mask) & b[#i].clone() }
             };
@@ -637,12 +629,12 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // transposes
-    let a_transpose = build_transpose(&ident!("a"), &prim_ty, &secret_ty, a_width);
-    let b_transpose = build_transpose(&ident!("b"), &prim_ty, &secret_ty, b_width);
+    let a_transpose = build_transpose(&ident!("a"), &prim_ty, &secret_ty, a_par_width);
+    let b_transpose = build_transpose(&ident!("b"), &prim_ty, &secret_ty, b_par_width);
 
     // find exprs, simplify, and convert to quote
     let mut bitexprs = Vec::new();
-    for i in 0..b_width {
+    for i in 0..b_par_width {
         let expr = find_bitexpr(&elems, a_width, i);
         let expr = simplify_bitexpr(expr);
         
@@ -675,7 +667,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
             use #crate_::traits::Cast;
             use #crate_::traits::Eq;
 
-            let mut a: [#secret_ty; #a_width] = [
+            let mut a: [#secret_ty; #a_par_width] = [
                 #(#a_args),*
             ];
 
@@ -685,7 +677,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#bitexprs)*
 
-            let mut b: [#secret_ty; #b_width] = [
+            let mut b: [#secret_ty; #b_par_width] = [
                 #(#b_pack),*
             ];
 
