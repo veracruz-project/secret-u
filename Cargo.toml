@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["Christopher Haster <christopher.haster@arm.com>"]
 edition = "2018"
 
-
 [features]
 default = [
     "opt-color-slots",

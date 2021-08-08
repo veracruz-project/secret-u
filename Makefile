@@ -31,6 +31,34 @@ bench-sha256:
 	time cargo run --release --example sha256_fast 		-- <(cat $$(find -name '*.rs'))
 	time cargo run --release --example sha256 			-- <(cat $$(find -name '*.rs'))
 
+.PHONY: bench-aes
+bench-aes:
+	# build (assuming builds are cached)
+	cargo build --release --example aes_reference
+	cargo build --release --example aes
+	cp target/release/examples/aes target/release/examples/aes_shuffle
+	RUSTFLAGS="-C lto=no" cargo build --release --example aes --features example-bitslice-tables
+	cp target/release/examples/aes target/release/examples/aes_bitslice
+	# run, measuring execution time
+	$(strip \
+		time cargo run --release --example aes_reference -- \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test_reference.encrypted)
+	$(strip \
+		time ./target/release/examples/aes_shuffle \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test_shuffle.encrypted)
+	$(strip \
+		time ./target/release/examples/aes_bitslice \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test_bitslice.encrypted)
+
 .PHONY: bench-sss
 bench-sss:
 	# build (need to move so different configurations don't overwrite each other)

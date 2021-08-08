@@ -565,8 +565,9 @@ secret-u has a number of other experiments tossed into this experimental salad:
 See the examples in the examples folder for some examples:
 
 - [sha256_reference](examples/sha256_reference.rs) - A non-constant-time
-  reference implementation of SHA256, based on
-  https://github.com/B-Con/crypto-algorithms
+  reference implementation of SHA256, based on:
+
+  - https://github.com/B-Con/crypto-algorithms
 
 - [sha256](examples/sha256.rs) - A naive implementation of SHA256 using
   secret-u types.
@@ -575,14 +576,22 @@ See the examples in the examples folder for some examples:
   using secret-u's compile macro to compile the computation down to the
   constant-time bytecode once.
 
+- [aes_reference](examples/aes_reference.rs) - A non-constant-time reference
+  implementation of AES, based on:
+
+  - https://github.com/B-Con/crypto-algorithms
+  - https://github.com/kokke/tiny-AES-c
+
+- [aes](examples/aes.rs) - An implementation of AES using secret-u types.
+
 - [sss](examples/sss.rs) - An implementation of Shamir's secret sharing
   scheme in GF(256), this makes heavy use of secret-u's bitslice_table and
   shuffle_table attributes to compile lookup tables into their constant-time
-  friendly representations
+  friendly representations.
 
 - [sss_simd](examples/sss_simd.rs) - An implementation of Shamir's secret
   sharing scheme in GF(256) which extends the sss example with SIMD operations
-  to perform the computation in parallel
+  to perform the computation in parallel.
 
 ## Testing
 
