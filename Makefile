@@ -27,9 +27,9 @@ bench-sha256:
 	cargo build --release --example sha256_fast
 	cargo build --release --example sha256
 	# run, measuring execution time
-	time cargo run --release --example sha256_reference -- <(cat $$(find -name '*.rs'))
-	time cargo run --release --example sha256_fast 		-- <(cat $$(find -name '*.rs'))
-	time cargo run --release --example sha256 			-- <(cat $$(find -name '*.rs'))
+	time ./target/release/examples/sha256_reference <(cat $$(find -name '*.rs'))
+	time ./target/release/examples/sha256_fast 		<(cat $$(find -name '*.rs'))
+	time ./target/release/examples/sha256 			<(cat $$(find -name '*.rs'))
 
 .PHONY: bench-aes
 bench-aes:
@@ -37,11 +37,11 @@ bench-aes:
 	cargo build --release --example aes_reference
 	cargo build --release --example aes
 	cp target/release/examples/aes target/release/examples/aes_shuffle
-	RUSTFLAGS="-C lto=no" cargo build --release --example aes --features example-bitslice-tables
+	RUST_MIN_STACK=16777216 cargo build --release --example aes --features example-bitslice-tables
 	cp target/release/examples/aes target/release/examples/aes_bitslice
 	# run, measuring execution time
 	$(strip \
-		time cargo run --release --example aes_reference -- \
+		time ./target/release/examples/aes_reference \
 		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
 		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
 		<(cat $$(find -name '*.rs')) \
@@ -58,20 +58,32 @@ bench-aes:
 		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
 		<(cat $$(find -name '*.rs')) \
 		target/test_bitslice.encrypted)
+	$(strip \
+		time ./target/release/examples/aes_more_simd_shuffle \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test_shuffle.encrypted)
+	$(strip \
+		time ./target/release/examples/aes_more_simd_bitslice \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test_bitslice.encrypted)
 
 .PHONY: bench-sss
 bench-sss:
 	# build (need to move so different configurations don't overwrite each other)
-	cargo build --release --example sss		 --features debug-cycle-count
-	cargo build --release --example sss_simd --features debug-cycle-count
+	cargo build --release --example sss
+	cargo build --release --example sss_simd
 	cp target/release/examples/sss 	    target/release/examples/sss_shuffle
 	cp target/release/examples/sss_simd target/release/examples/sss_simd_shuffle
-	$(strip RUSTFLAGS="-C lto=no" \
-		cargo build -v --release --example sss \
-			--features debug-cycle-count,example-bitslice-tables )
-	$(strip RUSTFLAGS="-C lto=no" \
-		cargo build -v --release --example sss_simd \
-			--features debug-cycle-count,example-bitslice-tables )
+	$(strip RUST_MIN_STACK=16777216 \
+		cargo build --release --example sss \
+		--features example-bitslice-tables)
+	$(strip RUST_MIN_STACK=134217728 \
+		cargo build --release --example sss_simd \
+		--features example-bitslice-tables )
 	cp target/release/examples/sss 	    target/release/examples/sss_bitslice
 	cp target/release/examples/sss_simd target/release/examples/sss_simd_bitslice
 	# run, measuring execution time

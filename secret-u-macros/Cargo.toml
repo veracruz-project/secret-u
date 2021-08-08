@@ -9,7 +9,6 @@ edition = "2018"
 proc-macro = true
 
 [features]
-default = ["bitslice-simplify-identities"]
 debug-proc-macros = []
 # simplify by DeMorgan identities
 bitslice-simplify-identities = []

@@ -64,11 +64,13 @@ fn find_bitexpr(table: &[u128], width: usize, bit: usize) -> be::Expr<u8> {
 
 fn simplify_bitexpr(expr: be::Expr<u8>) -> be::Expr<u8> {
     #[cfg(feature="bitslice-simplify-bdd")]
-    let expr = expr.simplify_via_bdd();
+    let simplified = expr.simplify_via_bdd();
     #[cfg(all(feature="bitslice-simplify-identities", not(feature="bitslice-simplify-bdd")))]
-    let expr = expr.simplify_via_laws();
+    let simplified = expr.simplify_via_laws();
+    #[cfg(all(not(feature="bitslice-simplify-identities"), not(feature="bitslice-simplify-bdd")))]
+    let simplified = expr;
 
-    expr
+    simplified
 }
 
 
@@ -78,7 +80,6 @@ macro_rules! ident {
     }
 }
 
-// TODO would explicit literal types help speed up type inference?
 macro_rules! lit {
     ($x:expr) => {
         syn::LitInt::new(&format!("{}", $x), Span::call_site())
@@ -304,27 +305,30 @@ fn build_transpose(
     }
 }
 
-fn build_bitexpr(
-    b: &syn::Ident,
+// this has a funny type in order to keep the expression-size small and avoid
+// stack overflowing rustc, an array of bitwise-ors can be collapsed with
+// build_bitexpr, allowing the top-layer bitwise-ors to be flattened into a
+// sequence of statements
+fn build_bitexpr_ors(
     prim_ty: &syn::Type,
     secret_ty: &syn::Type,
     expr: be::Expr<u8>,
     bit: usize
-) -> proc_macro2::TokenStream {
+) -> Vec<proc_macro2::TokenStream> {
     match expr {
         be::Expr::Const(true) => {
-            quote! { #secret_ty::ones() }
+            vec![quote! { #secret_ty::ones() }]
         },
         be::Expr::Const(false) => {
-            quote! { #secret_ty::zero() }
+            vec![quote! { #secret_ty::zero() }]
         },
         be::Expr::Terminal(i) => {
-            let i = lit!(i);
-            quote! { #b[#i].clone() }
+            let a = ident!("a{}", i);
+            vec![quote! { #a.clone() }]
         },
         be::Expr::Not(v) => {
-            let x = build_bitexpr(b, prim_ty, secret_ty, *v, bit);
-            quote! { (!#x) }
+            let x = build_bitexpr(prim_ty, secret_ty, *v, bit);
+            vec![quote! { (!#x) }]
         },
         be::Expr::And(v0, v1) => {
             // this is to reduce parsing pressure
@@ -343,13 +347,13 @@ fn build_bitexpr(
                         pending.push(v1);
                     }
                 } else {
-                    xs.push(build_bitexpr(b, prim_ty, secret_ty, *x, bit));
+                    xs.push(build_bitexpr(prim_ty, secret_ty, *x, bit));
                 }
             }
 
             match xs.len() {
-                0 => quote! { #secret_ty::ones() },
-                _ => quote! { (#(#xs)&*) },
+                0 => vec![quote! { #secret_ty::ones() }],
+                _ => vec![quote! { (#(#xs)&*) }],
             }
         },
         be::Expr::Or(v0, v1) => {
@@ -369,15 +373,25 @@ fn build_bitexpr(
                         pending.push(v1);
                     }
                 } else {
-                    xs.push(build_bitexpr(b, prim_ty, secret_ty, *x, bit));
+                    xs.push(build_bitexpr(prim_ty, secret_ty, *x, bit));
                 }
             }
 
-            match xs.len() {
-                0 => quote! { #secret_ty::zero() },
-                _ => quote! { (#(#xs)|*) },
-            }
+            xs
         },
+    }
+}
+
+fn build_bitexpr(
+    prim_ty: &syn::Type,
+    secret_ty: &syn::Type,
+    expr: be::Expr<u8>,
+    bit: usize
+) -> proc_macro2::TokenStream {
+    let xs = build_bitexpr_ors(prim_ty, secret_ty, expr, bit);
+    match xs.len() {
+        0 => quote! { #secret_ty::zero() },
+        _ => quote! { (#(#xs)|*) },
     }
 }
 
@@ -580,6 +594,16 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
             iter::repeat(parse_quote! { #secret_ty::zero() })
                 .take(a_width - parallel)
         );
+    let a_unpack = (0..a_width)
+        .map(|i| -> syn::Stmt {
+            let a = ident!("a{}", i);
+            parse_quote! { let #a = a[#i].clone(); }
+        });
+    let b_pack = (0..b_width)
+        .map(|i| -> syn::Expr {
+            let b = ident!("b{}", i);
+            parse_quote! { #b }
+        });
     let b_rets = (0..parallel)
         .map(|i| -> syn::Expr {
             // mask off extra bits introduced by bitwise not
@@ -626,7 +650,21 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
 //            println!("bit({}) = {:?}", i, expr);
 //        }
 
-        bitexprs.push(build_bitexpr(&ident!("a"), &prim_ty, &secret_ty, expr, i))
+        let b = ident!("b{}", i);
+        let exprs = build_bitexpr_ors(&prim_ty, &secret_ty, expr, i);
+        if exprs.len() == 0 {
+            bitexprs.push(quote! { let #b = #secret_ty::zero(); });
+        } else if exprs.len() == 1 {
+            let x0 = &exprs[0];
+            bitexprs.push(quote! { let #b = #x0; });
+        } else {
+            let x0 = &exprs[0];
+            bitexprs.push(quote! { let mut #b = #x0; });
+            for i in 1..exprs.len() {
+                let x = &exprs[i];
+                bitexprs.push(quote! { #b |= #x; });
+            }
+        }
     }
 
     let crate_ = crate_();
@@ -643,8 +681,12 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#a_transpose)*
 
+            #(#a_unpack)*
+
+            #(#bitexprs)*
+
             let mut b: [#secret_ty; #b_width] = [
-                #(#bitexprs),*
+                #(#b_pack),*
             ];
 
             #(#b_transpose)*
@@ -1008,6 +1050,7 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
     // quote
     let crate_ = crate_();
     let q = quote! {
+        #[inline(never)]
         #[allow(non_snake_case)]
         #vis fn #name(a: #index_secret_ty) -> #ret_secret_ty {
             use #crate_::traits::Cast;

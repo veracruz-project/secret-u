@@ -46,7 +46,6 @@ struct Aes {
     words: usize,
     rounds: usize,
 
-    //round_key: Vec<u8>,
     round_key: Vec<SecretU8x16>,
     iv: SecretU8x16,
 

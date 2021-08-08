@@ -625,6 +625,24 @@ so we can expect it to be the fastest. `sha256` naively recompiles the bytecode
 during every iteration, while `sha256_fast` uses `compile!` to avoid
 recompilation.
 
+``` bash
+$ make bench-aes
+```
+
+On my machine:
+```
+aes_reference  0m0.035s
+aes_shuffle    0m0.835s
+aes_bitslice   1m2.617s
+```
+
+`aes_reference` again is not constant-time, and native, so it being the fastest
+is not surprising. At the time of writing `aes_shuffle` uses array lookups in
+the prototype engine, which is not truely constant-time, but also not leveraging
+SIMD hardware. `aes_bitslice` uses a bitsliced representation for SBOXs, which is
+the main source of slowdown.
+
+
 ## Prior art
 
 - [secret_integers] - A set of Rust types that ensures operations are limited

@@ -45,9 +45,9 @@ debug-proc-macros = ["secret-u-macros/debug-proc-macros"]
 debug-check-refs = []
 
 # simplify by DeMorgan identities
-bitslice-simplify-identities = []
+bitslice-simplify-identities = ["secret-u-macros/bitslice-simplify-identities"]
 # simplify by BDD (use this if you want compilation to take forever
-bitslice-simplify-bdd = []
+bitslice-simplify-bdd = ["secret-u-macros/bitslice-simplify-bdd"]
 
 # use bitslice_table in examples instead of shuffle_tables, shuffle_tables
 # is considerably faster to compile, but likely slower to execute, so
