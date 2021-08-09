@@ -621,8 +621,8 @@ $ make bench-sha256
 On my machine:
 ```
 sha256_reference  0m0.018s
-sha256            0m21.011s
-sha256_fast       0m0.351s
+sha256            0m20.962s
+sha256_fast       0m0.366s
 ```
 
 `sha256_reference` provides a native, non-constant-time sha256 implementation,
@@ -636,11 +636,11 @@ $ make bench-aes
 
 On my machine:
 ```
-aes_reference           0m0.038s
-aes_shuffle             0m0.587s
-aes_bitslice            0m26.225s
-aes_more_simd_shuffle   0m0.284s
-aes_more_simd_bitslice  0m10.161s
+aes_reference           0m0.040s
+aes_shuffle             0m1.582s
+aes_bitslice            0m26.819s
+aes_more_simd_shuffle   0m0.706s
+aes_more_simd_bitslice  0m10.037s
 ```
 
 `aes_reference` again is not constant-time, and native, so it being the fastest
@@ -658,7 +658,7 @@ $ make bench-sss
 
 On my machine:
 ```
-sss_shuffle        0m0.001s
+sss_shuffle        0m0.003s
 sss_simd_shuffle   0m0.001s
 sss_bitslice       0m0.045s
 sss_simd_bitslice  0m0.017s

@@ -1096,13 +1096,21 @@ macro_rules! ex {
         let p = $s.reg::<$t>($p)?;
         let a = $s.reg::<$t>($a)?;
         let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = p.xmap(|x: $u| {
-            match x.try_into_u32() {
-                Some(i) if i < $n              => a.extract(i).unwrap(),
-                Some(i) if i >= $n && i < 2*$n => b.extract(i-$n).unwrap(),
-                _                              => <$u>::ZERO,
-            }
-        });
+        let mut i  = 0;
+        *$s.reg_mut::<$t>($a)? = a.xfold2(*b, |r, x: $u, y: $u| {
+            let r = p.xmap2(r, |w: $u, z: $u| {
+                let j = w.try_into_u32().unwrap_or(u32::MAX);
+                if j == i {
+                    x
+                } else if j == i+$n {
+                    y
+                } else {
+                    z
+                }
+            });
+            i += 1;
+            r
+        }, <$t>::ZERO);
     }};
 
 
