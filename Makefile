@@ -1,6 +1,12 @@
 
 SHELL = /bin/bash
 
+# environment variables, we prefer speed over portability
+export RUSTFLAGS=-Ctarget-cpu=native
+# needed to compile large bitslice arrays, the generated
+# expressions tend to overflow the stack
+export RUST_MIN_STACK=16777216
+
 .PHONY: all build
 all build:
 	cargo build
@@ -37,11 +43,11 @@ bench-aes:
 	cargo build --release --example aes_reference
 	cargo build --release --example aes
 	cp target/release/examples/aes target/release/examples/aes_shuffle
-	RUST_MIN_STACK=16777216 cargo build --release --example aes --features example-bitslice-tables
+	cargo build --release --example aes --features example-bitslice-tables
 	cp target/release/examples/aes target/release/examples/aes_bitslice
 	cargo build --release --example aes_more_simd
 	cp target/release/examples/aes_more_simd target/release/examples/aes_more_simd_shuffle
-	RUST_MIN_STACK=16777216 cargo build --release --example aes_more_simd --features example-bitslice-tables
+	cargo build --release --example aes_more_simd --features example-bitslice-tables
 	cp target/release/examples/aes_more_simd target/release/examples/aes_more_simd_bitslice
 	# run, measuring execution time
 	$(strip \
@@ -82,12 +88,8 @@ bench-sss:
 	cargo build --release --example sss_simd
 	cp target/release/examples/sss 	    target/release/examples/sss_shuffle
 	cp target/release/examples/sss_simd target/release/examples/sss_simd_shuffle
-	$(strip RUST_MIN_STACK=16777216 \
-		cargo build --release --example sss \
-		--features example-bitslice-tables)
-	$(strip RUST_MIN_STACK=16777216 \
-		cargo build --release --example sss_simd \
-		--features example-bitslice-tables )
+	cargo build --release --example sss      --features example-bitslice-tables
+	cargo build --release --example sss_simd --features example-bitslice-tables
 	cp target/release/examples/sss 	    target/release/examples/sss_bitslice
 	cp target/release/examples/sss_simd target/release/examples/sss_simd_bitslice
 	# run, measuring execution time
