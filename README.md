@@ -620,9 +620,9 @@ $ make bench-sha256
 
 On my machine:
 ```
-sha256_reference  0m0.073s
-sha256            0m18.541s
-sha256_fast       0m0.370s
+sha256_reference  0m0.018s
+sha256            0m21.011s
+sha256_fast       0m0.351s
 ```
 
 `sha256_reference` provides a native, non-constant-time sha256 implementation,
@@ -637,10 +637,10 @@ $ make bench-aes
 On my machine:
 ```
 aes_reference           0m0.038s
-aes_shuffle             0m0.605s
-aes_bitslice            0m30.387s
-aes_more_simd_shuffle   0m0.279s
-aes_more_simd_bitslice  0m12.005s
+aes_shuffle             0m0.587s
+aes_bitslice            0m26.225s
+aes_more_simd_shuffle   0m0.284s
+aes_more_simd_bitslice  0m10.161s
 ```
 
 `aes_reference` again is not constant-time, and native, so it being the fastest
@@ -651,6 +651,31 @@ increase.
 At the time of writing `aes_shuffle` uses array lookups in the prototype engine,
 which is not truely constant-time, but it is also not leveraging
 SIMD hardware.
+
+``` bash
+$ make bench-sss
+```
+
+On my machine:
+```
+sss_shuffle        0m0.001s
+sss_simd_shuffle   0m0.001s
+sss_bitslice       0m0.045s
+sss_simd_bitslice  0m0.017s
+```
+
+Again it's worth mentioning the shuffle implementations have the issue
+noted above.
+
+This byte-wise implementation of Shamir's secret sharing is immensely
+parallelizable, unfortunately with a test size of dozens of bytes this
+benchmark is mostly catching setup+compilation costs. Still interesting
+to note that the SIMD version has increased performance.
+
+This example is less interesting for benchmarking, more interesting for
+the issues it causes the Rust compiler (oom, stack overflow, etc) due to the
+large expressions the 510-byte bitsliced-table creates.
+
 
 ## Prior art
 

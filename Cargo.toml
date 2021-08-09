@@ -10,6 +10,7 @@ default = [
     "opt-schedule-slots",
     "opt-fold-consts",
     "opt-fold-nops",
+    "opt-simple-reductions",
     "opt-compress-consts",
     "bitslice-simplify-bdd"
 ]
@@ -26,6 +27,9 @@ opt-fold-consts = []
 # fold simple nops as a part of constant folding, these are
 # expressions such as x+0, x-0, x<<0, x*1, etc
 opt-fold-nops = ["opt-fold-consts"]
+# replace simple reductions of instruction sequences during
+# constant folding
+opt-simple-reductions = ["opt-fold-consts"]
 # find compressed const representations, such as `u8x16.extend_const8_s 0xfe`
 # instead of `u128.move_const_s 0xfffffffffffffffffffffffffffffffe`, this
 # reduces bytecode size and may result in faster code

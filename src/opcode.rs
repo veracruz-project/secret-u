@@ -2663,17 +2663,57 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let mut a = a.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
-            OpKind::Eq(_, a, b) => {
+            OpKind::Eq(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-simple-reductions")]
+                match (&a.kind, &b.kind) {
+                    _ if *x == 0 && a.is_const_zero() => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::None(
+                                RefCell::new(b.clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ if *x == 0 && b.is_const_zero() => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::None(
+                                RefCell::new(a.clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
+                }
             }
-            OpKind::Ne(_, a, b) => {
+            OpKind::Ne(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-simple-reductions")]
+                match (&a.kind, &b.kind) {
+                    _ if *x == 0 && a.is_const_zero() => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::All(0,
+                                RefCell::new(b.clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ if *x == 0 && b.is_const_zero() => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::All(0,
+                                RefCell::new(a.clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
+                }
             }
             OpKind::LtU(_, a, b) => {
                 let mut a = a.borrow_mut();
@@ -2759,6 +2799,121 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             OpKind::Not(a) => {
                 let mut a = a.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                // not has the most powerful set of reductions, fortunately
+                // it is a bit unique in this regard
+                #[cfg(feature="opt-simple-reductions")]
+                match &a.kind {
+                    OpKind::Not(a) => {
+                        return Some(a.borrow().clone())
+                    }
+                    OpKind::None(a)  => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::All(0,
+                                RefCell::new(a.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::All(0, a) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::None(
+                                RefCell::new(a.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::Eq(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Ne(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::Ne(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Eq(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::LtU(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::GeU(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::LtS(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::GeS(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::GtU(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::LeU(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::GtS(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::LeS(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::LeU(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::GtU(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::LeS(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::GtS(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::GeU(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::LtU(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    OpKind::GeS(y, a, b) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::LtS(*y,
+                                RefCell::new(a.borrow().clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
+                }
             }
             OpKind::Clz(_, a) => {
                 let mut a = a.borrow_mut();
@@ -2772,7 +2927,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let mut a = a.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
             }
-            OpKind::Add(_, a, b) => {
+            OpKind::Add(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
@@ -2783,8 +2938,30 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 } else if b.is_const_zero() {
                     return Some(a.clone());
                 }
+                #[cfg(feature="opt-simple-reductions")]
+                match (&a.kind, &b.kind) {
+                    (OpKind::Neg(y, a), _) if y == x => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Sub(*x,
+                                RefCell::new(b.clone()),
+                                RefCell::new(a.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    (_, OpKind::Neg(y, b)) if y == x => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Sub(*x,
+                                RefCell::new(a.clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
+                }
             }
-            OpKind::Sub(_, a, b) => {
+            OpKind::Sub(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
@@ -2792,6 +2969,19 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 #[cfg(feature="opt-fold-nops")]
                 if b.is_const_zero() {
                     return Some(a.clone());
+                }
+                #[cfg(feature="opt-simple-reductions")]
+                match (&a.kind, &b.kind) {
+                    (_, OpKind::Neg(y, b)) if y == x => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Add(*x,
+                                RefCell::new(a.clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
                 }
             }
             OpKind::Mul(x, a, b) => {
@@ -2817,6 +3007,40 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 } else if b.is_const_ones() {
                     return Some(a.clone());
                 }
+                #[cfg(feature="opt-simple-reductions")]
+                match (&a.kind, &b.kind) {
+                    (OpKind::Not(a), OpKind::Not(b)) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Not(
+                                RefCell::new(Rc::new(OpNode::new(
+                                    OpKind::Or(
+                                        RefCell::new(a.borrow().clone()),
+                                        RefCell::new(b.borrow().clone())
+                                    ), self.flags, self.depth
+                                )))
+                            ), self.flags, self.depth
+                        )));
+                    }
+                    (OpKind::Not(a), _) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Andnot(
+                                RefCell::new(b.clone()),
+                                RefCell::new(a.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    (_, OpKind::Not(b)) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Andnot(
+                                RefCell::new(a.clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
+                }
             }
             OpKind::Andnot(a, b) => {
                 let mut a = a.borrow_mut();
@@ -2829,6 +3053,19 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 } else if b.is_const_zero() {
                     return Some(a.clone());
                 }
+                #[cfg(feature="opt-simple-reductions")]
+                match (&a.kind, &b.kind) {
+                    (_, OpKind::Not(b)) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::And(
+                                RefCell::new(a.clone()),
+                                RefCell::new(b.borrow().clone())
+                            ),
+                            self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
+                }
             }
             OpKind::Or(a, b) => {
                 let mut a = a.borrow_mut();
@@ -2840,6 +3077,22 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     return Some(b.clone());
                 } else if b.is_const_zero() {
                     return Some(a.clone());
+                }
+                #[cfg(feature="opt-simple-reductions")]
+                match (&a.kind, &b.kind) {
+                    (OpKind::Not(a), OpKind::Not(b)) => {
+                        return Some(Rc::new(OpNode::new(
+                            OpKind::Not(
+                                RefCell::new(Rc::new(OpNode::new(
+                                    OpKind::And(
+                                        RefCell::new(a.borrow().clone()),
+                                        RefCell::new(b.borrow().clone())
+                                    ), self.flags, self.depth
+                                )))
+                            ), self.flags, self.depth
+                        )));
+                    }
+                    _ => {}
                 }
             }
             OpKind::Xor(a, b) => {
@@ -4233,13 +4486,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
                     (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Andnot, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u32::from(OpIns::new(
