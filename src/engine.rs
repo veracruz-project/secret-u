@@ -9,11 +9,7 @@ use std::slice::SliceIndex;
 use std::convert::TryFrom;
 use std::cmp::min;
 use std::cmp::max;
-
-use num_bigint::BigUint;
-use num_bigint::BigInt;
-use num_bigint::Sign;
-use num_traits::sign::Signed;
+use std::cmp::Ordering;
 
 #[cfg(feature="debug-trace")]
 use crate::opcode::OpIns;
@@ -286,71 +282,6 @@ into_u32_impl! { u64      }
 into_u32_impl! { u128     }
 into_u32_impl! { [u32;8]  }
 into_u32_impl! { [u32;16] }
-
-
-/// Helper for converting into bigints
-trait IntoBigInt {
-    fn into_biguint(self) -> BigUint;
-    fn into_bigint(self) -> BigInt;
-    fn from_biguint(int: BigUint) -> Self;
-    fn from_bigint(int: BigInt) -> Self;
-}
-
-macro_rules! into_bigint_impl {
-    ([$t:ty;$n:expr]) => {
-        impl IntoBigInt for [$t;$n] {
-            fn into_biguint(self) -> BigUint {
-                BigUint::from_slice(&self)
-            }
-
-            fn into_bigint(mut self) -> BigInt {
-                // BigInt takes u32s and a sign bit, so we need to manually
-                // negate here
-                if (self[$n-1] as i32) < 0 {
-                    let mut carry = 1;
-                    for i in 0..$n {
-                        let res = (!self[i]).overflowing_add(carry);
-                        self[i] = res.0;
-                        carry = u32::from(res.1);
-                    }
-                    BigInt::from_slice(Sign::Minus, &self)
-                } else {
-                    BigInt::from_slice(Sign::Plus, &self)
-                }
-            }
-
-            fn from_biguint(int: BigUint) -> Self {
-                let mut words = [0; $n];
-                for (i, w) in int.iter_u32_digits().take($n).enumerate() {
-                    words[i] = w;
-                }
-                words
-            }
-
-            fn from_bigint(int: BigInt) -> Self {
-                let mut words = [0; $n];
-                for (i, w) in int.iter_u32_digits().take($n).enumerate() {
-                    words[i] = w;
-                }
-
-                if int.is_negative() {
-                    // manually negate here
-                    let mut carry = 1;
-                    for i in 0..$n {
-                        let res = (!words[i]).overflowing_add(carry);
-                        words[i] = res.0;
-                        carry = u32::from(res.1);
-                    }
-                }
-
-                words
-            }
-        }
-    };
-}
-
-into_bigint_impl! { [u32;8]  }
-into_bigint_impl! { [u32;16] }
 
 
 /// Trait to help perform multi-lane operations
@@ -711,90 +642,114 @@ macro_rules! vop_impl {
             }
         }
     };
-    ([$t:ty; $n:expr]) => {
+    ([$t:ty{$i:ty,$tt:ty}; $n:expr]) => {
         #[allow(unused_variables)]
         #[allow(unused_mut)]
         impl Vop for [$t;$n] {
-            fn vlt_u(mut self, other: Self) -> bool {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                a < b
+            fn vlt_u(self, other: Self) -> bool {
+                let mut lt = false;
+                for i in 0..$n {
+                    lt = match self[i].cmp(&other[i]) {
+                        Ordering::Less    => true,
+                        Ordering::Greater => false,
+                        Ordering::Equal   => lt,
+                    }
+                }
+                lt
             }
 
-            fn vlt_s(mut self, other: Self) -> bool {
-                let a = self.into_bigint();
-                let b = other.into_bigint();
-                a < b
+            fn vlt_s(self, other: Self) -> bool {
+                let lt = self.vlt_u(other);
+                // the only difference from lt_u is when sign-bits mismatch
+                match ((self[$n-1] as $i) < 0, (other[$n-1] as $i) < 0) {
+                    (true, false) => true,
+                    (false, true) => false,
+                    _             => lt
+                }
             }
 
-            fn vgt_u(mut self, other: Self) -> bool {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                a > b
+            fn vgt_u(self, other: Self) -> bool {
+                let mut gt = false;
+                for i in 0..$n {
+                    gt = match self[i].cmp(&other[i]) {
+                        Ordering::Less    => false,
+                        Ordering::Greater => true,
+                        Ordering::Equal   => gt,
+                    }
+                }
+                gt
             }
 
-            fn vgt_s(mut self, other: Self) -> bool {
-                let a = self.into_bigint();
-                let b = other.into_bigint();
-                a > b
+            fn vgt_s(self, other: Self) -> bool {
+                let gt = self.vgt_u(other);
+                // the only difference from gt_u is when sign-bits mismatch
+                match ((self[$n-1] as $i) < 0, (other[$n-1] as $i) < 0) {
+                    (true, false) => false,
+                    (false, true) => true,
+                    _             => gt
+                }
             }
 
-            fn vle_u(mut self, other: Self) -> bool {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                a <= b
+            fn vle_u(self, other: Self) -> bool {
+                !self.vgt_u(other)
             }
 
-            fn vle_s(mut self, other: Self) -> bool {
-                let a = self.into_bigint();
-                let b = other.into_bigint();
-                a <= b
+            fn vle_s(self, other: Self) -> bool {
+                !self.vgt_s(other)
             }
 
-            fn vge_u(mut self, other: Self) -> bool {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                a >= b
+            fn vge_u(self, other: Self) -> bool {
+                !self.vlt_u(other)
             }
 
-            fn vge_s(mut self, other: Self) -> bool {
-                let a = self.into_bigint();
-                let b = other.into_bigint();
-                a >= b
+            fn vge_s(self, other: Self) -> bool {
+                !self.vlt_s(other)
             }
 
-            fn vmin_u(mut self, other: Self) -> Self {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                Self::from_biguint(min(a, b))
+            fn vmin_u(self, other: Self) -> Self {
+                if self.vlt_u(other) {
+                    self
+                } else {
+                    other
+                }
             }
 
-            fn vmin_s(mut self, other: Self) -> Self {
-                let a = self.into_bigint();
-                let b = other.into_bigint();
-                Self::from_bigint(min(a, b))
+            fn vmin_s(self, other: Self) -> Self {
+                if self.vlt_s(other) {
+                    self
+                } else {
+                    other
+                }
             }
 
-            fn vmax_u(mut self, other: Self) -> Self {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                Self::from_biguint(max(a, b))
+            fn vmax_u(self, other: Self) -> Self {
+                if self.vgt_u(other) {
+                    self
+                } else {
+                    other
+                }
             }
 
-            fn vmax_s(mut self, other: Self) -> Self {
-                let a = self.into_bigint();
-                let b = other.into_bigint();
-                Self::from_bigint(max(a, b))
+            fn vmax_s(self, other: Self) -> Self {
+                if self.vgt_s(other) {
+                    self
+                } else {
+                    other
+                }
             }
 
-            fn vneg(mut self) -> Self {
-                let a = self.into_bigint();
-                Self::from_bigint(-a)
+            fn vneg(self) -> Self {
+                let zero = [0; $n];
+                zero.vsub(self)
             }
 
-            fn vabs(mut self) -> Self {
-                let a = self.into_bigint();
-                Self::from_bigint(a.abs())
+            fn vabs(self) -> Self {
+                let neg = self.vneg();
+                if (self[$n-1] as $i) < 0 {
+                    neg
+                } else {
+                    self
+                }
             }
 
             fn vnot(mut self) -> Self {
@@ -804,7 +759,7 @@ macro_rules! vop_impl {
                 self
             }
 
-            fn vclz(mut self) -> Self {
+            fn vclz(self) -> Self {
                 let mut sum = 0;
                 for i in 0..$n {
                     sum = if self[i] == 0 { sum } else { 0 }
@@ -813,7 +768,7 @@ macro_rules! vop_impl {
                 Self::wrapping_from_u32(sum)
             }
 
-            fn vctz(mut self) -> Self {
+            fn vctz(self) -> Self {
                 let mut sum = 0;
                 let mut done = false;
                 for i in 0..$n {
@@ -823,7 +778,7 @@ macro_rules! vop_impl {
                 Self::wrapping_from_u32(sum)
             }
 
-            fn vpopcnt(mut self) -> Self {
+            fn vpopcnt(self) -> Self {
                 let mut sum = 0;
                 for i in 0..$n {
                     sum += self[i].count_ones();
@@ -832,21 +787,44 @@ macro_rules! vop_impl {
             }
 
             fn vadd(mut self, other: Self) -> Self {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                Self::from_biguint(a + b)
+                let mut overflow = false;
+                for i in 0..$n {
+                    let (v, o1) = self[i].overflowing_add(other[i]);
+                    let (v, o2) = v.overflowing_add(<$t>::from(overflow));
+                    self[i] = v;
+                    overflow = o1 || o2;
+                }
+                self
             }
 
             fn vsub(mut self, other: Self) -> Self {
-                let a = self.into_bigint();
-                let b = other.into_bigint();
-                Self::from_bigint(a - b)
+                let mut overflow = false;
+                for i in 0..$n {
+                    let (v, o1) = self[i].overflowing_sub(other[i]);
+                    let (v, o2) = v.overflowing_sub(<$t>::from(overflow));
+                    self[i] = v;
+                    overflow = o1 || o2;
+                }
+                self
             }
 
             fn vmul(self, other: Self) -> Self {
-                let a = self.into_biguint();
-                let b = other.into_biguint();
-                Self::from_biguint(a * b)
+                // simple long multiplication based on wikipedia
+                // https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication
+                let mut words = [0; $n];
+                for i in 0..$n {
+                    let mut overflow: $tt = 0;
+                    for j in 0..$n {
+                        if i+j < $n {
+                            let v = <$tt>::from(words[i+j])
+                                + (<$tt>::from(self[i]) * <$tt>::from(other[j]))
+                                + overflow;
+                            words[i+j] = v as $t;
+                            overflow = v >> (8*size_of::<$t>());
+                        }
+                    }
+                }
+                words
             }
 
             fn vand(mut self, other: Self) -> Self {
@@ -878,21 +856,73 @@ macro_rules! vop_impl {
             }
 
             fn vshl(self, other: Self) -> Self {
-                let a = self.into_biguint();
                 let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                Self::from_biguint(a << b)
+                let width = 8*size_of::<$t>() as u32;
+                let sh_lo = b % width;
+                let sh_hi = (b / width) as usize;
+
+                let mut words = [0; $n];
+                for i in 0..$n {
+                    words[i]
+                        = (i.checked_sub(sh_hi)
+                            .and_then(|j| self.get(j))
+                            .unwrap_or(&0)
+                            << sh_lo)
+                        | (i.checked_sub(sh_hi+1)
+                            .and_then(|j| self.get(j))
+                            .unwrap_or(&0)
+                            .checked_shr(width - sh_lo)
+                            .unwrap_or(0));
+                }
+
+                words
             }
 
             fn vshr_u(self, other: Self) -> Self {
-                let a = self.into_biguint();
                 let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                Self::from_biguint(a >> b)
+                let width = 8*size_of::<$t>() as u32;
+                let sh_lo = b % width;
+                let sh_hi = (b / width) as usize;
+
+                let mut words = [0; $n];
+                for i in 0..$n {
+                    words[i]
+                        = (i.checked_add(sh_hi)
+                            .and_then(|j| self.get(j))
+                            .unwrap_or(&0)
+                            >> sh_lo)
+                        | (i.checked_add(sh_hi+1)
+                            .and_then(|j| self.get(j))
+                            .unwrap_or(&0)
+                            .checked_shl(width - sh_lo)
+                            .unwrap_or(0));
+                }
+
+                words
             }
 
             fn vshr_s(self, other: Self) -> Self {
-                let a = self.into_bigint();
                 let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                Self::from_bigint(a >> b)
+                let width = 8*size_of::<$t>() as u32;
+                let sh_lo = b % width;
+                let sh_hi = (b / width) as usize;
+                let sig = if (self[$n-1] as $i) < 0 { 0 } else { <$t>::MAX };
+
+                let mut words = [0; $n];
+                for i in 0..$n {
+                    words[i]
+                        = (((*i.checked_add(sh_hi)
+                            .and_then(|j| self.get(j))
+                            .unwrap_or(&sig)
+                            as $i) >> sh_lo) as $t)
+                        | (i.checked_add(sh_hi+1)
+                            .and_then(|j| self.get(j))
+                            .unwrap_or(&sig)
+                            .checked_shl(width - sh_lo)
+                            .unwrap_or(0));
+                }
+
+                words
             }
 
             fn vrotl(self, other: Self) -> Self {
@@ -903,9 +933,11 @@ macro_rules! vop_impl {
 
                 let mut words = [0; $n];
                 for i in 0..$n {
-                    words[i] = (self[i.wrapping_sub(sh_hi  ) % $n] << sh_lo)
+                    words[i]
+                        = (self[i.wrapping_sub(sh_hi  ) % $n]
+                            << sh_lo)
                         | (self[i.wrapping_sub(sh_hi+1) % $n]
-                             .checked_shr(width - sh_lo).unwrap_or(0));
+                            .checked_shr(width - sh_lo).unwrap_or(0));
                 }
 
                 words
@@ -919,7 +951,9 @@ macro_rules! vop_impl {
 
                 let mut words = [0; $n];
                 for i in 0..$n {
-                    words[i] = (self[i.wrapping_add(sh_hi  ) % $n] >> sh_lo)
+                    words[i]
+                        = (self[i.wrapping_add(sh_hi) % $n]
+                            >> sh_lo)
                         | (self[i.wrapping_add(sh_hi+1) % $n]
                             .checked_shl(width - sh_lo).unwrap_or(0));
                 }
@@ -930,13 +964,13 @@ macro_rules! vop_impl {
     };
 }
 
-vop_impl! { u8{i8}     }
-vop_impl! { u16{i16}   }
-vop_impl! { u32{i32}   }
-vop_impl! { u64{i64}   }
-vop_impl! { u128{i128} }
-vop_impl! { [u32;8]    }
-vop_impl! { [u32;16]   }
+vop_impl! { u8{i8}            }
+vop_impl! { u16{i16}          }
+vop_impl! { u32{i32}          }
+vop_impl! { u64{i64}          }
+vop_impl! { u128{i128}        }
+vop_impl! { [u32{i32,u64};8]  }
+vop_impl! { [u32{i32,u64};16] }
 
 
 /// Wrapper for handling different type access to state
@@ -3440,6 +3474,32 @@ mod tests {
             0x32,0x31,0x30,0x29,0x28,0x27,0x26,0x25,0x24,0x23,0x22,0x21,0x20,0x19,0x18,0x17,
             0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,
             0x64,0x63,0x62,0x61,0x60,0x59,0x58,0x57,0x56,0x55,0x54,0x53,0x52,0x51,0x50,0x49] }
+
+        ins_lt_u_big { U512.lt_u(0; U512::one(), U512::ones()) => [
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff] }
+        ins_lt_s_big { U512.lt_s(0; U512::one(), U512::ones()) => [
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
+        ins_min_u_big { U512.min_u(0; U512::one(), U512::ones()) => [
+            0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
+        ins_min_s_big { U512.min_s(0; U512::one(), U512::ones()) => [
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff] }
+        ins_abs_big { U512.abs(0; U512::ones()) => [
+            0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00] }
 
         ins_add_big { U512.add(0; U512::ones(), U512::ones()) => [
             0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,

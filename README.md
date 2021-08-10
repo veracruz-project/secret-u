@@ -648,10 +648,6 @@ is not surprising. The `aes_more_simd_*` versions operate on 64-byte blocks in
 parallel, instead of 16-byte blocks, and we see a proportional performance
 increase.
 
-At the time of writing `aes_shuffle` uses array lookups in the prototype engine,
-which is not truely constant-time, but it is also not leveraging
-SIMD hardware.
-
 ``` bash
 $ make bench-sss
 ```
@@ -663,9 +659,6 @@ sss_simd_shuffle   0m0.001s
 sss_bitslice       0m0.045s
 sss_simd_bitslice  0m0.018s
 ```
-
-Again it's worth mentioning the shuffle implementations have the issue
-noted above.
 
 This byte-wise implementation of Shamir's secret sharing is immensely
 parallelizable, unfortunately with a test size of dozens of bytes this
