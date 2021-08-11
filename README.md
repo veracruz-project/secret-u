@@ -589,6 +589,17 @@ See the examples in the examples folder for some examples:
   on 64-byte blocks instead of 16-byte blocks, using SIMD to encrypt multiple
   16-byte blocks in parallel.
 
+- [chacha20_reference](examples/chacha20_reference.rs) - A non-constant-time
+  reference implementation of ChaCha20, based on:
+
+  - https://cr.yp.to/chacha.html
+
+- [chacha20](examples/chacha20.rs) - An implementation of ChaCha20 using
+  secret-u types.
+
+- [chacha20_simd](examples/chacha20_simd.rs) - An implementation of ChaCha20
+  that leverages SIMD instructions to operate on u32x4 rows simultaneously.
+
 - [sss](examples/sss.rs) - An implementation of Shamir's secret sharing
   scheme in GF(256), this makes heavy use of secret-u's bitslice_table and
   shuffle_table attributes to compile lookup tables into their constant-time
@@ -647,6 +658,20 @@ aes_more_simd_bitslice  0m9.554s
 is not surprising. The `aes_more_simd_*` versions operate on 64-byte blocks in
 parallel, instead of 16-byte blocks, and we see a proportional performance
 increase.
+
+``` bash
+$ make bench-chacha20
+```
+
+On my machine:
+```
+chacha20_reference  0m0.025s
+chacha20            0m0.160s
+chacha20_simd       0m0.078s
+```
+
+chacha20 is both constant-time friendly and remarkably parallelizable,
+which shows in its performance.
 
 ``` bash
 $ make bench-sss

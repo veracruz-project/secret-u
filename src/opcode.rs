@@ -594,6 +594,23 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
             .step_by(width)
             .all(|i| &bytes[i..i+width] == &bytes[..width])
     }
+
+    /// Can we compress into an splat_c instruction?
+    fn is_extend_splat_s(&self, extend_npw2: u8, splat_npw2: u8) -> bool {
+        if !self.is_splat(splat_npw2) {
+            return false;
+        }
+
+        let bytes = self.to_le_bytes();
+        let bytes = bytes.as_ref();
+        let extend_width = 1usize << extend_npw2;
+        let splat_width = 1usize << splat_npw2;
+        if bytes[extend_width-1] & 0x80 == 0x80 {
+            bytes[extend_width..splat_width].iter().all(|b| *b == 0xff)
+        } else {
+            bytes[extend_width..splat_width].iter().all(|b| *b == 0x00)
+        }
+    }
 }
 
 for_secret_t! {
@@ -3401,6 +3418,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         match &self.kind {
             OpKind::Const(v) => {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                #[allow(unused_mut)] let mut best_lnpw2 = T::NPW2;
                 #[allow(unused_mut)] let mut best_npw2 = T::NPW2;
                 #[allow(unused_mut)] let mut best_ins = OpCode::ExtendConstS;
 
@@ -3413,10 +3431,12 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                             // encodings (splat and extend_s can leverage
                             // splat_c, but not extend_u)
                             if v.is_extend_s(npw2) {
+                                best_lnpw2 = 0;
                                 best_npw2 = npw2;
                                 best_ins  = OpCode::ExtendConstS;
                                 break;
                             } else if v.is_splat(npw2) {
+                                best_lnpw2 = T::NPW2;
                                 best_npw2 = npw2;
                                 best_ins  = OpCode::SplatConst;
                                 break;
@@ -3426,28 +3446,22 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                                 break;
                             }
                         }
+
+                        // can we combine extend_s+splat with splat_c?
+                        if best_npw2 > 0 && best_ins == OpCode::SplatConst && v.is_extend_splat_s(0, best_npw2) {
+                            best_lnpw2 = T::NPW2 - best_npw2;
+                            best_npw2 = 0;
+                        }
                     }
                 }
 
                 // fall back to uncompressed encodings
-                //
-                // note signed-extended and splatted u8s can fit in a splat_c
-                // instruction, we could actually fit combinations of
-                // signed-extends and splats, but those would be more
-                // complicated to find
-                if best_npw2 == 0 && best_ins == OpCode::ExtendConstS {
+                if best_npw2 == 0 && (best_ins == OpCode::ExtendConstS || best_ins == OpCode::SplatConst) {
                     let mut buf = Vec::from(v.to_le_bytes().as_ref());
                     buf.truncate(1);
 
                     state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::SplatC, 0, slot, buf[0]
-                    )));
-                } else if best_npw2 == 0 && best_ins == OpCode::SplatConst {
-                    let mut buf = Vec::from(v.to_le_bytes().as_ref());
-                    buf.truncate(1);
-
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, T::NPW2, OpCode::SplatC, 0, slot, buf[0]
+                        T::NPW2, best_lnpw2, OpCode::SplatC, 0, slot, buf[0]
                     )));
                 } else {
                     // encode const into bytecode stream

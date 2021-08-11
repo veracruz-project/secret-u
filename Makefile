@@ -81,6 +81,32 @@ bench-aes:
 		<(cat $$(find -name '*.rs')) \
 		target/test_bitslice.encrypted)
 
+.PHONY: bench-chacha20
+bench-chacha20:
+	# build (assuming builds are cached)
+	cargo build --release --example chacha20_reference
+	cargo build --release --example chacha20
+	cargo build --release --example chacha20_simd
+	# run, measuring execution time
+	$(strip \
+		time ./target/release/examples/chacha20_reference \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "0001020304050607" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test_reference.encrypted)
+	$(strip \
+		time ./target/release/examples/chacha20 \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "0001020304050607" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test.encrypted)
+	$(strip \
+		time ./target/release/examples/chacha20_simd \
+		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
+		<(echo "0001020304050607" | xxd -r -p) \
+		<(cat $$(find -name '*.rs')) \
+		target/test_simd.encrypted)
+
 .PHONY: bench-sss
 bench-sss:
 	# build (need to move so different configurations don't overwrite each other)
