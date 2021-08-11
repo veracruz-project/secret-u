@@ -10,6 +10,7 @@ proc-macro = true
 
 [features]
 debug-proc-macros = []
+debug-internal-proc-macros = []
 # simplify by DeMorgan identities
 bitslice-simplify-identities = []
 # simplify by BDD (use this if you want compilation to take forever
@@ -21,3 +22,4 @@ quote = "1.0.9"
 proc-macro2 = "1.0.27"
 darling = "0.12.4"
 boolean_expression = "0.4.4"
+evalexpr = "6.4.0"

@@ -181,7 +181,6 @@ mod tests {
         use crate::*;
         println!();
 
-        println!("hi b");
         let f = compile_object!(|x: SecretU8, y: SecretU8| -> SecretU8 {
             (hello(x) + hello(y)) & SecretU8::const_(0x7f)
         });
@@ -432,7 +431,6 @@ mod tests {
         use crate::*;
         println!();
 
-        println!("hi b");
         let f = compile_object!(|x: SecretU8, y: SecretU8| -> SecretU8 {
             (hello_shuffle(x) + hello_shuffle(y)) & SecretU8::const_(0x7f)
         });

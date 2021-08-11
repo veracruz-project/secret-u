@@ -45,6 +45,8 @@ debug-trace = []
 debug-cycle-count = []
 # show proc macro generation
 debug-proc-macros = ["secret-u-macros/debug-proc-macros"]
+# show _internal_ proc macro generation
+debug-internal-proc-macros = ["secret-u-macros/debug-internal-proc-macros"]
 # check internal refs correctly return to 0, note this is very expensive
 debug-check-refs = []
 

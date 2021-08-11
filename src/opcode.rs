@@ -23,6 +23,8 @@ use std::borrow::Cow;
 
 use aligned_utils::bytes::AlignedBytes;
 
+use secret_u_macros::for_secret_t;
+
 
 /// OpCodes emitted as a part of bytecode
 ///
@@ -594,41 +596,53 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
     }
 }
 
-macro_rules! opu_impl {
-    ($u:ident([u8; $n:expr]; $npw2:expr $(; $($prim:ty),*)?)) => {
+for_secret_t! {
+    __if(__t == "u") {
         #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-        pub struct $u([u8; $n]);
+        pub struct __U([u8; __size]);
 
-        impl From<[u8; $n]> for $u {
-            fn from(v: [u8; $n]) -> Self {
+        impl From<[u8; __size]> for __U {
+            fn from(v: [u8; __size]) -> Self {
                 Self::from_le_bytes(v)
             }
         }
 
-        impl From<$u> for [u8; $n] {
-            fn from(v: $u) -> [u8; $n] {
+        impl From<__U> for [u8; __size] {
+            fn from(v: __U) -> [u8; __size] {
                 v.to_le_bytes()
             }
         }
 
-        $($(
-            impl From<$prim> for $u {
-                fn from(v: $prim) -> Self {
+        __if(__has_prim) {
+            impl From<__prim_u> for __U {
+                fn from(v: __prim_u) -> Self {
                     Self::from_le_bytes(v.to_le_bytes())
                 }
             }
 
-            impl From<$u> for $prim {
-                fn from(v: $u) -> $prim {
-                    <$prim>::from_le_bytes(v.to_le_bytes())
+            impl From<__U> for __prim_u {
+                fn from(v: __U) -> __prim_u {
+                    <__prim_u>::from_le_bytes(v.to_le_bytes())
                 }
             }
-        )*)?
 
-        impl OpU for $u {
-            const NPW2: u8 = $npw2;
+            impl From<__prim_i> for __U {
+                fn from(v: __prim_i) -> Self {
+                    Self::from_le_bytes(v.to_le_bytes())
+                }
+            }
 
-            type Bytes = [u8; $n];
+            impl From<__U> for __prim_i {
+                fn from(v: __U) -> __prim_i {
+                    <__prim_i>::from_le_bytes(v.to_le_bytes())
+                }
+            }
+        }
+
+        impl OpU for __U {
+            const NPW2: u8 = __npw2;
+
+            type Bytes = [u8; __size];
 
             fn to_le_bytes(self) -> Self::Bytes {
                 self.0
@@ -639,23 +653,23 @@ macro_rules! opu_impl {
             }
 
             fn zero() -> Self {
-                Self([0; $n])
+                Self([0; __size])
             }
 
             fn one() -> Self {
-                let mut bytes = [0; $n];
+                let mut bytes = [0; __size];
                 bytes[0] = 1;
                 Self(bytes)
             }
 
             fn ones() -> Self {
-                Self([0xff; $n])
+                Self([0xff; __size])
             }
 
             fn extend_u<U: OpU>(other: U) -> Self {
                 let slice = other.to_le_bytes();
                 let slice = slice.as_ref();
-                let mut bytes = [0; $n];
+                let mut bytes = [0; __size];
                 bytes[..slice.len()].copy_from_slice(slice);
                 Self(bytes)
             }
@@ -664,9 +678,9 @@ macro_rules! opu_impl {
                 let slice = other.to_le_bytes();
                 let slice = slice.as_ref();
                 let mut bytes = if slice[slice.len()-1] & 0x80 == 0x80 {
-                    [0xff; $n]
+                    [0xff; __size]
                 } else {
-                    [0x00; $n]
+                    [0x00; __size]
                 };
                 bytes[..slice.len()].copy_from_slice(slice);
                 Self(bytes)
@@ -675,21 +689,21 @@ macro_rules! opu_impl {
             fn splat<U: OpU>(other: U) -> Self {
                 let slice = other.to_le_bytes();
                 let slice = slice.as_ref();
-                let mut bytes = [0; $n];
-                for i in (0..$n).step_by(slice.len()) {
+                let mut bytes = [0; __size];
+                for i in (0..__size).step_by(slice.len()) {
                     bytes[i..i+slice.len()].copy_from_slice(slice);
                 }
                 Self(bytes)
             }
         }
 
-        impl Default for $u {
+        impl Default for __U {
             fn default() -> Self {
                 Self::zero()
             }
         }
 
-        impl LowerHex for $u {
+        impl LowerHex for __U {
             fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
                 write!(fmt, "0x")?;
                 for b in self.0.iter().rev() {
@@ -700,14 +714,6 @@ macro_rules! opu_impl {
         }
     }
 }
-
-opu_impl! { U8  ([u8;  1]; 0; u8,   i8  ) }
-opu_impl! { U16 ([u8;  2]; 1; u16,  i16 ) }
-opu_impl! { U32 ([u8;  4]; 2; u32,  i32 ) }
-opu_impl! { U64 ([u8;  8]; 3; u64,  i64 ) }
-opu_impl! { U128([u8; 16]; 4; u128, i128) }
-opu_impl! { U256([u8; 32]; 5)             }
-opu_impl! { U512([u8; 64]; 6)             }
 
 
 /// Kinds of operations in tree
