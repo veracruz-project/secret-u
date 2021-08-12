@@ -189,14 +189,14 @@ impl Sha256 {
         // reverse all the bytes when copying the final state to the output hash
         let mut hash: [SecretU8; 32] = Default::default();
         for i in 0..4 {
-            hash[i+ 0] = SecretU8::cast(self.state[0].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+ 4] = SecretU8::cast(self.state[1].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+ 8] = SecretU8::cast(self.state[2].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+12] = SecretU8::cast(self.state[3].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+16] = SecretU8::cast(self.state[4].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+20] = SecretU8::cast(self.state[5].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+24] = SecretU8::cast(self.state[6].clone() >> SecretU32::const_(24-8*i as u32));
-            hash[i+28] = SecretU8::cast(self.state[7].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 0] = SecretU8::from_cast(self.state[0].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 4] = SecretU8::from_cast(self.state[1].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 8] = SecretU8::from_cast(self.state[2].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+12] = SecretU8::from_cast(self.state[3].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+16] = SecretU8::from_cast(self.state[4].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+20] = SecretU8::from_cast(self.state[5].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+24] = SecretU8::from_cast(self.state[6].clone() >> SecretU32::const_(24-8*i as u32));
+            hash[i+28] = SecretU8::from_cast(self.state[7].clone() >> SecretU32::const_(24-8*i as u32));
         }
         hash
     }

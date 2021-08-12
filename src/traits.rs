@@ -77,15 +77,31 @@ where
 /// A trait that capture potentially-truncating conversions
 ///
 /// This is equivalent to the "as" keyword used on integer types normally
-pub trait Cast<T> {
-    fn cast(t: T) -> Self;
+pub trait FromCast<T> {
+    fn from_cast(t: T) -> Self;
 }
 
-impl<T, U> Cast<U> for T
+/// FromCast implemented for all types that support From
+impl<T, U> FromCast<U> for T
 where
     T: From<U>,
 {
-    fn cast(u: U) -> T {
+    fn from_cast(u: U) -> T {
         T::from(u)
+    }
+}
+
+/// Cast is the equivalent of Into, but for FromCast
+pub trait Cast<T> {
+    fn cast(self) -> T;
+}
+
+/// Cast implemented for all types that support FromCast
+impl<T, U> Cast<T> for U
+where
+    T: FromCast<U>
+{
+    fn cast(self) -> T {
+        T::from_cast(self)
     }
 }

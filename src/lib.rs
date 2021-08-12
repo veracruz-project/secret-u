@@ -19,5 +19,6 @@ pub use traits::Ord as SecretOrd;
 pub use traits::Select as SecretSelect;
 pub use traits::Shuffle as SecretShuffle;
 pub use traits::Cast as SecretCast;
+pub use traits::FromCast as SecretFromCast;
 pub use traits::Eval as SecretEval;
 

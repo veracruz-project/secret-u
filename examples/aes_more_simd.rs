@@ -89,18 +89,18 @@ impl Aes {
             |x: SecretU8x16| -> SecretU8x64 {
                 // operate on 4 ivs at a time
                 let x0 = x.clone();
-                let x  = SecretU128::cast(x.reverse_lanes());
+                let x  = SecretU128::from_cast(x.reverse_lanes());
                 let x1 = x.clone() + SecretU128::const_(1);
                 let x2 = x.clone() + SecretU128::const_(2);
                 let x3 = x.clone() + SecretU128::const_(3);
-                let x1 = SecretU8x16::cast(x1).reverse_lanes();
-                let x2 = SecretU8x16::cast(x2).reverse_lanes();
-                let x3 = SecretU8x16::cast(x3).reverse_lanes();
-                let x = SecretU8x64::cast(SecretU128x4::from_lanes(
-                    SecretU128::cast(x0),
-                    SecretU128::cast(x1),
-                    SecretU128::cast(x2),
-                    SecretU128::cast(x3),
+                let x1 = SecretU8x16::from_cast(x1).reverse_lanes();
+                let x2 = SecretU8x16::from_cast(x2).reverse_lanes();
+                let x3 = SecretU8x16::from_cast(x3).reverse_lanes();
+                let x = SecretU8x64::from_cast(SecretU128x4::from_lanes(
+                    SecretU128::from_cast(x0),
+                    SecretU128::from_cast(x1),
+                    SecretU128::from_cast(x2),
+                    SecretU128::from_cast(x3),
                 ));
 
                 self_.cipher(x)
@@ -111,9 +111,9 @@ impl Aes {
         self_.compiled_inc = Some(Box::new(compile!(
             |x: SecretU8x16| -> SecretU8x16 {
                 // skip 4 at a time
-                let x = SecretU128::cast(x.reverse_lanes());
+                let x = SecretU128::from_cast(x.reverse_lanes());
                 let x = x + SecretU128::const_(4);
-                SecretU8x16::cast(x).reverse_lanes()
+                SecretU8x16::from_cast(x).reverse_lanes()
             }
         )));
 
@@ -153,22 +153,22 @@ impl Aes {
                 // [a0,a1,a2,a3] becomes [a1,a2,a3,a0]
 
                 // Function RotWord()
-                temp = SecretU8x4::cast(
-                    SecretU32::cast(temp).rotate_right(SecretU32::const_(8))
+                temp = SecretU8x4::from_cast(
+                    SecretU32::from_cast(temp).rotate_right(SecretU32::const_(8))
                 );
 
                 // SubWord() is a function that takes a four-byte input word and
                 // applies the S-box to each of the four bytes to produce an output word.
 
                 // Function Subword()
-                temp = SecretU8x4::cast(SBOX(SecretU8x64::from(temp)));
+                temp = SecretU8x4::from_cast(SBOX(SecretU8x64::from(temp)));
 
                 temp ^= SecretU8x4::const_lanes(RCON[i/self.words], 0, 0, 0);
             }
 
             if key.len() == 32 && i % self.words == 4 {
                 // Function Subword()
-                temp = SecretU8x4::cast(SBOX(SecretU8x64::from(temp)));
+                temp = SecretU8x4::from_cast(SBOX(SecretU8x64::from(temp)));
             }
 
             let k = i-self.words;
@@ -178,11 +178,11 @@ impl Aes {
         // convert to U8x16s for easier computation later
         let mut round_key = round_key.chunks_exact(4)
             .map(|c| {
-                SecretU8x16::cast(SecretU32x4::from_lanes(
-                    SecretU32::cast(c[0].clone()),
-                    SecretU32::cast(c[1].clone()),
-                    SecretU32::cast(c[2].clone()),
-                    SecretU32::cast(c[3].clone())
+                SecretU8x16::from_cast(SecretU32x4::from_lanes(
+                    SecretU32::from_cast(c[0].clone()),
+                    SecretU32::from_cast(c[1].clone()),
+                    SecretU32::from_cast(c[2].clone()),
+                    SecretU32::from_cast(c[3].clone())
                 ))
             })
             .collect::<Vec<_>>();
@@ -198,7 +198,7 @@ impl Aes {
     // This function adds the round key to state.
     // The round key is added to the state by an XOR function.
     fn add_round_key(&self, round: usize, state: SecretU8x64) -> SecretU8x64 {
-        state ^ SecretU8x64::cast(SecretU128x4::splat(SecretU128::cast(
+        state ^ SecretU8x64::from_cast(SecretU128x4::splat(SecretU128::from_cast(
             self.round_key[round].clone()
         )))
     }
@@ -237,10 +237,10 @@ impl Aes {
                 )
         }
 
-        let sum = SecretU32x16::cast(state.clone());
+        let sum = SecretU32x16::from_cast(state.clone());
         let sum = (sum.clone() >> SecretU32x16::const_splat(8)) ^ sum;
         let sum = (sum.clone() >> SecretU32x16::const_splat(16)) ^ sum;
-        let sum = SecretU8x64::cast(sum);
+        let sum = SecretU8x64::from_cast(sum);
         let lanes: [u8; 16] = [
              0,  0,  0,  0,
              4,  4,  4,  4,
@@ -251,11 +251,11 @@ impl Aes {
             &(0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
         ).shuffle(sum.clone(), sum);
 
-        let rot = SecretU8x64::cast(
-            SecretU32x16::cast(state.clone()).rotate_right(SecretU32x16::const_splat(8))
+        let rot = SecretU8x64::from_cast(
+            SecretU32x16::from_cast(state.clone()).rotate_right(SecretU32x16::const_splat(8))
         );
 
-        state.clone() ^ xtime(SecretU8x64::cast(state.clone() ^ rot)) ^ sum
+        state.clone() ^ xtime(SecretU8x64::from_cast(state.clone() ^ rot)) ^ sum
 
     }
 

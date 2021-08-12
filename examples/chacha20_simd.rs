@@ -24,8 +24,8 @@ struct ChaCha20 {
 impl ChaCha20 {
     pub fn new(key: SecretU8x32, iv: SecretU8x8) -> Self {
         let consts = SecretU32x4::const_le_bytes(*b"expand 32-byte k");
-        let key = SecretU32x8::cast(key);
-        let iv = SecretU32x2::cast(iv);
+        let key = SecretU32x8::from_cast(key);
+        let iv = SecretU32x2::from_cast(iv);
 
         let mut self_ = ChaCha20 {
             state: SecretU32x16::from_lanes(
@@ -51,9 +51,9 @@ impl ChaCha20 {
 
         self_.compiled_inc = Some(Box::new(compile! {
             |x: SecretU32x16| -> SecretU32x16 {
-                let x = SecretU64x8::cast(x);
+                let x = SecretU64x8::from_cast(x);
                 let x = x.clone().replace(6, x.extract(6) + SecretU64::const_(1));
-                SecretU32x16::cast(x)
+                SecretU32x16::from_cast(x)
             }
         }));
 
@@ -69,11 +69,11 @@ impl ChaCha20 {
     /// cipher with 20 rounds + mix array
     fn cipher(&self, state: SecretU32x16) -> SecretU8x64 {
         // lanes
-        let (a, b, c, d) = SecretU128x4::cast(state.clone()).to_lanes();
-        let mut a = SecretU32x4::cast(a);
-        let mut b = SecretU32x4::cast(b);
-        let mut c = SecretU32x4::cast(c);
-        let mut d = SecretU32x4::cast(d);
+        let (a, b, c, d) = SecretU128x4::from_cast(state.clone()).to_lanes();
+        let mut a = SecretU32x4::from_cast(a);
+        let mut b = SecretU32x4::from_cast(b);
+        let mut c = SecretU32x4::from_cast(c);
+        let mut d = SecretU32x4::from_cast(d);
         // shuffles
         let shuffle1 = SecretU32x4::const_lanes(1, 2, 3, 0);
         let shuffle2 = SecretU32x4::const_lanes(2, 3, 0, 1);
@@ -99,15 +99,15 @@ impl ChaCha20 {
         }
 
         // mix array
-        let mut x = SecretU32x16::cast(SecretU128x4::from_lanes(
-            SecretU128::cast(a),
-            SecretU128::cast(b),
-            SecretU128::cast(c),
-            SecretU128::cast(d),
+        let mut x = SecretU32x16::from_cast(SecretU128x4::from_lanes(
+            SecretU128::from_cast(a),
+            SecretU128::from_cast(b),
+            SecretU128::from_cast(c),
+            SecretU128::from_cast(d),
         ));
         x += state;
 
-        SecretU8x64::cast(x)
+        SecretU8x64::from_cast(x)
     }
 
     #[allow(unused)]

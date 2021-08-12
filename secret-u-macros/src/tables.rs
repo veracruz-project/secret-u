@@ -533,7 +533,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
             if mid_ty.width() > index_ty.width() {
                 parse_quote! { #secret_ty::from(#a) }
             } else if mid_ty.width() < index_ty.width() {
-                parse_quote! { #secret_ty::cast(#a) }
+                parse_quote! { #secret_ty::from_cast(#a) }
             } else {
                 parse_quote! { #a }
             }
@@ -569,7 +569,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
             } else if ret_ty.width() > mid_ty.width() {
                 parse_quote! { #ret_lane_secret_ty::from(#ret) }
             } else if ret_ty.width() < mid_ty.width() {
-                parse_quote! { #ret_lane_secret_ty::cast(#ret) }
+                parse_quote! { #ret_lane_secret_ty::from_cast(#ret) }
             } else {
                 parse_quote! { #ret }
             }
@@ -620,7 +620,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
         #[inline(never)]
         #[allow(non_snake_case)]
         #vis fn #name(a: #index_secret_ty) -> #ret_secret_ty {
-            use #crate_::traits::Cast;
+            use #crate_::traits::FromCast;
             use #crate_::traits::Eq;
 
             let mut a: [#secret_ty; #a_par_width] = [
@@ -817,11 +817,11 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
     //if shuffle_size/2 > parallel * index_ty.width()/8 {
     packs.push(parse_quote! {
         // extend unused lanes
-        let a0 = #table_secret_ty::cast(
+        let a0 = #table_secret_ty::from_cast(
             #table_secret_wide_ty::from(
-                #pack_secret_wide_ty::cast(
+                #pack_secret_wide_ty::from_cast(
                     // truncate lanes
-                    #pack_secret_ty::cast(
+                    #pack_secret_ty::from_cast(
                         a.clone() & #index_secret_ty_const(#mask)
                     )
                 )
@@ -833,11 +833,11 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
         //if shuffle_size/2 > parallel * index_ty.width()/8 {
         packs.push(parse_quote! {
             // extend unused lanes
-            let a1 = #table_secret_ty::cast(
+            let a1 = #table_secret_ty::from_cast(
                 #table_secret_wide_ty::from(
-                    #pack_secret_wide_ty::cast(
+                    #pack_secret_wide_ty::from_cast(
                         // truncate lanes
-                        #pack_secret_ty::cast(
+                        #pack_secret_ty::from_cast(
                             a.clone() >> #index_secret_ty_const(#n)
                         )
                     )
@@ -908,9 +908,9 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
                 // extend lanes
                 let #b = #merge_secret_ty::from(
                     // truncate unused lanes
-                    #table_merge_secret_ty::cast(
-                        #table_merge_secret_wide_ty::cast(
-                            #table_secret_wide_ty::cast(#b)
+                    #table_merge_secret_ty::from_cast(
+                        #table_merge_secret_wide_ty::from_cast(
+                            #table_secret_wide_ty::from_cast(#b)
                         )
                     )
                 );
@@ -929,9 +929,9 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
     } else {
         unpack_and_merge.push(parse_quote! {
             // truncate unused lanes
-            let b = #merge_secret_ty::cast(
-                #merge_secret_wide_ty::cast(
-                    #table_secret_wide_ty::cast(b)
+            let b = #merge_secret_ty::from_cast(
+                #merge_secret_wide_ty::from_cast(
+                    #table_secret_wide_ty::from_cast(b)
                 )
             );
         });
@@ -949,7 +949,7 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
         #[inline(never)]
         #[allow(non_snake_case)]
         #vis fn #name(a: #index_secret_ty) -> #ret_secret_ty {
-            use #crate_::traits::Cast;
+            use #crate_::traits::FromCast;
             use #crate_::traits::Eq;
             use #crate_::traits::Ord;
 

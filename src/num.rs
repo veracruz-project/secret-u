@@ -418,7 +418,7 @@ for_secret_t! {
                 let mut mask = 0xffu8;
                 for sh in [4,2,1] {
                     mask ^= mask << sh;
-                    let sh_s = Self::cast(SecretU8::const_(sh));
+                    let sh_s = Self::from_cast(SecretU8::const_(sh));
                     let mask_s = Self::const_le_bytes([mask; __size]);
                     // fall back to OpTree to avoid signed-bitshifts
                     self = Self(OpTree::or(
@@ -1420,7 +1420,7 @@ for_secret_t! {
                 let mut mask = 0xffu8;
                 for sh in [4,2,1] {
                     mask ^= mask << sh;
-                    let sh_s = Self::splat(<__lane_t>::cast(SecretU8::const_(sh)));
+                    let sh_s = Self::splat(<__lane_t>::from_cast(SecretU8::const_(sh)));
                     let mask_s = Self::splat(<__lane_t>::const_le_bytes([mask; __lane_size]));
                     // fall back to OpTree to avoid signed-bitshifts
                     self = Self(OpTree::or(
@@ -1810,8 +1810,8 @@ for_secret_t_2! {
 
     // truncating (i32 -> i8)
     __if((__t == "u" || __t == "i") && __t == __t_2 && __npw2 < __npw2_2) {
-        impl Cast<__secret_t_2> for __secret_t {
-            fn cast(v: __secret_t_2) -> __secret_t {
+        impl FromCast<__secret_t_2> for __secret_t {
+            fn from_cast(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::extract(0, v.0))
             }
         }
@@ -1819,8 +1819,8 @@ for_secret_t_2! {
 
     // cast same width (u8x4 -> u32)
     __if((__t != __t_2 || __lnpw2 != __lnpw2_2) && __npw2 == __npw2_2) {
-        impl Cast<__secret_t_2> for __secret_t {
-            fn cast(v: __secret_t_2) -> __secret_t {
+        impl FromCast<__secret_t_2> for __secret_t {
+            fn from_cast(v: __secret_t_2) -> __secret_t {
                 Self(v.0)
             }
         }
@@ -1839,8 +1839,8 @@ for_secret_t_2! {
     // lane truncating (i8x4 -> i8x1)
     __if((__t == "ux" || __t == "ix" || __t == "mx")
             && __t == __t_2 && __lane_npw2 == __lane_npw2_2 && __lnpw2 < __lnpw2_2) {
-        impl Cast<__secret_t_2> for __secret_t {
-            fn cast(v: __secret_t_2) -> __secret_t {
+        impl FromCast<__secret_t_2> for __secret_t {
+            fn from_cast(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::extract(0, v.0))
             }
         }
@@ -1933,8 +1933,8 @@ for_secret_t_2! {
     // truncating lanes (u32x4 -> u8x4)
     __if((__t == "ux" || __t == "ix" || __t == "mx") && __t == __t_2
             && __lane_npw2 < __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
-        impl Cast<__secret_t_2> for __secret_t {
-            fn cast(v: __secret_t_2) -> __secret_t {
+        impl FromCast<__secret_t_2> for __secret_t {
+            fn from_cast(v: __secret_t_2) -> __secret_t {
                 let mut lanes = [0; __size_2];
                 for i in 0..__lanes_2 {
                     // this works because i can be at most 64, < u8
@@ -2123,22 +2123,22 @@ mod tests {
         println!("{}", v);
         assert_eq!(v, 0x1e6a2c48);
 
-        let a = SecretU16x2::cast(SecretU32::new(0x12345678));
-        let x = SecretU32::cast(a.clone().reverse_lanes());
+        let a = SecretU16x2::from_cast(SecretU32::new(0x12345678));
+        let x = SecretU32::from_cast(a.clone().reverse_lanes());
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 0x56781234);
 
-        let a = SecretU16x2::cast(SecretU32::new(0x12345678));
-        let x = SecretU32::cast(a.clone().reverse_bytes());
+        let a = SecretU16x2::from_cast(SecretU32::new(0x12345678));
+        let x = SecretU32::from_cast(a.clone().reverse_bytes());
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 0x34127856);
 
-        let a = SecretU16x2::cast(SecretU32::new(0x12345678));
-        let x = SecretU32::cast(a.clone().reverse_bits());
+        let a = SecretU16x2::from_cast(SecretU32::new(0x12345678));
+        let x = SecretU32::from_cast(a.clone().reverse_bits());
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
@@ -2174,7 +2174,7 @@ mod tests {
         println!();
 
         let a = SecretU32x16::new_lanes(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
-        let x = SecretU8x16::cast(a);
+        let x = SecretU8x16::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_vec();
         println!("{:?}", v);
@@ -2184,7 +2184,7 @@ mod tests {
             SecretU256::from(SecretU16::new(1000)),
             SecretU256::from(SecretU16::new(2000))
         );
-        let x = SecretU16x2::cast(a);
+        let x = SecretU16x2::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
@@ -2199,14 +2199,14 @@ mod tests {
 
         let a = SecretU16x2::new_lanes(1000, 2000);
         let b = SecretU256x2::from(a);
-        let x = SecretU32x2::cast(b);
+        let x = SecretU32x2::from_cast(b);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
         assert_eq!(v, (1000, 2000));
 
         let a = SecretI32x16::new_lanes(-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16);
-        let x = SecretI8x16::cast(a);
+        let x = SecretI8x16::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_vec();
         println!("{:?}", v);
@@ -2216,7 +2216,7 @@ mod tests {
             SecretI256::from(SecretI16::new(-1000)),
             SecretI256::from(SecretI16::new(-2000))
         );
-        let x = SecretI16x2::cast(a);
+        let x = SecretI16x2::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
@@ -2231,7 +2231,7 @@ mod tests {
 
         let a = SecretI16x2::new_lanes(-1000, -2000);
         let b = SecretI256x2::from(a);
-        let x = SecretI32x2::cast(b);
+        let x = SecretI32x2::from_cast(b);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);

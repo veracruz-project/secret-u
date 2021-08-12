@@ -96,7 +96,7 @@ impl Aes {
             |mut x: SecretU8x16| -> SecretU8x16 {
                 // need to reverse due to big-endian addition
                 x = x.reverse_lanes();
-                x = SecretU8x16::cast(SecretU128::cast(x) + SecretU128::one());
+                x = SecretU8x16::from_cast(SecretU128::from_cast(x) + SecretU128::one());
                 x.reverse_lanes()
             }
         )));
@@ -137,22 +137,22 @@ impl Aes {
                 // [a0,a1,a2,a3] becomes [a1,a2,a3,a0]
 
                 // Function RotWord()
-                temp = SecretU8x4::cast(
-                    SecretU32::cast(temp).rotate_right(SecretU32::const_(8))
+                temp = SecretU8x4::from_cast(
+                    SecretU32::from_cast(temp).rotate_right(SecretU32::const_(8))
                 );
 
                 // SubWord() is a function that takes a four-byte input word and
                 // applies the S-box to each of the four bytes to produce an output word.
 
                 // Function Subword()
-                temp = SecretU8x4::cast(SBOX(SecretU8x16::from(temp)));
+                temp = SecretU8x4::from_cast(SBOX(SecretU8x16::from(temp)));
 
                 temp ^= SecretU8x4::const_lanes(RCON[i/self.words], 0, 0, 0);
             }
 
             if key.len() == 32 && i % self.words == 4 {
                 // Function Subword()
-                temp = SecretU8x4::cast(SBOX(SecretU8x16::from(temp)));
+                temp = SecretU8x4::from_cast(SBOX(SecretU8x16::from(temp)));
             }
 
             let k = i-self.words;
@@ -162,11 +162,11 @@ impl Aes {
         // convert to U8x16s for easier computation later
         let mut round_key = round_key.chunks_exact(4)
             .map(|c| {
-                SecretU8x16::cast(SecretU32x4::from_lanes(
-                    SecretU32::cast(c[0].clone()),
-                    SecretU32::cast(c[1].clone()),
-                    SecretU32::cast(c[2].clone()),
-                    SecretU32::cast(c[3].clone())
+                SecretU8x16::from_cast(SecretU32x4::from_lanes(
+                    SecretU32::from_cast(c[0].clone()),
+                    SecretU32::from_cast(c[1].clone()),
+                    SecretU32::from_cast(c[2].clone()),
+                    SecretU32::from_cast(c[3].clone())
                 ))
             })
             .collect::<Vec<_>>();
@@ -214,10 +214,10 @@ impl Aes {
                 )
         }
 
-        let sum = SecretU32x4::cast(state.clone());
+        let sum = SecretU32x4::from_cast(state.clone());
         let sum = (sum.clone() >> SecretU32x4::const_splat(8)) ^ sum;
         let sum = (sum.clone() >> SecretU32x4::const_splat(16)) ^ sum;
-        let sum = SecretU8x16::cast(sum);
+        let sum = SecretU8x16::from_cast(sum);
         let sum = SecretU8x16::const_lanes(
              0,  0,  0,  0,
              4,  4,  4,  4,
@@ -225,11 +225,11 @@ impl Aes {
             12, 12, 12, 12,
         ).shuffle(sum.clone(), sum);
 
-        let rot = SecretU8x16::cast(
-            SecretU32x4::cast(state.clone()).rotate_right(SecretU32x4::const_splat(8))
+        let rot = SecretU8x16::from_cast(
+            SecretU32x4::from_cast(state.clone()).rotate_right(SecretU32x4::const_splat(8))
         );
 
-        state.clone() ^ xtime(SecretU8x16::cast(state.clone() ^ rot)) ^ sum
+        state.clone() ^ xtime(SecretU8x16::from_cast(state.clone() ^ rot)) ^ sum
     }
 
     /// Cipher is the main function that encrypts the PlainText.

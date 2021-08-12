@@ -63,11 +63,11 @@ impl Sha256 {
             let mut m: Vec<SecretU32> = Vec::new();
             let swap = SecretU8x4::const_lanes(3, 2, 1, 0);
             for i in 0..16 {
-                let word = SecretU32x16::cast(data.clone()).extract(i);
-                m.push(SecretU32::cast(
+                let word = SecretU32x16::from_cast(data.clone()).extract(i);
+                m.push(SecretU32::from_cast(
                     swap.clone().shuffle(
-                        SecretU8x4::cast(word.clone()),
-                        SecretU8x4::cast(word))
+                        SecretU8x4::from_cast(word.clone()),
+                        SecretU8x4::from_cast(word))
                 ));
             }
             for i in 16..64 {
@@ -205,14 +205,14 @@ impl Sha256 {
         // reverse all the bytes when copying the final state to the output hash
         let mut hash: [SecretU8; 32] = Default::default();
         for i in 0..4 {
-            hash[i+ 0] = SecretU8::cast(self.state.clone().extract(0) >> SecretU32::const_(24-8*i as u32));
-            hash[i+ 4] = SecretU8::cast(self.state.clone().extract(1) >> SecretU32::const_(24-8*i as u32));
-            hash[i+ 8] = SecretU8::cast(self.state.clone().extract(2) >> SecretU32::const_(24-8*i as u32));
-            hash[i+12] = SecretU8::cast(self.state.clone().extract(3) >> SecretU32::const_(24-8*i as u32));
-            hash[i+16] = SecretU8::cast(self.state.clone().extract(4) >> SecretU32::const_(24-8*i as u32));
-            hash[i+20] = SecretU8::cast(self.state.clone().extract(5) >> SecretU32::const_(24-8*i as u32));
-            hash[i+24] = SecretU8::cast(self.state.clone().extract(6) >> SecretU32::const_(24-8*i as u32));
-            hash[i+28] = SecretU8::cast(self.state.clone().extract(7) >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 0] = SecretU8::from_cast(self.state.clone().extract(0) >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 4] = SecretU8::from_cast(self.state.clone().extract(1) >> SecretU32::const_(24-8*i as u32));
+            hash[i+ 8] = SecretU8::from_cast(self.state.clone().extract(2) >> SecretU32::const_(24-8*i as u32));
+            hash[i+12] = SecretU8::from_cast(self.state.clone().extract(3) >> SecretU32::const_(24-8*i as u32));
+            hash[i+16] = SecretU8::from_cast(self.state.clone().extract(4) >> SecretU32::const_(24-8*i as u32));
+            hash[i+20] = SecretU8::from_cast(self.state.clone().extract(5) >> SecretU32::const_(24-8*i as u32));
+            hash[i+24] = SecretU8::from_cast(self.state.clone().extract(6) >> SecretU32::const_(24-8*i as u32));
+            hash[i+28] = SecretU8::from_cast(self.state.clone().extract(7) >> SecretU32::const_(24-8*i as u32));
         }
         hash
     }
