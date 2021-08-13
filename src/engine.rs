@@ -16,6 +16,9 @@ use crate::opcode::OpIns;
 #[cfg(feature="debug-cycle-count")]
 use std::cell::Cell;
 
+use secret_u_macros::engine_for_t;
+use secret_u_macros::engine_match;
+
 
 /// Trait to help with treating as generic byte arrays,
 /// little-endian is required when order is important, but
@@ -117,51 +120,52 @@ trait Bytes: Sized {
     }
 }
 
-macro_rules! bytes_impl {
-    ($t:ident => $zero:expr, $ones:expr) => {
-        impl Bytes for $t {
-            const ONES: Self = $ones;
-            const ZERO: Self = $zero;
+engine_for_t! {
+    __if(!__has_lanes && __has_prim) {
+        impl Bytes for U {
+            const ONES: Self = Self::MAX;
+            const ZERO: Self = 0;
 
-            type Bytes = [u8; size_of::<$t>()];
+            type Bytes = [u8; __size];
 
             #[inline]
             fn to_ne_bytes(self) -> Self::Bytes {
-                <$t>::to_ne_bytes(self)
+                Self::to_ne_bytes(self)
             }
 
             #[inline]
             fn from_ne_bytes(bytes: Self::Bytes) -> Self {
-                <$t>::from_ne_bytes(bytes)
+                Self::from_ne_bytes(bytes)
             }
 
             #[inline]
             fn to_le_bytes(self) -> Self::Bytes {
-                <$t>::to_le_bytes(self)
+                Self::to_le_bytes(self)
             }
 
             #[inline]
             fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                <$t>::from_le_bytes(bytes)
+                Self::from_le_bytes(bytes)
             }
 
             #[inline]
             fn to_le(self) -> Self {
-                <$t>::to_le(self)
+                Self::to_le(self)
             }
 
             #[inline]
             fn from_le(self) -> Self {
-                <$t>::from_le(self)
+                Self::from_le(self)
             }
         }
-    };
-    ([$t:ty; $n:expr] => $zero:expr, $ones:expr) => {
-        impl Bytes for [$t;$n] {
-            const ONES: Self = $ones;
-            const ZERO: Self = $zero;
+    }
 
-            type Bytes = [u8; size_of::<[$t;$n]>()];
+    __if(!__has_lanes && __has_limbs) {
+        impl Bytes for U {
+            const ONES: Self = [<__limb_t>::MAX; __limbs];
+            const ZERO: Self = [0; __limbs];
+
+            type Bytes = [u8; __size];
 
             #[inline]
             fn to_ne_bytes(self) -> Self::Bytes {
@@ -185,7 +189,7 @@ macro_rules! bytes_impl {
 
             #[inline]
             fn to_le(mut self) -> Self {
-                for i in 0..$n {
+                for i in 0..__limbs {
                     self[i] = self[i].to_le();
                 }
                 self
@@ -193,22 +197,14 @@ macro_rules! bytes_impl {
 
             #[inline]
             fn from_le(mut self) -> Self {
-                for i in 0..$n {
+                for i in 0..__limbs {
                     self[i] = self[i].from_le();
                 }
                 self
             }
         }
-    };
+    }
 }
-
-bytes_impl! { u8       => u8::MIN,       u8::MAX       }
-bytes_impl! { u16      => u16::MIN,      u16::MAX      }
-bytes_impl! { u32      => u32::MIN,      u32::MAX      }
-bytes_impl! { u64      => u64::MIN,      u64::MAX      }
-bytes_impl! { u128     => u128::MIN,     u128::MAX     }
-bytes_impl! { [u32;8]  => [u32::MIN;8],  [u32::MAX;8]  }
-bytes_impl! { [u32;16] => [u32::MIN;16], [u32::MAX;16] }
 
 
 /// Helper for converting into indices (u32)
@@ -226,9 +222,9 @@ trait IntoUsize: Sized {
     fn try_from_u32(size: u32) -> Option<Self>;
 }
 
-macro_rules! into_u32_impl {
-    ($t:ident) => {
-        impl IntoUsize for $t {
+engine_for_t! {
+    __if(!__has_lanes && __has_prim) {
+        impl IntoUsize for U {
             fn wrapping_into_u32(self) -> u32 {
                 self as u32
             }
@@ -245,9 +241,10 @@ macro_rules! into_u32_impl {
                 Self::try_from(size).ok()
             }
         }
-    };
-    ([$t:ty;$n:expr]) => {
-        impl IntoUsize for [$t;$n] {
+    }
+
+    __if(!__has_lanes && __has_limbs) {
+        impl IntoUsize for U {
             fn wrapping_into_u32(self) -> u32 {
                 self[0] as u32
             }
@@ -261,27 +258,19 @@ macro_rules! into_u32_impl {
             }
 
             fn wrapping_from_u32(size: u32) -> Self {
-                let mut words = [0; $n];
-                words[0] = size as $t;
+                let mut words = [0; __limbs];
+                words[0] = size as __limb_t;
                 words
             }
 
             fn try_from_u32(size: u32) -> Option<Self> {
-                let mut words = [0; $n];
-                words[0] = <$t>::try_from(size).ok()?;
+                let mut words = [0; __limbs];
+                words[0] = <__limb_t>::try_from(size).ok()?;
                 Some(words)
             }
         }
-    };
+    }
 }
-
-into_u32_impl! { u8       }
-into_u32_impl! { u16      }
-into_u32_impl! { u32      }
-into_u32_impl! { u64      }
-into_u32_impl! { u128     }
-into_u32_impl! { [u32;8]  }
-into_u32_impl! { [u32;16] }
 
 
 /// Trait to help perform multi-lane operations
@@ -309,176 +298,142 @@ trait Lanes<T: Sized>: Sized {
     fn xfold3<A, F: FnMut(A, T, T, T) -> A>(self, b: Self, c: Self, f: F, init: A) -> A;
 }
 
-macro_rules! lanes_impl {
-    ($u:ty => $t:ty;$n:expr) => {
-        impl Lanes<$t> for $u {
+engine_for_t! {
+    __if(__has_lanes) {
+        impl Lanes<L> for U {
             #[inline]
-            fn xmap<F: FnMut($t) -> $t>(self, mut f: F) -> Self {
-                let mut xs: [$t; $n] = unsafe { transmute(self) };
-                for i in 0..$n {
+            fn xmap<F: FnMut(L) -> L>(self, mut f: F) -> Self {
+                let mut xs: [L; __lanes] = unsafe { transmute(self) };
+                for i in 0..__lanes {
                     xs[i] = f(xs[i]);
                 }
                 unsafe { transmute(xs) }
             }
 
             #[inline]
-            fn xfilter<F: FnMut($t) -> bool>(self, mut f: F) -> Self {
-                let mut xs: [$t; $n] = unsafe { transmute(self) };
-                for i in 0..$n {
-                    xs[i] = if f(xs[i]) { <$t>::ONES } else { <$t>::ZERO };
+            fn xfilter<F: FnMut(L) -> bool>(self, mut f: F) -> Self {
+                let mut xs: [L; __lanes] = unsafe { transmute(self) };
+                for i in 0..__lanes {
+                    xs[i] = if f(xs[i]) { <L>::ONES } else { <L>::ZERO };
                 }
                 unsafe { transmute(xs) }
             }
 
             #[inline]
-            fn xfold<A, F: FnMut(A, $t) -> A>(self, mut f: F, mut a: A) -> A {
-                let xs: [$t; $n] = unsafe { transmute(self) };
-                for i in 0..$n {
+            fn xfold<A, F: FnMut(A, L) -> A>(self, mut f: F, mut a: A) -> A {
+                let xs: [L; __lanes] = unsafe { transmute(self) };
+                for i in 0..__lanes {
                     a = f(a, xs[i]);
                 }
                 a
             }
 
             #[inline]
-            fn xmap2<F: FnMut($t, $t) -> $t>(self, b: $u, mut f: F) -> $u {
-                let mut xs: [$t; $n] = unsafe { transmute(self) };
-                let     ys: [$t; $n] = unsafe { transmute(b)    };
-                for i in 0..$n {
+            fn xmap2<F: FnMut(L, L) -> L>(self, b: U, mut f: F) -> U {
+                let mut xs: [L; __lanes] = unsafe { transmute(self) };
+                let     ys: [L; __lanes] = unsafe { transmute(b)    };
+                for i in 0..__lanes {
                     xs[i] = f(xs[i], ys[i]);
                 }
                 unsafe { transmute(xs) }
             }
             #[inline]
-            fn xfilter2<F: FnMut($t, $t) -> bool>(self, b: $u, mut f: F) -> $u {
-                let mut xs: [$t; $n] = unsafe { transmute(self) };
-                let     ys: [$t; $n] = unsafe { transmute(b)    };
-                for i in 0..$n {
-                    xs[i] = if f(xs[i], ys[i]) { <$t>::ONES } else { <$t>::ZERO };
+            fn xfilter2<F: FnMut(L, L) -> bool>(self, b: U, mut f: F) -> U {
+                let mut xs: [L; __lanes] = unsafe { transmute(self) };
+                let     ys: [L; __lanes] = unsafe { transmute(b)    };
+                for i in 0..__lanes {
+                    xs[i] = if f(xs[i], ys[i]) { <L>::ONES } else { <L>::ZERO };
                 }
                 unsafe { transmute(xs) }
             }
             #[inline]
-            fn xfold2<A, F: FnMut(A, $t, $t) -> A>(self, b: $u, mut f: F, mut a: A) -> A {
-                let xs: [$t; $n] = unsafe { transmute(self) };
-                let ys: [$t; $n] = unsafe { transmute(b)    };
-                for i in 0..$n {
+            fn xfold2<A, F: FnMut(A, L, L) -> A>(self, b: U, mut f: F, mut a: A) -> A {
+                let xs: [L; __lanes] = unsafe { transmute(self) };
+                let ys: [L; __lanes] = unsafe { transmute(b)    };
+                for i in 0..__lanes {
                     a = f(a, xs[i], ys[i]);
                 }
                 a
             }
 
             #[inline]
-            fn xmap3<F: FnMut($t, $t, $t) -> $t>(self, b: $u, c: $u, mut f: F) -> $u {
-                let mut xs: [$t; $n] = unsafe { transmute(self) };
-                let     ys: [$t; $n] = unsafe { transmute(b)    };
-                let     zs: [$t; $n] = unsafe { transmute(c)    };
-                for i in 0..$n {
+            fn xmap3<F: FnMut(L, L, L) -> L>(self, b: U, c: U, mut f: F) -> U {
+                let mut xs: [L; __lanes] = unsafe { transmute(self) };
+                let     ys: [L; __lanes] = unsafe { transmute(b)    };
+                let     zs: [L; __lanes] = unsafe { transmute(c)    };
+                for i in 0..__lanes {
                     xs[i] = f(xs[i], ys[i], zs[i]);
                 }
                 unsafe { transmute(xs) }
             }
             #[inline]
-            fn xfilter3<F: FnMut($t, $t, $t) -> bool>(self, b: $u, c: $u, mut f: F) -> $u {
-                let mut xs: [$t; $n] = unsafe { transmute(self) };
-                let     ys: [$t; $n] = unsafe { transmute(b)    };
-                let     zs: [$t; $n] = unsafe { transmute(c)    };
-                for i in 0..$n {
-                    xs[i] = if f(xs[i], ys[i], zs[i]) { <$t>::ONES } else { <$t>::ZERO };
+            fn xfilter3<F: FnMut(L, L, L) -> bool>(self, b: U, c: U, mut f: F) -> U {
+                let mut xs: [L; __lanes] = unsafe { transmute(self) };
+                let     ys: [L; __lanes] = unsafe { transmute(b)    };
+                let     zs: [L; __lanes] = unsafe { transmute(c)    };
+                for i in 0..__lanes {
+                    xs[i] = if f(xs[i], ys[i], zs[i]) { <L>::ONES } else { <L>::ZERO };
                 }
                 unsafe { transmute(xs) }
             }
             #[inline]
-            fn xfold3<A, F: FnMut(A, $t, $t, $t) -> A>(self, b: $u, c: $u, mut f: F, mut a: A) -> A {
-                let xs: [$t; $n] = unsafe { transmute(self) };
-                let ys: [$t; $n] = unsafe { transmute(b)    };
-                let zs: [$t; $n] = unsafe { transmute(c)    };
-                for i in 0..$n {
+            fn xfold3<A, F: FnMut(A, L, L, L) -> A>(self, b: U, c: U, mut f: F, mut a: A) -> A {
+                let xs: [L; __lanes] = unsafe { transmute(self) };
+                let ys: [L; __lanes] = unsafe { transmute(b)    };
+                let zs: [L; __lanes] = unsafe { transmute(c)    };
+                for i in 0..__lanes {
                     a = f(a, xs[i], ys[i], zs[i]);
                 }
                 a
             }
         }
-    };
-    ($u:ty => $t:ty) => {
-        impl Lanes<$t> for $u {
+    }
+
+    __if(!__has_lanes) {
+        impl Lanes<L> for U {
             #[inline]
-            fn xmap<F: FnMut($t) -> $t>(self, mut f: F) -> Self {
+            fn xmap<F: FnMut(L) -> L>(self, mut f: F) -> Self {
                 f(self)
             }
 
             #[inline]
-            fn xfilter<F: FnMut($t) -> bool>(self, mut f: F) -> Self {
-                if f(self) { <$t>::ONES } else { <$t>::ZERO }
+            fn xfilter<F: FnMut(L) -> bool>(self, mut f: F) -> Self {
+                if f(self) { <L>::ONES } else { <L>::ZERO }
             }
 
             #[inline]
-            fn xfold<A, F: FnMut(A, $t) -> A>(self, mut f: F, a: A) -> A {
+            fn xfold<A, F: FnMut(A, L) -> A>(self, mut f: F, a: A) -> A {
                 f(a, self)
             }
 
             #[inline]
-            fn xmap2<F: FnMut($t, $t) -> $t>(self, b: $u, mut f: F) -> Self {
+            fn xmap2<F: FnMut(L, L) -> L>(self, b: U, mut f: F) -> Self {
                 f(self, b)
             }
             #[inline]
-            fn xfilter2<F: FnMut($t, $t) -> bool>(self, b: $u, mut f: F) -> Self {
-                if f(self, b) { <$t>::ONES } else { <$t>::ZERO }
+            fn xfilter2<F: FnMut(L, L) -> bool>(self, b: U, mut f: F) -> Self {
+                if f(self, b) { <L>::ONES } else { <L>::ZERO }
             }
             #[inline]
-            fn xfold2<A, F: FnMut(A, $t, $t) -> A>(self, b: $u, mut f: F, a: A) -> A {
+            fn xfold2<A, F: FnMut(A, L, L) -> A>(self, b: U, mut f: F, a: A) -> A {
                 f(a, self, b)
             }
 
             #[inline]
-            fn xmap3<F: FnMut($t, $t, $t) -> $t>(self, b: $u, c: $u, mut f: F) -> Self {
+            fn xmap3<F: FnMut(L, L, L) -> L>(self, b: U, c: U, mut f: F) -> Self {
                 f(self, b, c)
             }
             #[inline]
-            fn xfilter3<F: FnMut($t, $t, $t) -> bool>(self, b: $u, c: $u, mut f: F) -> Self {
-                if f(self, b, c) { <$t>::ONES } else { <$t>::ZERO }
+            fn xfilter3<F: FnMut(L, L, L) -> bool>(self, b: U, c: U, mut f: F) -> Self {
+                if f(self, b, c) { <L>::ONES } else { <L>::ZERO }
             }
             #[inline]
-            fn xfold3<A, F: FnMut(A, $t, $t, $t) -> A>(self, b: $u, c: $u, mut f: F, a: A) -> A {
+            fn xfold3<A, F: FnMut(A, L, L, L) -> A>(self, b: U, c: U, mut f: F, a: A) -> A {
                 f(a, self, b, c)
             }
         }
-    };
+    }
 }
-
-lanes_impl! { u8 => u8 }
-
-lanes_impl! { u16 => u8;2 }
-lanes_impl! { u16 => u16  }
-
-lanes_impl! { u32 => u8;4  }
-lanes_impl! { u32 => u16;2 }
-lanes_impl! { u32 => u32   }
-
-lanes_impl! { u64 => u8;8  }
-lanes_impl! { u64 => u16;4 }
-lanes_impl! { u64 => u32;2 }
-lanes_impl! { u64 => u64   }
-
-lanes_impl! { u128 => u8;16 }
-lanes_impl! { u128 => u16;8 }
-lanes_impl! { u128 => u32;4 }
-lanes_impl! { u128 => u64;2 }
-lanes_impl! { u128 => u128  }
-
-lanes_impl! { [u32;8]  => u8;32   }
-lanes_impl! { [u32;8]  => u16;16  }
-lanes_impl! { [u32;8]  => u32;8   }
-lanes_impl! { [u32;8]  => u64;4   }
-lanes_impl! { [u32;8]  => u128;2  }
-lanes_impl! { [u32;8]  => [u32;8] }
-
-lanes_impl! { [u32;16] => u8;64     }
-lanes_impl! { [u32;16] => u16;32    }
-lanes_impl! { [u32;16] => u32;16    }
-lanes_impl! { [u32;16] => u64;8     }
-lanes_impl! { [u32;16] => u128;4    }
-lanes_impl! { [u32;16] => [u32;8];2 }
-lanes_impl! { [u32;16] => [u32;16]  }
 
 
 /// Primitive implementation of VM operations
@@ -518,15 +473,15 @@ trait Vop: Eq {
     fn vrotr(self, b: Self) -> Self;
 }
 
-macro_rules! vop_impl {
-    ($t:ident{$i:ty}) => {
-        impl Vop for $t {
+engine_for_t! {
+    __if(!__has_lanes && __has_prim) {
+        impl Vop for U {
             fn vlt_u(self, other: Self) -> bool {
                 self < other
             }
 
             fn vlt_s(self, other: Self) -> bool {
-                (self as $i) < (other as $i)
+                (self as __prim_i) < (other as __prim_i)
             }
 
             fn vgt_u(self, other: Self) -> bool {
@@ -534,7 +489,7 @@ macro_rules! vop_impl {
             }
 
             fn vgt_s(self, other: Self) -> bool {
-                (self as $i) > (other as $i)
+                (self as __prim_i) > (other as __prim_i)
             }
 
             fn vle_u(self, other: Self) -> bool {
@@ -542,7 +497,7 @@ macro_rules! vop_impl {
             }
 
             fn vle_s(self, other: Self) -> bool {
-                (self as $i) <= (other as $i)
+                (self as __prim_i) <= (other as __prim_i)
             }
 
             fn vge_u(self, other: Self) -> bool {
@@ -550,7 +505,7 @@ macro_rules! vop_impl {
             }
 
             fn vge_s(self, other: Self) -> bool {
-                (self as $i) >= (other as $i)
+                (self as __prim_i) >= (other as __prim_i)
             }
 
             fn vmin_u(self, other: Self) -> Self {
@@ -558,7 +513,7 @@ macro_rules! vop_impl {
             }
 
             fn vmin_s(self, other: Self) -> Self {
-                min((self as $i), (other as $i)) as $t
+                min(self as __prim_i, other as __prim_i) as __prim_t
             }
 
             fn vmax_u(self, other: Self) -> Self {
@@ -566,15 +521,15 @@ macro_rules! vop_impl {
             }
 
             fn vmax_s(self, other: Self) -> Self {
-                max((self as $i), (other as $i)) as $t
+                max(self as __prim_i, other as __prim_i) as __prim_t
             }
 
             fn vneg(self) -> Self {
-                (-(self as $i)) as $t
+                (-(self as __prim_i)) as __prim_t
             }
 
             fn vabs(self) -> Self {
-                (self as $i).abs() as $t
+                (self as __prim_i).abs() as __prim_t
             }
 
             fn vnot(self) -> Self {
@@ -582,15 +537,15 @@ macro_rules! vop_impl {
             }
 
             fn vclz(self) -> Self {
-                self.leading_zeros() as $t
+                self.leading_zeros() as __prim_t
             }
 
             fn vctz(self) -> Self {
-                self.trailing_zeros() as $t
+                self.trailing_zeros() as __prim_t
             }
 
             fn vpopcnt(self) -> Self {
-                self.count_ones() as $t
+                self.count_ones() as __prim_t
             }
 
             fn vadd(self, other: Self) -> Self {
@@ -630,7 +585,7 @@ macro_rules! vop_impl {
             }
 
             fn vshr_s(self, other: Self) -> Self {
-                (self as $i).wrapping_shr(other as u32) as $t
+                (self as __prim_i).wrapping_shr(other as u32) as __prim_t
             }
 
             fn vrotl(self, other: Self) -> Self {
@@ -641,14 +596,13 @@ macro_rules! vop_impl {
                 self.rotate_right(other as u32)
             }
         }
-    };
-    ([$t:ty{$i:ty,$tt:ty}; $n:expr]) => {
-        #[allow(unused_variables)]
-        #[allow(unused_mut)]
-        impl Vop for [$t;$n] {
+    }
+
+    __if(!__has_lanes && __has_limbs) {
+        impl Vop for U {
             fn vlt_u(self, other: Self) -> bool {
                 let mut lt = false;
-                for i in 0..$n {
+                for i in 0..__limbs {
                     lt = match self[i].cmp(&other[i]) {
                         Ordering::Less    => true,
                         Ordering::Greater => false,
@@ -661,7 +615,7 @@ macro_rules! vop_impl {
             fn vlt_s(self, other: Self) -> bool {
                 let lt = self.vlt_u(other);
                 // the only difference from lt_u is when sign-bits mismatch
-                match ((self[$n-1] as $i) < 0, (other[$n-1] as $i) < 0) {
+                match ((self[__limbs-1] as __limb_i) < 0, (other[__limbs-1] as __limb_i) < 0) {
                     (true, false) => true,
                     (false, true) => false,
                     _             => lt
@@ -670,7 +624,7 @@ macro_rules! vop_impl {
 
             fn vgt_u(self, other: Self) -> bool {
                 let mut gt = false;
-                for i in 0..$n {
+                for i in 0..__limbs {
                     gt = match self[i].cmp(&other[i]) {
                         Ordering::Less    => false,
                         Ordering::Greater => true,
@@ -683,7 +637,7 @@ macro_rules! vop_impl {
             fn vgt_s(self, other: Self) -> bool {
                 let gt = self.vgt_u(other);
                 // the only difference from gt_u is when sign-bits mismatch
-                match ((self[$n-1] as $i) < 0, (other[$n-1] as $i) < 0) {
+                match ((self[__limbs-1] as __limb_i) < 0, (other[__limbs-1] as __limb_i) < 0) {
                     (true, false) => false,
                     (false, true) => true,
                     _             => gt
@@ -739,13 +693,13 @@ macro_rules! vop_impl {
             }
 
             fn vneg(self) -> Self {
-                let zero = [0; $n];
+                let zero = [0; __limbs];
                 zero.vsub(self)
             }
 
             fn vabs(self) -> Self {
                 let neg = self.vneg();
-                if (self[$n-1] as $i) < 0 {
+                if (self[__limbs-1] as __limb_i) < 0 {
                     neg
                 } else {
                     self
@@ -753,7 +707,7 @@ macro_rules! vop_impl {
             }
 
             fn vnot(mut self) -> Self {
-                for i in 0..$n {
+                for i in 0..__limbs {
                     self[i] = !self[i];
                 }
                 self
@@ -761,7 +715,7 @@ macro_rules! vop_impl {
 
             fn vclz(self) -> Self {
                 let mut sum = 0;
-                for i in 0..$n {
+                for i in 0..__limbs {
                     sum = if self[i] == 0 { sum } else { 0 }
                         + self[i].leading_zeros();
                 }
@@ -771,7 +725,7 @@ macro_rules! vop_impl {
             fn vctz(self) -> Self {
                 let mut sum = 0;
                 let mut done = false;
-                for i in 0..$n {
+                for i in 0..__limbs {
                     sum += if !done { self[i].trailing_zeros() } else { 0 };
                     done |= self[i] == 0;
                 }
@@ -780,7 +734,7 @@ macro_rules! vop_impl {
 
             fn vpopcnt(self) -> Self {
                 let mut sum = 0;
-                for i in 0..$n {
+                for i in 0..__limbs {
                     sum += self[i].count_ones();
                 }
                 Self::wrapping_from_u32(sum)
@@ -788,9 +742,9 @@ macro_rules! vop_impl {
 
             fn vadd(mut self, other: Self) -> Self {
                 let mut overflow = false;
-                for i in 0..$n {
+                for i in 0..__limbs {
                     let (v, o1) = self[i].overflowing_add(other[i]);
-                    let (v, o2) = v.overflowing_add(<$t>::from(overflow));
+                    let (v, o2) = v.overflowing_add(<__limb_t>::from(overflow));
                     self[i] = v;
                     overflow = o1 || o2;
                 }
@@ -799,9 +753,9 @@ macro_rules! vop_impl {
 
             fn vsub(mut self, other: Self) -> Self {
                 let mut overflow = false;
-                for i in 0..$n {
+                for i in 0..__limbs {
                     let (v, o1) = self[i].overflowing_sub(other[i]);
-                    let (v, o2) = v.overflowing_sub(<$t>::from(overflow));
+                    let (v, o2) = v.overflowing_sub(<__limb_t>::from(overflow));
                     self[i] = v;
                     overflow = o1 || o2;
                 }
@@ -811,16 +765,16 @@ macro_rules! vop_impl {
             fn vmul(self, other: Self) -> Self {
                 // simple long multiplication based on wikipedia
                 // https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication
-                let mut words = [0; $n];
-                for i in 0..$n {
-                    let mut overflow: $tt = 0;
-                    for j in 0..$n {
-                        if i+j < $n {
-                            let v = <$tt>::from(words[i+j])
-                                + (<$tt>::from(self[i]) * <$tt>::from(other[j]))
+                let mut words = [0; __limbs];
+                for i in 0..__limbs {
+                    let mut overflow: __limb2_t = 0;
+                    for j in 0..__limbs {
+                        if i+j < __limbs {
+                            let v = <__limb2_t>::from(words[i+j])
+                                + (<__limb2_t>::from(self[i]) * <__limb2_t>::from(other[j]))
                                 + overflow;
-                            words[i+j] = v as $t;
-                            overflow = v >> (8*size_of::<$t>());
+                            words[i+j] = v as __limb_t;
+                            overflow = v >> (8*__limb_size);
                         }
                     }
                 }
@@ -828,41 +782,41 @@ macro_rules! vop_impl {
             }
 
             fn vand(mut self, other: Self) -> Self {
-                for i in 0..$n {
+                for i in 0..__limbs {
                     self[i] = self[i] & other[i];
                 }
                 self
             }
 
             fn vandnot(mut self, other: Self) -> Self {
-                for i in 0..$n {
+                for i in 0..__limbs {
                     self[i] = self[i] & !other[i];
                 }
                 self
             }
 
             fn vor(mut self, other: Self) -> Self {
-                for i in 0..$n {
+                for i in 0..__limbs {
                     self[i] = self[i] | other[i];
                 }
                 self
             }
 
             fn vxor(mut self, other: Self) -> Self {
-                for i in 0..$n {
+                for i in 0..__limbs {
                     self[i] = self[i] ^ other[i];
                 }
                 self
             }
 
             fn vshl(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                let width = 8*size_of::<$t>() as u32;
+                let b = other.wrapping_into_u32() % (8*__size as u32);
+                let width = 8*__limb_size as u32;
                 let sh_lo = b % width;
                 let sh_hi = (b / width) as usize;
 
-                let mut words = [0; $n];
-                for i in 0..$n {
+                let mut words = [0; __limbs];
+                for i in 0..__limbs {
                     words[i]
                         = (i.checked_sub(sh_hi)
                             .and_then(|j| self.get(j))
@@ -879,13 +833,13 @@ macro_rules! vop_impl {
             }
 
             fn vshr_u(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                let width = 8*size_of::<$t>() as u32;
+                let b = other.wrapping_into_u32() % (8*__size as u32);
+                let width = 8*__limb_size as u32;
                 let sh_lo = b % width;
                 let sh_hi = (b / width) as usize;
 
-                let mut words = [0; $n];
-                for i in 0..$n {
+                let mut words = [0; __limbs];
+                for i in 0..__limbs {
                     words[i]
                         = (i.checked_add(sh_hi)
                             .and_then(|j| self.get(j))
@@ -902,19 +856,19 @@ macro_rules! vop_impl {
             }
 
             fn vshr_s(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                let width = 8*size_of::<$t>() as u32;
+                let b = other.wrapping_into_u32() % (8*__size as u32);
+                let width = 8*__limb_size as u32;
                 let sh_lo = b % width;
                 let sh_hi = (b / width) as usize;
-                let sig = if (self[$n-1] as $i) < 0 { 0 } else { <$t>::MAX };
+                let sig = if (self[__limbs-1] as __limb_i) < 0 { 0 } else { <__limb_t>::MAX };
 
-                let mut words = [0; $n];
-                for i in 0..$n {
+                let mut words = [0; __limbs];
+                for i in 0..__limbs {
                     words[i]
                         = (((*i.checked_add(sh_hi)
                             .and_then(|j| self.get(j))
                             .unwrap_or(&sig)
-                            as $i) >> sh_lo) as $t)
+                            as __limb_i) >> sh_lo) as __limb_t)
                         | (i.checked_add(sh_hi+1)
                             .and_then(|j| self.get(j))
                             .unwrap_or(&sig)
@@ -926,51 +880,43 @@ macro_rules! vop_impl {
             }
 
             fn vrotl(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                let width = 8*size_of::<$t>() as u32;
+                let b = other.wrapping_into_u32() % (8*__size as u32);
+                let width = 8*__limb_size as u32;
                 let sh_lo = b % width;
                 let sh_hi = (b / width) as usize;
 
-                let mut words = [0; $n];
-                for i in 0..$n {
+                let mut words = [0; __limbs];
+                for i in 0..__limbs {
                     words[i]
-                        = (self[i.wrapping_sub(sh_hi  ) % $n]
+                        = (self[i.wrapping_sub(sh_hi  ) % __limbs]
                             << sh_lo)
-                        | (self[i.wrapping_sub(sh_hi+1) % $n]
+                        | (self[i.wrapping_sub(sh_hi+1) % __limbs]
                             .checked_shr(width - sh_lo).unwrap_or(0));
                 }
 
                 words
             }
 
-            fn vrotr(mut self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*size_of::<[$t;$n]>() as u32);
-                let width = 8*size_of::<$t>() as u32;
+            fn vrotr(self, other: Self) -> Self {
+                let b = other.wrapping_into_u32() % (8*__size as u32);
+                let width = 8*__limb_size as u32;
                 let sh_lo = b % width;
                 let sh_hi = (b / width) as usize;
 
-                let mut words = [0; $n];
-                for i in 0..$n {
+                let mut words = [0; __limbs];
+                for i in 0..__limbs {
                     words[i]
-                        = (self[i.wrapping_add(sh_hi) % $n]
+                        = (self[i.wrapping_add(sh_hi) % __limbs]
                             >> sh_lo)
-                        | (self[i.wrapping_add(sh_hi+1) % $n]
+                        | (self[i.wrapping_add(sh_hi+1) % __limbs]
                             .checked_shl(width - sh_lo).unwrap_or(0));
                 }
 
                 words
             }
         }
-    };
+    }
 }
-
-vop_impl! { u8{i8}            }
-vop_impl! { u16{i16}          }
-vop_impl! { u32{i32}          }
-vop_impl! { u64{i64}          }
-vop_impl! { u128{i128}        }
-vop_impl! { [u32{i32,u64};8]  }
-vop_impl! { [u32{i32,u64};16] }
 
 
 /// Wrapper for handling different type access to state
@@ -1072,456 +1018,6 @@ impl<'a> State<'a> {
 }
 
 
-//// Execution rules go! ////
-
-// I wish there was a better way to build these but oh well
-
-macro_rules! ex {
-    //// arg/ret instructions ////
-
-    // arg (convert to ne)
-    (|$s:ident| arg $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.from_le();
-    }};
-
-    // ret (convert from ne and exit)
-    (|$s:ident| ret $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.to_le();
-        return $s.ret(size_of::<$t>());
-    }};
-
-    //// special instructions ////
-
-    // extract (le)
-    (|$s:ident| extract $i:expr, $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let b = $s.reg::<$u>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.extract(u32::from($i)).unwrap();
-    }};
-
-    // replace (le)
-    (|$s:ident| replace $i:expr, $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$u>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.replace(u32::from($i), *b).unwrap();
-    }};
-
-    // select
-    (|$s:ident| select $p:ident, $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let p = $s.reg::<$t>($p)?;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = p.xmap3(*a, *b, |x: $u, y: $u, z: $u| {
-            if x != <$u>::ZERO {
-                y
-            } else {
-                z
-            }
-        });
-    }};
-
-    // shuffle
-    (|$s:ident| shuffle $p:ident, $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let p = $s.reg::<$t>($p)?;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        let mut i  = 0;
-        *$s.reg_mut::<$t>($a)? = a.xfold2(*b, |r, x: $u, y: $u| {
-            let r = p.xmap2(r, |w: $u, z: $u| {
-                let j = w.try_into_u32().unwrap_or(u32::MAX);
-                if j == i {
-                    x
-                } else if j == i+$n {
-                    y
-                } else {
-                    z
-                }
-            });
-            i += 1;
-            r
-        }, <$t>::ZERO);
-    }};
-
-
-    //// conversion instructions ////
-
-    // extend_const_u
-    (|$s:ident, $bytecode:ident| extend_const_u $a:ident: $t:ty, $pc:ident: $u:ty) => {{
-        // align to u32
-        const WORDS: usize = (size_of::<$u>()+3) / 4;
-
-        // we need to check the bounds on this
-        if unsafe { $bytecode.as_ptr_range().end.offset_from($pc) } < WORDS as isize {
-            Err(Error::OutOfBounds)?;
-        }
-
-        // load from instruction stream
-        let mut bytes = [0u8; 4*WORDS];
-        for i in 0..WORDS {
-            let word = unsafe { *$pc };
-            $pc = unsafe { $pc.add(1) };
-            bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
-        }
-        let b = <$u>::from_le_bytes(
-            <[u8;size_of::<$u>()]>::try_from(&bytes[..size_of::<$u>()]).unwrap()
-        );
-
-        // cast if needed
-        *$s.reg_mut::<$t>($a)? = <$t>::extend_u(b);
-    }};
-
-    // extend_const_s
-    (|$s:ident, $bytecode:ident| extend_const_s $a:ident: $t:ty, $pc:ident: $u:ty) => {{
-        // align to u32
-        const WORDS: usize = (size_of::<$u>()+3) / 4;
-
-        // we need to check the bounds on this
-        if unsafe { $bytecode.as_ptr_range().end.offset_from($pc) } < WORDS as isize {
-            Err(Error::OutOfBounds)?;
-        }
-
-        // load from instruction stream
-        let mut bytes = [0u8; 4*WORDS];
-        for i in 0..WORDS {
-            let word = unsafe { *$pc };
-            $pc = unsafe { $pc.add(1) };
-            bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
-        }
-        let b = <$u>::from_le_bytes(
-            <[u8;size_of::<$u>()]>::try_from(&bytes[..size_of::<$u>()]).unwrap()
-        );
-
-        // cast if needed
-        *$s.reg_mut::<$t>($a)? = <$t>::extend_s(b);
-    }};
-
-    // splat_const
-    (|$s:ident, $bytecode:ident| splat_const $a:ident: $t:ty, $pc:ident: $u:ty) => {{
-        // align to u32
-        const WORDS: usize = (size_of::<$u>()+3) / 4;
-
-        // we need to check the bounds on this
-        if unsafe { $bytecode.as_ptr_range().end.offset_from($pc) } < WORDS as isize {
-            Err(Error::OutOfBounds)?;
-        }
-
-        // load from instruction stream
-        let mut bytes = [0u8; 4*WORDS];
-        for i in 0..WORDS {
-            let word = unsafe { *$pc };
-            $pc = unsafe { $pc.add(1) };
-            bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
-        }
-        let b = <$u>::from_le_bytes(
-            <[u8;size_of::<$u>()]>::try_from(&bytes[..size_of::<$u>()]).unwrap()
-        );
-
-        // cast if needed
-        *$s.reg_mut::<$t>($a)? = <$t>::splat(b);
-    }};
-
-    // extend_u
-    (|$s:ident| extend_u $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let b = $s.reg::<$u>($b)?;
-        *$s.reg_mut::<$t>($a)? = <$t>::extend_u(*b);
-    }};
-
-    // extend_s
-    (|$s:ident| extend_s $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let b = $s.reg::<$u>($b)?;
-        *$s.reg_mut::<$t>($a)? = <$t>::extend_s(*b);
-    }};
-
-    // splat
-    (|$s:ident| splat $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let b = $s.reg::<$u>($b)?;
-        *$s.reg_mut::<$t>($a)? = <$t>::splat(*b);
-    }};
-
-    // splat_c
-    (|$s:ident| splat_c $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        *$s.reg_mut::<$t>($a)? = <$t>::splat(<$u>::extend_s($b));
-    }};
-
-
-    //// comparison instructions ////
-
-    // none
-    (|$s:ident| none $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let b = $s.reg::<$t>($b)?;
-        // note these apply to whole word!
-        *$s.reg_mut::<$t>($a)? = b.xfilter(|x: $t| x == <$t>::ZERO);
-    }};
-
-    // all
-    (|$s:ident| all $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.xfilter(|x: $t| {
-            x.xfold(|p, x: $u| p && x != <$u>::ZERO, true)
-        });
-    }};
-
-    // eq
-    (|$s:ident| eq $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x == y);
-    }};
-
-    // ne
-    (|$s:ident| ne $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x != y);
-    }};
-
-    // lt_u
-    (|$s:ident| lt_u $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vlt_u(y));
-    }};
-
-    // lt_s
-    (|$s:ident| lt_s $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vlt_s(y));
-    }};
-
-    // gt_u
-    (|$s:ident| gt_u $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vgt_u(y));
-    }};
-
-    // gt_s
-    (|$s:ident| gt_s $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vgt_s(y));
-    }};
-
-    // le_u
-    (|$s:ident| le_u $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vle_u(y));
-    }};
-
-    // le_s
-    (|$s:ident| le_s $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vle_s(y));
-    }};
-
-    // ge_u
-    (|$s:ident| ge_u $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vge_u(y));
-    }};
-
-    // ge_s
-    (|$s:ident| ge_s $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xfilter2(*b, |x: $u, y: $u| x.vge_s(y));
-    }};
-
-    // min_u
-    (|$s:ident| min_u $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vmin_u(y));
-    }};
-
-    // min_s
-    (|$s:ident| min_s $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vmin_s(y));
-    }};
-
-    // max_u
-    (|$s:ident| max_u $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vmax_u(y));
-    }};
-
-    // max_s
-    (|$s:ident| max_s $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vmax_s(y));
-    }};
-
-
-    //// integer instructions ////
-
-    // neg
-    (|$s:ident| neg $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.xmap(|x: $u| x.vneg());
-    }};
-
-    // abs
-    (|$s:ident| abs $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.xmap(|x: $u| x.vabs());
-    }};
-
-    // not
-    (|$s:ident| not $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.vnot();
-    }};
-
-    // clz
-    (|$s:ident| clz $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.xmap(|x: $u| x.vclz());
-    }};
-
-    // ctz
-    (|$s:ident| ctz $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.xmap(|x: $u| x.vctz());
-    }};
-
-    // popcnt
-    (|$s:ident| popcnt $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = b.xmap(|x: $u| x.vpopcnt());
-    }};
-
-    // add
-    (|$s:ident| add $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vadd(y));
-    }};
-
-    // sub
-    (|$s:ident| sub $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vsub(y));
-    }};
-
-    // mul
-    (|$s:ident| mul $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vmul(y));
-    }};
-
-    // and
-    (|$s:ident| and $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.vand(*b);
-    }};
-
-    // andnot
-    (|$s:ident| andnot $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.vandnot(*b);
-    }};
-
-    // or
-    (|$s:ident| or $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.vor(*b);
-    }};
-
-    // xor
-    (|$s:ident| xor $a:ident: $t:ty, $b:ident: $u:ty) => {{
-        let _ = transmute::<$t, $u>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.vxor(*b);
-    }};
-
-    // shl
-    (|$s:ident| shl $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vshl(y));
-    }};
-
-    // shr_u
-    (|$s:ident| shr_u $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vshr_u(y));
-    }};
-
-    // shr_s
-    (|$s:ident| shr_s $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vshr_s(y));
-    }};
-
-    // rotl
-    (|$s:ident| rotl $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vrotl(y));
-    }};
-
-    // rotr
-    (|$s:ident| rotr $a:ident: $t:ty, $b:ident: $u:ty;$n:expr) => {{
-        let _ = transmute::<$t, [$u;$n]>;
-        let a = $s.reg::<$t>($a)?;
-        let b = $s.reg::<$t>($b)?;
-        *$s.reg_mut::<$t>($a)? = a.xmap2(*b, |x: $u, y: $u| x.vrotr(y));
-    }};
-}
-
 #[cfg(feature="debug-cycle-count")]
 thread_local! {
     static CYCLE_COUNT: Cell<u64> = Cell::new(0);
@@ -1578,1509 +1074,424 @@ pub fn exec<'a>(
         let npw2  = ((ins & 0xe0000000) >> 29) as u8;
         let lnpw2 = ((ins & 0x1c000000) >> 26) as u8;
         let opc   = ((ins & 0x03ff0000) >> 16) as u16;
-        let p     = ((ins & 0x00ff0000) >> 16) as u8;
+        let rp    = ((ins & 0x00ff0000) >> 16) as u8;
         let l     = ((ins & 0x007f0000) >> 16) as u8;
-        let a     = ((ins & 0x0000ff00) >>  8) as u8;
-        let b     = ((ins & 0x000000ff) >>  0) as u8;
+        let ra    = ((ins & 0x0000ff00) >>  8) as u8;
+        let rb    = ((ins & 0x000000ff) >>  0) as u8;
 
-        match (npw2, lnpw2, opc) {
+        // engine_match sort of breaks macro hygiene, this was much easier than
+        // proper scoping and engine_match is really only intended to be used here
+        //
+        // aside from relying on opc, engine_match also introduces
+        // - U: type of word
+        // - L: type of lane
+        engine_match! {
             //// arg/ret instructions ////
 
             // arg (convert to ne)
-            (0, 0, 0x001) => ex!{|s| arg a: u8,       b: u8       },
-            (1, 0, 0x001) => ex!{|s| arg a: u16,      b: u16      },
-            (2, 0, 0x001) => ex!{|s| arg a: u32,      b: u32      },
-            (3, 0, 0x001) => ex!{|s| arg a: u64,      b: u64      },
-            (4, 0, 0x001) => ex!{|s| arg a: u128,     b: u128     },
-            (5, 0, 0x001) => ex!{|s| arg a: [u32;8],  b: [u32;8]  },
-            (6, 0, 0x001) => ex!{|s| arg a: [u32;16], b: [u32;16] },
+            0x001 if lnpw2 == 0 => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.from_le();
+            }
 
             // ret (convert from ne and exit)
-            (0, 0, 0x002) => ex!{|s| ret a: u8,       b: u8       },
-            (1, 0, 0x002) => ex!{|s| ret a: u16,      b: u16      },
-            (2, 0, 0x002) => ex!{|s| ret a: u32,      b: u32      },
-            (3, 0, 0x002) => ex!{|s| ret a: u64,      b: u64      },
-            (4, 0, 0x002) => ex!{|s| ret a: u128,     b: u128     },
-            (5, 0, 0x002) => ex!{|s| ret a: [u32;8],  b: [u32;8]  },
-            (6, 0, 0x002) => ex!{|s| ret a: [u32;16], b: [u32;16] },
+            0x002 if lnpw2 == 0 => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.to_le();
+                return s.ret(size_of::<U>());
+            }
 
 
             //// special instructions ////
 
-            // extract
-            (0, 0, 0x100..=0x100) => ex!{|s| extract l, a: u8,       b: u8       },
+            // extract (le)
+            0x100..=0x13f => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<L>(ra)? = b.extract(u32::from(l)).unwrap();
+            }
 
-            (1, 0, 0x100..=0x100) => ex!{|s| extract l, a: u16,      b: u16      },
-            (1, 1, 0x100..=0x101) => ex!{|s| extract l, a: u8,       b: u16      },
-
-            (2, 0, 0x100..=0x100) => ex!{|s| extract l, a: u32,      b: u32      },
-            (2, 1, 0x100..=0x101) => ex!{|s| extract l, a: u16,      b: u32      },
-            (2, 2, 0x100..=0x103) => ex!{|s| extract l, a: u8,       b: u32      },
-
-            (3, 0, 0x100..=0x100) => ex!{|s| extract l, a: u64,      b: u64      },
-            (3, 1, 0x100..=0x101) => ex!{|s| extract l, a: u32,      b: u64      },
-            (3, 2, 0x100..=0x103) => ex!{|s| extract l, a: u16,      b: u64      },
-            (3, 3, 0x100..=0x107) => ex!{|s| extract l, a: u8,       b: u64      },
-
-            (4, 0, 0x100..=0x100) => ex!{|s| extract l, a: u128,     b: u128     },
-            (4, 1, 0x100..=0x101) => ex!{|s| extract l, a: u64,      b: u128     },
-            (4, 2, 0x100..=0x103) => ex!{|s| extract l, a: u32,      b: u128     },
-            (4, 3, 0x100..=0x107) => ex!{|s| extract l, a: u16,      b: u128     },
-            (4, 4, 0x100..=0x10f) => ex!{|s| extract l, a: u8,       b: u128     },
-
-            (5, 0, 0x100..=0x100) => ex!{|s| extract l, a: [u32;8],  b: [u32;8]  },
-            (5, 1, 0x100..=0x101) => ex!{|s| extract l, a: u128,     b: [u32;8]  },
-            (5, 2, 0x100..=0x103) => ex!{|s| extract l, a: u64,      b: [u32;8]  },
-            (5, 3, 0x100..=0x107) => ex!{|s| extract l, a: u32,      b: [u32;8]  },
-            (5, 4, 0x100..=0x10f) => ex!{|s| extract l, a: u16,      b: [u32;8]  },
-            (5, 5, 0x100..=0x11f) => ex!{|s| extract l, a: u8,       b: [u32;8]  },
-
-            (6, 0, 0x100..=0x100) => ex!{|s| extract l, a: [u32;16], b: [u32;16] },
-            (6, 1, 0x100..=0x101) => ex!{|s| extract l, a: [u32;8],  b: [u32;16] },
-            (6, 2, 0x100..=0x103) => ex!{|s| extract l, a: u128,     b: [u32;16] },
-            (6, 3, 0x100..=0x107) => ex!{|s| extract l, a: u64,      b: [u32;16] },
-            (6, 4, 0x100..=0x10f) => ex!{|s| extract l, a: u32,      b: [u32;16] },
-            (6, 5, 0x100..=0x11f) => ex!{|s| extract l, a: u16,      b: [u32;16] },
-            (6, 6, 0x100..=0x13f) => ex!{|s| extract l, a: u8,       b: [u32;16] },
-
-            // replace
-            (0, 0, 0x180..=0x180) => ex!{|s| replace l, a: u8,       b: u8       },
-
-            (1, 0, 0x180..=0x180) => ex!{|s| replace l, a: u16,      b: u16      },
-            (1, 1, 0x180..=0x181) => ex!{|s| replace l, a: u16,      b: u8       },
-
-            (2, 0, 0x180..=0x180) => ex!{|s| replace l, a: u32,      b: u32      },
-            (2, 1, 0x180..=0x181) => ex!{|s| replace l, a: u32,      b: u16      },
-            (2, 2, 0x180..=0x183) => ex!{|s| replace l, a: u32,      b: u8       },
-
-            (3, 0, 0x180..=0x180) => ex!{|s| replace l, a: u64,      b: u64      },
-            (3, 1, 0x180..=0x181) => ex!{|s| replace l, a: u64,      b: u32      },
-            (3, 2, 0x180..=0x183) => ex!{|s| replace l, a: u64,      b: u16      },
-            (3, 3, 0x180..=0x187) => ex!{|s| replace l, a: u64,      b: u8       },
-
-            (4, 0, 0x180..=0x180) => ex!{|s| replace l, a: u128,     b: u128     },
-            (4, 1, 0x180..=0x181) => ex!{|s| replace l, a: u128,     b: u64      },
-            (4, 2, 0x180..=0x183) => ex!{|s| replace l, a: u128,     b: u32      },
-            (4, 3, 0x180..=0x187) => ex!{|s| replace l, a: u128,     b: u16      },
-            (4, 4, 0x180..=0x18f) => ex!{|s| replace l, a: u128,     b: u8       },
-
-            (5, 0, 0x180..=0x180) => ex!{|s| replace l, a: [u32;8],  b: [u32;8]  },
-            (5, 1, 0x180..=0x181) => ex!{|s| replace l, a: [u32;8],  b: u128     },
-            (5, 2, 0x180..=0x183) => ex!{|s| replace l, a: [u32;8],  b: u64      },
-            (5, 3, 0x180..=0x187) => ex!{|s| replace l, a: [u32;8],  b: u32      },
-            (5, 4, 0x180..=0x18f) => ex!{|s| replace l, a: [u32;8],  b: u16      },
-            (5, 5, 0x180..=0x19f) => ex!{|s| replace l, a: [u32;8],  b: u8       },
-
-            (6, 0, 0x180..=0x180) => ex!{|s| replace l, a: [u32;16], b: [u32;16] },
-            (6, 1, 0x180..=0x181) => ex!{|s| replace l, a: [u32;16], b: [u32;8]  },
-            (6, 2, 0x180..=0x183) => ex!{|s| replace l, a: [u32;16], b: u128     },
-            (6, 3, 0x180..=0x187) => ex!{|s| replace l, a: [u32;16], b: u64      },
-            (6, 4, 0x180..=0x18f) => ex!{|s| replace l, a: [u32;16], b: u32      },
-            (6, 5, 0x180..=0x19f) => ex!{|s| replace l, a: [u32;16], b: u16      },
-            (6, 6, 0x180..=0x1bf) => ex!{|s| replace l, a: [u32;16], b: u8       },
+            // replace (le)
+            0x180..=0x1bf => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<L>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.replace(u32::from(l), *b).unwrap();
+            }
 
             // select
-            (0, 0, 0x200..=0x2ff) => ex!{|s| select p, a: u8,       b: u8;1       },
-
-            (1, 0, 0x200..=0x2ff) => ex!{|s| select p, a: u16,      b: u16;1      },
-            (1, 1, 0x200..=0x2ff) => ex!{|s| select p, a: u16,      b: u8;2       },
-
-            (2, 0, 0x200..=0x2ff) => ex!{|s| select p, a: u32,      b: u32;1      },
-            (2, 1, 0x200..=0x2ff) => ex!{|s| select p, a: u32,      b: u16;2      },
-            (2, 2, 0x200..=0x2ff) => ex!{|s| select p, a: u32,      b: u8;4       },
-
-            (3, 0, 0x200..=0x2ff) => ex!{|s| select p, a: u64,      b: u64;1      },
-            (3, 1, 0x200..=0x2ff) => ex!{|s| select p, a: u64,      b: u32;2      },
-            (3, 2, 0x200..=0x2ff) => ex!{|s| select p, a: u64,      b: u16;4      },
-            (3, 3, 0x200..=0x2ff) => ex!{|s| select p, a: u64,      b: u8;8       },
-
-            (4, 0, 0x200..=0x2ff) => ex!{|s| select p, a: u128,     b: u128;1     },
-            (4, 1, 0x200..=0x2ff) => ex!{|s| select p, a: u128,     b: u64;2      },
-            (4, 2, 0x200..=0x2ff) => ex!{|s| select p, a: u128,     b: u32;4      },
-            (4, 3, 0x200..=0x2ff) => ex!{|s| select p, a: u128,     b: u16;8      },
-            (4, 4, 0x200..=0x2ff) => ex!{|s| select p, a: u128,     b: u8;16      },
-
-            (5, 0, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u128;2     },
-            (5, 2, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u64;4      },
-            (5, 3, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u32;8      },
-            (5, 4, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u16;16     },
-            (5, 5, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u128;4     },
-            (6, 3, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u64;8      },
-            (6, 4, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u32;16     },
-            (6, 5, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u16;32     },
-            (6, 6, 0x200..=0x2ff) => ex!{|s| select p, a: [u32;16], b: u8;64      },
+            0x200..=0x2ff => {
+                let p = s.reg::<U>(rp)?;
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = p.xmap3(*a, *b, |x: L, y: L, z: L| {
+                    if x != <L>::ZERO {
+                        y
+                    } else {
+                        z
+                    }
+                });
+            }
 
             // shuffle
-            (0, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u8,       b: u8;1       },
-
-            (1, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u16,      b: u16;1      },
-            (1, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u16,      b: u8;2       },
-
-            (2, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u32,      b: u32;1      },
-            (2, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u32,      b: u16;2      },
-            (2, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u32,      b: u8;4       },
-
-            (3, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u64,      b: u64;1      },
-            (3, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u64,      b: u32;2      },
-            (3, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u64,      b: u16;4      },
-            (3, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u64,      b: u8;8       },
-
-            (4, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u128,     b: u128;1     },
-            (4, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u128,     b: u64;2      },
-            (4, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u128,     b: u32;4      },
-            (4, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u128,     b: u16;8      },
-            (4, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: u128,     b: u8;16      },
-
-            (5, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u128;2     },
-            (5, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u64;4      },
-            (5, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u32;8      },
-            (5, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u16;16     },
-            (5, 5, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u128;4     },
-            (6, 3, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u64;8      },
-            (6, 4, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u32;16     },
-            (6, 5, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u16;32     },
-            (6, 6, 0x300..=0x3ff) => ex!{|s| shuffle p, a: [u32;16], b: u8;64      },
+            0x300..=0x3ff => {
+                let p = s.reg::<U>(rp)?;
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                let mut i  = 0;
+                *s.reg_mut::<U>(ra)? = a.xfold2(*b, |r, x: L, y: L| {
+                    let r = p.xmap2(r, |w: L, z: L| {
+                        let j = w.try_into_u32().unwrap_or(u32::MAX);
+                        if j == i {
+                            x
+                        } else if j == i+(1<<__lnpw2) {
+                            y
+                        } else {
+                            z
+                        }
+                    });
+                    i += 1;
+                    r
+                }, <U>::ZERO);
+            }
 
 
             //// conversion instructions ////
 
             // extend_const_u
-            (0, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: u8,       pc: u8       },
+            0x003 => {
+                // align to u32
+                const WORDS: usize = (size_of::<L>()+3) / 4;
 
-            (1, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: u16,      pc: u16      },
-            (1, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: u16,      pc: u8       },
+                // we need to check the bounds on this
+                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
+                    Err(Error::OutOfBounds)?;
+                }
 
-            (2, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: u32,      pc: u32      },
-            (2, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: u32,      pc: u16      },
-            (2, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: u32,      pc: u8       },
+                // load from instruction stream
+                let mut bytes = [0u8; 4*WORDS];
+                for i in 0..WORDS {
+                    let word = unsafe { *pc };
+                    pc = unsafe { pc.add(1) };
+                    bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
+                }
+                let b = <L>::from_le_bytes(
+                    <[u8;size_of::<L>()]>::try_from(&bytes[..size_of::<L>()]).unwrap()
+                );
 
-            (3, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: u64,      pc: u64      },
-            (3, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: u64,      pc: u32      },
-            (3, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: u64,      pc: u16      },
-            (3, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: u64,      pc: u8       },
-
-            (4, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: u128,     pc: u128     },
-            (4, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: u128,     pc: u64      },
-            (4, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: u128,     pc: u32      },
-            (4, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: u128,     pc: u16      },
-            (4, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: u128,     pc: u8       },
-
-            (5, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: [u32;8]  },
-            (5, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u128     },
-            (5, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u64      },
-            (5, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u32      },
-            (5, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u16      },
-            (5, 5, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;8],  pc: u8       },
-
-            (6, 0, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: [u32;16] },
-            (6, 1, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: [u32;8]  },
-            (6, 2, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u128     },
-            (6, 3, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u64      },
-            (6, 4, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u32      },
-            (6, 5, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u16      },
-            (6, 6, 0x003) => ex!{|s, bytecode| extend_const_u a: [u32;16], pc: u8       },
+                // cast if needed
+                *s.reg_mut::<U>(ra)? = <U>::extend_u(b);
+            }
 
             // extend_const_s
-            (0, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: u8,       pc: u8       },
+            0x004 => {
+                // align to u32
+                const WORDS: usize = (size_of::<L>()+3) / 4;
 
-            (1, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: u16,      pc: u16      },
-            (1, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: u16,      pc: u8       },
+                // we need to check the bounds on this
+                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
+                    Err(Error::OutOfBounds)?;
+                }
 
-            (2, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: u32,      pc: u32      },
-            (2, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: u32,      pc: u16      },
-            (2, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: u32,      pc: u8       },
+                // load from instruction stream
+                let mut bytes = [0u8; 4*WORDS];
+                for i in 0..WORDS {
+                    let word = unsafe { *pc };
+                    pc = unsafe { pc.add(1) };
+                    bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
+                }
+                let b = <L>::from_le_bytes(
+                    <[u8;size_of::<L>()]>::try_from(&bytes[..size_of::<L>()]).unwrap()
+                );
 
-            (3, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: u64,      pc: u64      },
-            (3, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: u64,      pc: u32      },
-            (3, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: u64,      pc: u16      },
-            (3, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: u64,      pc: u8       },
-
-            (4, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: u128,     pc: u128     },
-            (4, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: u128,     pc: u64      },
-            (4, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: u128,     pc: u32      },
-            (4, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: u128,     pc: u16      },
-            (4, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: u128,     pc: u8       },
-
-            (5, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: [u32;8]  },
-            (5, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u128     },
-            (5, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u64      },
-            (5, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u32      },
-            (5, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u16      },
-            (5, 5, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;8],  pc: u8       },
-
-            (6, 0, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: [u32;16] },
-            (6, 1, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: [u32;8]  },
-            (6, 2, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u128     },
-            (6, 3, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u64      },
-            (6, 4, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u32      },
-            (6, 5, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u16      },
-            (6, 6, 0x004) => ex!{|s, bytecode| extend_const_s a: [u32;16], pc: u8       },
+                // cast if needed
+                *s.reg_mut::<U>(ra)? = <U>::extend_s(b);
+            }
 
             // splat_const
-            (0, 0, 0x005) => ex!{|s, bytecode| splat_const a: u8,       pc: u8       },
+            0x005 => {
+                // align to u32
+                const WORDS: usize = (size_of::<L>()+3) / 4;
 
-            (1, 0, 0x005) => ex!{|s, bytecode| splat_const a: u16,      pc: u16      },
-            (1, 1, 0x005) => ex!{|s, bytecode| splat_const a: u16,      pc: u8       },
+                // we need to check the bounds on this
+                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
+                    Err(Error::OutOfBounds)?;
+                }
 
-            (2, 0, 0x005) => ex!{|s, bytecode| splat_const a: u32,      pc: u32      },
-            (2, 1, 0x005) => ex!{|s, bytecode| splat_const a: u32,      pc: u16      },
-            (2, 2, 0x005) => ex!{|s, bytecode| splat_const a: u32,      pc: u8       },
+                // load from instruction stream
+                let mut bytes = [0u8; 4*WORDS];
+                for i in 0..WORDS {
+                    let word = unsafe { *pc };
+                    pc = unsafe { pc.add(1) };
+                    bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
+                }
+                let b = <L>::from_le_bytes(
+                    <[u8;size_of::<L>()]>::try_from(&bytes[..size_of::<L>()]).unwrap()
+                );
 
-            (3, 0, 0x005) => ex!{|s, bytecode| splat_const a: u64,      pc: u64      },
-            (3, 1, 0x005) => ex!{|s, bytecode| splat_const a: u64,      pc: u32      },
-            (3, 2, 0x005) => ex!{|s, bytecode| splat_const a: u64,      pc: u16      },
-            (3, 3, 0x005) => ex!{|s, bytecode| splat_const a: u64,      pc: u8       },
-
-            (4, 0, 0x005) => ex!{|s, bytecode| splat_const a: u128,     pc: u128     },
-            (4, 1, 0x005) => ex!{|s, bytecode| splat_const a: u128,     pc: u64      },
-            (4, 2, 0x005) => ex!{|s, bytecode| splat_const a: u128,     pc: u32      },
-            (4, 3, 0x005) => ex!{|s, bytecode| splat_const a: u128,     pc: u16      },
-            (4, 4, 0x005) => ex!{|s, bytecode| splat_const a: u128,     pc: u8       },
-
-            (5, 0, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: [u32;8]  },
-            (5, 1, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u128     },
-            (5, 2, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u64      },
-            (5, 3, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u32      },
-            (5, 4, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u16      },
-            (5, 5, 0x005) => ex!{|s, bytecode| splat_const a: [u32;8],  pc: u8       },
-
-            (6, 0, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: [u32;16] },
-            (6, 1, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: [u32;8]  },
-            (6, 2, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u128     },
-            (6, 3, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u64      },
-            (6, 4, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u32      },
-            (6, 5, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u16      },
-            (6, 6, 0x005) => ex!{|s, bytecode| splat_const a: [u32;16], pc: u8       },
+                // cast if needed
+                *s.reg_mut::<U>(ra)? = <U>::splat(b);
+            }
 
             // extend_u
-            (0, 0, 0x006) => ex!{|s| extend_u a: u8,       b: u8       },
-
-            (1, 0, 0x006) => ex!{|s| extend_u a: u16,      b: u16      },
-            (1, 1, 0x006) => ex!{|s| extend_u a: u16,      b: u8       },
-
-            (2, 0, 0x006) => ex!{|s| extend_u a: u32,      b: u32      },
-            (2, 1, 0x006) => ex!{|s| extend_u a: u32,      b: u16      },
-            (2, 2, 0x006) => ex!{|s| extend_u a: u32,      b: u8       },
-
-            (3, 0, 0x006) => ex!{|s| extend_u a: u64,      b: u64      },
-            (3, 1, 0x006) => ex!{|s| extend_u a: u64,      b: u32      },
-            (3, 2, 0x006) => ex!{|s| extend_u a: u64,      b: u16      },
-            (3, 3, 0x006) => ex!{|s| extend_u a: u64,      b: u8       },
-
-            (4, 0, 0x006) => ex!{|s| extend_u a: u128,     b: u128     },
-            (4, 1, 0x006) => ex!{|s| extend_u a: u128,     b: u64      },
-            (4, 2, 0x006) => ex!{|s| extend_u a: u128,     b: u32      },
-            (4, 3, 0x006) => ex!{|s| extend_u a: u128,     b: u16      },
-            (4, 4, 0x006) => ex!{|s| extend_u a: u128,     b: u8       },
-
-            (5, 0, 0x006) => ex!{|s| extend_u a: [u32;8],  b: [u32;8]  },
-            (5, 1, 0x006) => ex!{|s| extend_u a: [u32;8],  b: u128     },
-            (5, 2, 0x006) => ex!{|s| extend_u a: [u32;8],  b: u64      },
-            (5, 3, 0x006) => ex!{|s| extend_u a: [u32;8],  b: u32      },
-            (5, 4, 0x006) => ex!{|s| extend_u a: [u32;8],  b: u16      },
-            (5, 5, 0x006) => ex!{|s| extend_u a: [u32;8],  b: u8       },
-
-            (6, 0, 0x006) => ex!{|s| extend_u a: [u32;16], b: [u32;16] },
-            (6, 1, 0x006) => ex!{|s| extend_u a: [u32;16], b: [u32;8]  },
-            (6, 2, 0x006) => ex!{|s| extend_u a: [u32;16], b: u128     },
-            (6, 3, 0x006) => ex!{|s| extend_u a: [u32;16], b: u64      },
-            (6, 4, 0x006) => ex!{|s| extend_u a: [u32;16], b: u32      },
-            (6, 5, 0x006) => ex!{|s| extend_u a: [u32;16], b: u16      },
-            (6, 6, 0x006) => ex!{|s| extend_u a: [u32;16], b: u8       },
+            0x006 => {
+                let b = s.reg::<L>(rb)?;
+                *s.reg_mut::<U>(ra)? = <U>::extend_u(*b);
+            }
 
             // extend_s
-            (0, 0, 0x007) => ex!{|s| extend_s a: u8,       b: u8       },
-
-            (1, 0, 0x007) => ex!{|s| extend_s a: u16,      b: u16      },
-            (1, 1, 0x007) => ex!{|s| extend_s a: u16,      b: u8       },
-
-            (2, 0, 0x007) => ex!{|s| extend_s a: u32,      b: u32      },
-            (2, 1, 0x007) => ex!{|s| extend_s a: u32,      b: u16      },
-            (2, 2, 0x007) => ex!{|s| extend_s a: u32,      b: u8       },
-
-            (3, 0, 0x007) => ex!{|s| extend_s a: u64,      b: u64      },
-            (3, 1, 0x007) => ex!{|s| extend_s a: u64,      b: u32      },
-            (3, 2, 0x007) => ex!{|s| extend_s a: u64,      b: u16      },
-            (3, 3, 0x007) => ex!{|s| extend_s a: u64,      b: u8       },
-
-            (4, 0, 0x007) => ex!{|s| extend_s a: u128,     b: u128     },
-            (4, 1, 0x007) => ex!{|s| extend_s a: u128,     b: u64      },
-            (4, 2, 0x007) => ex!{|s| extend_s a: u128,     b: u32      },
-            (4, 3, 0x007) => ex!{|s| extend_s a: u128,     b: u16      },
-            (4, 4, 0x007) => ex!{|s| extend_s a: u128,     b: u8       },
-
-            (5, 0, 0x007) => ex!{|s| extend_s a: [u32;8],  b: [u32;8]  },
-            (5, 1, 0x007) => ex!{|s| extend_s a: [u32;8],  b: u128     },
-            (5, 2, 0x007) => ex!{|s| extend_s a: [u32;8],  b: u64      },
-            (5, 3, 0x007) => ex!{|s| extend_s a: [u32;8],  b: u32      },
-            (5, 4, 0x007) => ex!{|s| extend_s a: [u32;8],  b: u16      },
-            (5, 5, 0x007) => ex!{|s| extend_s a: [u32;8],  b: u8       },
-
-            (6, 0, 0x007) => ex!{|s| extend_s a: [u32;16], b: [u32;16] },
-            (6, 1, 0x007) => ex!{|s| extend_s a: [u32;16], b: [u32;8]  },
-            (6, 2, 0x007) => ex!{|s| extend_s a: [u32;16], b: u128     },
-            (6, 3, 0x007) => ex!{|s| extend_s a: [u32;16], b: u64      },
-            (6, 4, 0x007) => ex!{|s| extend_s a: [u32;16], b: u32      },
-            (6, 5, 0x007) => ex!{|s| extend_s a: [u32;16], b: u16      },
-            (6, 6, 0x007) => ex!{|s| extend_s a: [u32;16], b: u8       },
+            0x007 => {
+                let b = s.reg::<L>(rb)?;
+                *s.reg_mut::<U>(ra)? = <U>::extend_s(*b);
+            }
 
             // splat
-            (0, 0, 0x008) => ex!{|s| splat a: u8,       b: u8       },
-
-            (1, 0, 0x008) => ex!{|s| splat a: u16,      b: u16      },
-            (1, 1, 0x008) => ex!{|s| splat a: u16,      b: u8       },
-
-            (2, 0, 0x008) => ex!{|s| splat a: u32,      b: u32      },
-            (2, 1, 0x008) => ex!{|s| splat a: u32,      b: u16      },
-            (2, 2, 0x008) => ex!{|s| splat a: u32,      b: u8       },
-
-            (3, 0, 0x008) => ex!{|s| splat a: u64,      b: u64      },
-            (3, 1, 0x008) => ex!{|s| splat a: u64,      b: u32      },
-            (3, 2, 0x008) => ex!{|s| splat a: u64,      b: u16      },
-            (3, 3, 0x008) => ex!{|s| splat a: u64,      b: u8       },
-
-            (4, 0, 0x008) => ex!{|s| splat a: u128,     b: u128     },
-            (4, 1, 0x008) => ex!{|s| splat a: u128,     b: u64      },
-            (4, 2, 0x008) => ex!{|s| splat a: u128,     b: u32      },
-            (4, 3, 0x008) => ex!{|s| splat a: u128,     b: u16      },
-            (4, 4, 0x008) => ex!{|s| splat a: u128,     b: u8       },
-
-            (5, 0, 0x008) => ex!{|s| splat a: [u32;8],  b: [u32;8]  },
-            (5, 1, 0x008) => ex!{|s| splat a: [u32;8],  b: u128     },
-            (5, 2, 0x008) => ex!{|s| splat a: [u32;8],  b: u64      },
-            (5, 3, 0x008) => ex!{|s| splat a: [u32;8],  b: u32      },
-            (5, 4, 0x008) => ex!{|s| splat a: [u32;8],  b: u16      },
-            (5, 5, 0x008) => ex!{|s| splat a: [u32;8],  b: u8       },
-
-            (6, 0, 0x008) => ex!{|s| splat a: [u32;16], b: [u32;16] },
-            (6, 1, 0x008) => ex!{|s| splat a: [u32;16], b: [u32;8]  },
-            (6, 2, 0x008) => ex!{|s| splat a: [u32;16], b: u128     },
-            (6, 3, 0x008) => ex!{|s| splat a: [u32;16], b: u64      },
-            (6, 4, 0x008) => ex!{|s| splat a: [u32;16], b: u32      },
-            (6, 5, 0x008) => ex!{|s| splat a: [u32;16], b: u16      },
-            (6, 6, 0x008) => ex!{|s| splat a: [u32;16], b: u8       },
+            0x008 => {
+                let b = s.reg::<L>(rb)?;
+                *s.reg_mut::<U>(ra)? = <U>::splat(*b);
+            }
 
             // splat_c
-            (0, 0, 0x009) => ex!{|s| splat_c a: u8,       b: u8       },
-
-            (1, 0, 0x009) => ex!{|s| splat_c a: u16,      b: u16      },
-            (1, 1, 0x009) => ex!{|s| splat_c a: u16,      b: u8       },
-
-            (2, 0, 0x009) => ex!{|s| splat_c a: u32,      b: u32      },
-            (2, 1, 0x009) => ex!{|s| splat_c a: u32,      b: u16      },
-            (2, 2, 0x009) => ex!{|s| splat_c a: u32,      b: u8       },
-
-            (3, 0, 0x009) => ex!{|s| splat_c a: u64,      b: u64      },
-            (3, 1, 0x009) => ex!{|s| splat_c a: u64,      b: u32      },
-            (3, 2, 0x009) => ex!{|s| splat_c a: u64,      b: u16      },
-            (3, 3, 0x009) => ex!{|s| splat_c a: u64,      b: u8       },
-
-            (4, 0, 0x009) => ex!{|s| splat_c a: u128,     b: u128     },
-            (4, 1, 0x009) => ex!{|s| splat_c a: u128,     b: u64      },
-            (4, 2, 0x009) => ex!{|s| splat_c a: u128,     b: u32      },
-            (4, 3, 0x009) => ex!{|s| splat_c a: u128,     b: u16      },
-            (4, 4, 0x009) => ex!{|s| splat_c a: u128,     b: u8       },
-
-            (5, 0, 0x009) => ex!{|s| splat_c a: [u32;8],  b: [u32;8]  },
-            (5, 1, 0x009) => ex!{|s| splat_c a: [u32;8],  b: u128     },
-            (5, 2, 0x009) => ex!{|s| splat_c a: [u32;8],  b: u64      },
-            (5, 3, 0x009) => ex!{|s| splat_c a: [u32;8],  b: u32      },
-            (5, 4, 0x009) => ex!{|s| splat_c a: [u32;8],  b: u16      },
-            (5, 5, 0x009) => ex!{|s| splat_c a: [u32;8],  b: u8       },
-
-            (6, 0, 0x009) => ex!{|s| splat_c a: [u32;16], b: [u32;16] },
-            (6, 1, 0x009) => ex!{|s| splat_c a: [u32;16], b: [u32;8]  },
-            (6, 2, 0x009) => ex!{|s| splat_c a: [u32;16], b: u128     },
-            (6, 3, 0x009) => ex!{|s| splat_c a: [u32;16], b: u64      },
-            (6, 4, 0x009) => ex!{|s| splat_c a: [u32;16], b: u32      },
-            (6, 5, 0x009) => ex!{|s| splat_c a: [u32;16], b: u16      },
-            (6, 6, 0x009) => ex!{|s| splat_c a: [u32;16], b: u8       },
+            0x009 => {
+                *s.reg_mut::<U>(ra)? = <U>::splat(<L>::extend_s(rb));
+            }
 
 
             //// comparison instructions ////
 
             // none
-            (0, 0..=0, 0x00a) => ex!{|s| none a: u8,       b: u8       },
-            (1, 0..=1, 0x00a) => ex!{|s| none a: u16,      b: u16      },
-            (2, 0..=2, 0x00a) => ex!{|s| none a: u32,      b: u32      },
-            (3, 0..=3, 0x00a) => ex!{|s| none a: u64,      b: u64      },
-            (4, 0..=4, 0x00a) => ex!{|s| none a: u128,     b: u128     },
-            (5, 0..=5, 0x00a) => ex!{|s| none a: [u32;8],  b: [u32;8]  },
-            (6, 0..=6, 0x00a) => ex!{|s| none a: [u32;16], b: [u32;16] },
+            0x00a => {
+                let b = s.reg::<U>(rb)?;
+                // note these apply to whole word!
+                *s.reg_mut::<U>(ra)? = b.xfilter(|x: U| x == <U>::ZERO);
+            }
 
             // all
-            (0, 0, 0x00b) => ex!{|s| all a: u8,       b: u8;1       },
-
-            (1, 0, 0x00b) => ex!{|s| all a: u16,      b: u16;1      },
-            (1, 1, 0x00b) => ex!{|s| all a: u16,      b: u8;2       },
-
-            (2, 0, 0x00b) => ex!{|s| all a: u32,      b: u32;1      },
-            (2, 1, 0x00b) => ex!{|s| all a: u32,      b: u16;2      },
-            (2, 2, 0x00b) => ex!{|s| all a: u32,      b: u8;4       },
-
-            (3, 0, 0x00b) => ex!{|s| all a: u64,      b: u64;1      },
-            (3, 1, 0x00b) => ex!{|s| all a: u64,      b: u32;2      },
-            (3, 2, 0x00b) => ex!{|s| all a: u64,      b: u16;4      },
-            (3, 3, 0x00b) => ex!{|s| all a: u64,      b: u8;8       },
-
-            (4, 0, 0x00b) => ex!{|s| all a: u128,     b: u128;1     },
-            (4, 1, 0x00b) => ex!{|s| all a: u128,     b: u64;2      },
-            (4, 2, 0x00b) => ex!{|s| all a: u128,     b: u32;4      },
-            (4, 3, 0x00b) => ex!{|s| all a: u128,     b: u16;8      },
-            (4, 4, 0x00b) => ex!{|s| all a: u128,     b: u8;16      },
-
-            (5, 0, 0x00b) => ex!{|s| all a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x00b) => ex!{|s| all a: [u32;8],  b: u128;2     },
-            (5, 2, 0x00b) => ex!{|s| all a: [u32;8],  b: u64;4      },
-            (5, 3, 0x00b) => ex!{|s| all a: [u32;8],  b: u32;8      },
-            (5, 4, 0x00b) => ex!{|s| all a: [u32;8],  b: u16;16     },
-            (5, 5, 0x00b) => ex!{|s| all a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x00b) => ex!{|s| all a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x00b) => ex!{|s| all a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x00b) => ex!{|s| all a: [u32;16], b: u128;4     },
-            (6, 3, 0x00b) => ex!{|s| all a: [u32;16], b: u64;8      },
-            (6, 4, 0x00b) => ex!{|s| all a: [u32;16], b: u32;16     },
-            (6, 5, 0x00b) => ex!{|s| all a: [u32;16], b: u16;32     },
-            (6, 6, 0x00b) => ex!{|s| all a: [u32;16], b: u8;64      },
+            0x00b => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.xfilter(|x: U| {
+                    x.xfold(|p, x: L| p && x != <L>::ZERO, true)
+                });
+            }
 
             // eq
-            (0, 0, 0x00c) => ex!{|s| eq a: u8,       b: u8;1       },
-
-            (1, 0, 0x00c) => ex!{|s| eq a: u16,      b: u16;1      },
-            (1, 1, 0x00c) => ex!{|s| eq a: u16,      b: u8;2       },
-
-            (2, 0, 0x00c) => ex!{|s| eq a: u32,      b: u32;1      },
-            (2, 1, 0x00c) => ex!{|s| eq a: u32,      b: u16;2      },
-            (2, 2, 0x00c) => ex!{|s| eq a: u32,      b: u8;4       },
-
-            (3, 0, 0x00c) => ex!{|s| eq a: u64,      b: u64;1      },
-            (3, 1, 0x00c) => ex!{|s| eq a: u64,      b: u32;2      },
-            (3, 2, 0x00c) => ex!{|s| eq a: u64,      b: u16;4      },
-            (3, 3, 0x00c) => ex!{|s| eq a: u64,      b: u8;8       },
-
-            (4, 0, 0x00c) => ex!{|s| eq a: u128,     b: u128;1     },
-            (4, 1, 0x00c) => ex!{|s| eq a: u128,     b: u64;2      },
-            (4, 2, 0x00c) => ex!{|s| eq a: u128,     b: u32;4      },
-            (4, 3, 0x00c) => ex!{|s| eq a: u128,     b: u16;8      },
-            (4, 4, 0x00c) => ex!{|s| eq a: u128,     b: u8;16      },
-
-            (5, 0, 0x00c) => ex!{|s| eq a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x00c) => ex!{|s| eq a: [u32;8],  b: u128;2     },
-            (5, 2, 0x00c) => ex!{|s| eq a: [u32;8],  b: u64;4      },
-            (5, 3, 0x00c) => ex!{|s| eq a: [u32;8],  b: u32;8      },
-            (5, 4, 0x00c) => ex!{|s| eq a: [u32;8],  b: u16;16     },
-            (5, 5, 0x00c) => ex!{|s| eq a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x00c) => ex!{|s| eq a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x00c) => ex!{|s| eq a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x00c) => ex!{|s| eq a: [u32;16], b: u128;4     },
-            (6, 3, 0x00c) => ex!{|s| eq a: [u32;16], b: u64;8      },
-            (6, 4, 0x00c) => ex!{|s| eq a: [u32;16], b: u32;16     },
-            (6, 5, 0x00c) => ex!{|s| eq a: [u32;16], b: u16;32     },
-            (6, 6, 0x00c) => ex!{|s| eq a: [u32;16], b: u8;64      },
+            0x00c => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x == y);
+            }
 
             // ne
-            (0, 0, 0x00d) => ex!{|s| ne a: u8,       b: u8;1       },
-
-            (1, 0, 0x00d) => ex!{|s| ne a: u16,      b: u16;1      },
-            (1, 1, 0x00d) => ex!{|s| ne a: u16,      b: u8;2       },
-
-            (2, 0, 0x00d) => ex!{|s| ne a: u32,      b: u32;1      },
-            (2, 1, 0x00d) => ex!{|s| ne a: u32,      b: u16;2      },
-            (2, 2, 0x00d) => ex!{|s| ne a: u32,      b: u8;4       },
-
-            (3, 0, 0x00d) => ex!{|s| ne a: u64,      b: u64;1      },
-            (3, 1, 0x00d) => ex!{|s| ne a: u64,      b: u32;2      },
-            (3, 2, 0x00d) => ex!{|s| ne a: u64,      b: u16;4      },
-            (3, 3, 0x00d) => ex!{|s| ne a: u64,      b: u8;8       },
-
-            (4, 0, 0x00d) => ex!{|s| ne a: u128,     b: u128;1     },
-            (4, 1, 0x00d) => ex!{|s| ne a: u128,     b: u64;2      },
-            (4, 2, 0x00d) => ex!{|s| ne a: u128,     b: u32;4      },
-            (4, 3, 0x00d) => ex!{|s| ne a: u128,     b: u16;8      },
-            (4, 4, 0x00d) => ex!{|s| ne a: u128,     b: u8;16      },
-
-            (5, 0, 0x00d) => ex!{|s| ne a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x00d) => ex!{|s| ne a: [u32;8],  b: u128;2     },
-            (5, 2, 0x00d) => ex!{|s| ne a: [u32;8],  b: u64;4      },
-            (5, 3, 0x00d) => ex!{|s| ne a: [u32;8],  b: u32;8      },
-            (5, 4, 0x00d) => ex!{|s| ne a: [u32;8],  b: u16;16     },
-            (5, 5, 0x00d) => ex!{|s| ne a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x00d) => ex!{|s| ne a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x00d) => ex!{|s| ne a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x00d) => ex!{|s| ne a: [u32;16], b: u128;4     },
-            (6, 3, 0x00d) => ex!{|s| ne a: [u32;16], b: u64;8      },
-            (6, 4, 0x00d) => ex!{|s| ne a: [u32;16], b: u32;16     },
-            (6, 5, 0x00d) => ex!{|s| ne a: [u32;16], b: u16;32     },
-            (6, 6, 0x00d) => ex!{|s| ne a: [u32;16], b: u8;64      },
+            0x00d => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x != y);
+            }
 
             // lt_u
-            (0, 0, 0x00e) => ex!{|s| lt_u a: u8,       b: u8;1       },
-
-            (1, 0, 0x00e) => ex!{|s| lt_u a: u16,      b: u16;1      },
-            (1, 1, 0x00e) => ex!{|s| lt_u a: u16,      b: u8;2       },
-
-            (2, 0, 0x00e) => ex!{|s| lt_u a: u32,      b: u32;1      },
-            (2, 1, 0x00e) => ex!{|s| lt_u a: u32,      b: u16;2      },
-            (2, 2, 0x00e) => ex!{|s| lt_u a: u32,      b: u8;4       },
-
-            (3, 0, 0x00e) => ex!{|s| lt_u a: u64,      b: u64;1      },
-            (3, 1, 0x00e) => ex!{|s| lt_u a: u64,      b: u32;2      },
-            (3, 2, 0x00e) => ex!{|s| lt_u a: u64,      b: u16;4      },
-            (3, 3, 0x00e) => ex!{|s| lt_u a: u64,      b: u8;8       },
-
-            (4, 0, 0x00e) => ex!{|s| lt_u a: u128,     b: u128;1     },
-            (4, 1, 0x00e) => ex!{|s| lt_u a: u128,     b: u64;2      },
-            (4, 2, 0x00e) => ex!{|s| lt_u a: u128,     b: u32;4      },
-            (4, 3, 0x00e) => ex!{|s| lt_u a: u128,     b: u16;8      },
-            (4, 4, 0x00e) => ex!{|s| lt_u a: u128,     b: u8;16      },
-
-            (5, 0, 0x00e) => ex!{|s| lt_u a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x00e) => ex!{|s| lt_u a: [u32;8],  b: u128;2     },
-            (5, 2, 0x00e) => ex!{|s| lt_u a: [u32;8],  b: u64;4      },
-            (5, 3, 0x00e) => ex!{|s| lt_u a: [u32;8],  b: u32;8      },
-            (5, 4, 0x00e) => ex!{|s| lt_u a: [u32;8],  b: u16;16     },
-            (5, 5, 0x00e) => ex!{|s| lt_u a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x00e) => ex!{|s| lt_u a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x00e) => ex!{|s| lt_u a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x00e) => ex!{|s| lt_u a: [u32;16], b: u128;4     },
-            (6, 3, 0x00e) => ex!{|s| lt_u a: [u32;16], b: u64;8      },
-            (6, 4, 0x00e) => ex!{|s| lt_u a: [u32;16], b: u32;16     },
-            (6, 5, 0x00e) => ex!{|s| lt_u a: [u32;16], b: u16;32     },
-            (6, 6, 0x00e) => ex!{|s| lt_u a: [u32;16], b: u8;64      },
+            0x00e => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vlt_u(y));
+            }
 
             // lt_s
-            (0, 0, 0x00f) => ex!{|s| lt_s a: u8,       b: u8;1       },
-
-            (1, 0, 0x00f) => ex!{|s| lt_s a: u16,      b: u16;1      },
-            (1, 1, 0x00f) => ex!{|s| lt_s a: u16,      b: u8;2       },
-
-            (2, 0, 0x00f) => ex!{|s| lt_s a: u32,      b: u32;1      },
-            (2, 1, 0x00f) => ex!{|s| lt_s a: u32,      b: u16;2      },
-            (2, 2, 0x00f) => ex!{|s| lt_s a: u32,      b: u8;4       },
-
-            (3, 0, 0x00f) => ex!{|s| lt_s a: u64,      b: u64;1      },
-            (3, 1, 0x00f) => ex!{|s| lt_s a: u64,      b: u32;2      },
-            (3, 2, 0x00f) => ex!{|s| lt_s a: u64,      b: u16;4      },
-            (3, 3, 0x00f) => ex!{|s| lt_s a: u64,      b: u8;8       },
-
-            (4, 0, 0x00f) => ex!{|s| lt_s a: u128,     b: u128;1     },
-            (4, 1, 0x00f) => ex!{|s| lt_s a: u128,     b: u64;2      },
-            (4, 2, 0x00f) => ex!{|s| lt_s a: u128,     b: u32;4      },
-            (4, 3, 0x00f) => ex!{|s| lt_s a: u128,     b: u16;8      },
-            (4, 4, 0x00f) => ex!{|s| lt_s a: u128,     b: u8;16      },
-
-            (5, 0, 0x00f) => ex!{|s| lt_s a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x00f) => ex!{|s| lt_s a: [u32;8],  b: u128;2     },
-            (5, 2, 0x00f) => ex!{|s| lt_s a: [u32;8],  b: u64;4      },
-            (5, 3, 0x00f) => ex!{|s| lt_s a: [u32;8],  b: u32;8      },
-            (5, 4, 0x00f) => ex!{|s| lt_s a: [u32;8],  b: u16;16     },
-            (5, 5, 0x00f) => ex!{|s| lt_s a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x00f) => ex!{|s| lt_s a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x00f) => ex!{|s| lt_s a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x00f) => ex!{|s| lt_s a: [u32;16], b: u128;4     },
-            (6, 3, 0x00f) => ex!{|s| lt_s a: [u32;16], b: u64;8      },
-            (6, 4, 0x00f) => ex!{|s| lt_s a: [u32;16], b: u32;16     },
-            (6, 5, 0x00f) => ex!{|s| lt_s a: [u32;16], b: u16;32     },
-            (6, 6, 0x00f) => ex!{|s| lt_s a: [u32;16], b: u8;64      },
+            0x00f => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vlt_s(y));
+            }
 
             // gt_u
-            (0, 0, 0x010) => ex!{|s| gt_u a: u8,       b: u8;1       },
-
-            (1, 0, 0x010) => ex!{|s| gt_u a: u16,      b: u16;1      },
-            (1, 1, 0x010) => ex!{|s| gt_u a: u16,      b: u8;2       },
-
-            (2, 0, 0x010) => ex!{|s| gt_u a: u32,      b: u32;1      },
-            (2, 1, 0x010) => ex!{|s| gt_u a: u32,      b: u16;2      },
-            (2, 2, 0x010) => ex!{|s| gt_u a: u32,      b: u8;4       },
-
-            (3, 0, 0x010) => ex!{|s| gt_u a: u64,      b: u64;1      },
-            (3, 1, 0x010) => ex!{|s| gt_u a: u64,      b: u32;2      },
-            (3, 2, 0x010) => ex!{|s| gt_u a: u64,      b: u16;4      },
-            (3, 3, 0x010) => ex!{|s| gt_u a: u64,      b: u8;8       },
-
-            (4, 0, 0x010) => ex!{|s| gt_u a: u128,     b: u128;1     },
-            (4, 1, 0x010) => ex!{|s| gt_u a: u128,     b: u64;2      },
-            (4, 2, 0x010) => ex!{|s| gt_u a: u128,     b: u32;4      },
-            (4, 3, 0x010) => ex!{|s| gt_u a: u128,     b: u16;8      },
-            (4, 4, 0x010) => ex!{|s| gt_u a: u128,     b: u8;16      },
-
-            (5, 0, 0x010) => ex!{|s| gt_u a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x010) => ex!{|s| gt_u a: [u32;8],  b: u128;2     },
-            (5, 2, 0x010) => ex!{|s| gt_u a: [u32;8],  b: u64;4      },
-            (5, 3, 0x010) => ex!{|s| gt_u a: [u32;8],  b: u32;8      },
-            (5, 4, 0x010) => ex!{|s| gt_u a: [u32;8],  b: u16;16     },
-            (5, 5, 0x010) => ex!{|s| gt_u a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x010) => ex!{|s| gt_u a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x010) => ex!{|s| gt_u a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x010) => ex!{|s| gt_u a: [u32;16], b: u128;4     },
-            (6, 3, 0x010) => ex!{|s| gt_u a: [u32;16], b: u64;8      },
-            (6, 4, 0x010) => ex!{|s| gt_u a: [u32;16], b: u32;16     },
-            (6, 5, 0x010) => ex!{|s| gt_u a: [u32;16], b: u16;32     },
-            (6, 6, 0x010) => ex!{|s| gt_u a: [u32;16], b: u8;64      },
+            0x010 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vgt_u(y));
+            }
 
             // gt_s
-            (0, 0, 0x011) => ex!{|s| gt_s a: u8,       b: u8;1       },
-
-            (1, 0, 0x011) => ex!{|s| gt_s a: u16,      b: u16;1      },
-            (1, 1, 0x011) => ex!{|s| gt_s a: u16,      b: u8;2       },
-
-            (2, 0, 0x011) => ex!{|s| gt_s a: u32,      b: u32;1      },
-            (2, 1, 0x011) => ex!{|s| gt_s a: u32,      b: u16;2      },
-            (2, 2, 0x011) => ex!{|s| gt_s a: u32,      b: u8;4       },
-
-            (3, 0, 0x011) => ex!{|s| gt_s a: u64,      b: u64;1      },
-            (3, 1, 0x011) => ex!{|s| gt_s a: u64,      b: u32;2      },
-            (3, 2, 0x011) => ex!{|s| gt_s a: u64,      b: u16;4      },
-            (3, 3, 0x011) => ex!{|s| gt_s a: u64,      b: u8;8       },
-
-            (4, 0, 0x011) => ex!{|s| gt_s a: u128,     b: u128;1     },
-            (4, 1, 0x011) => ex!{|s| gt_s a: u128,     b: u64;2      },
-            (4, 2, 0x011) => ex!{|s| gt_s a: u128,     b: u32;4      },
-            (4, 3, 0x011) => ex!{|s| gt_s a: u128,     b: u16;8      },
-            (4, 4, 0x011) => ex!{|s| gt_s a: u128,     b: u8;16      },
-
-            (5, 0, 0x011) => ex!{|s| gt_s a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x011) => ex!{|s| gt_s a: [u32;8],  b: u128;2     },
-            (5, 2, 0x011) => ex!{|s| gt_s a: [u32;8],  b: u64;4      },
-            (5, 3, 0x011) => ex!{|s| gt_s a: [u32;8],  b: u32;8      },
-            (5, 4, 0x011) => ex!{|s| gt_s a: [u32;8],  b: u16;16     },
-            (5, 5, 0x011) => ex!{|s| gt_s a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x011) => ex!{|s| gt_s a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x011) => ex!{|s| gt_s a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x011) => ex!{|s| gt_s a: [u32;16], b: u128;4     },
-            (6, 3, 0x011) => ex!{|s| gt_s a: [u32;16], b: u64;8      },
-            (6, 4, 0x011) => ex!{|s| gt_s a: [u32;16], b: u32;16     },
-            (6, 5, 0x011) => ex!{|s| gt_s a: [u32;16], b: u16;32     },
-            (6, 6, 0x011) => ex!{|s| gt_s a: [u32;16], b: u8;64      },
+            0x011 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vgt_s(y));
+            }
 
             // le_u
-            (0, 0, 0x012) => ex!{|s| le_u a: u8,       b: u8;1       },
-
-            (1, 0, 0x012) => ex!{|s| le_u a: u16,      b: u16;1      },
-            (1, 1, 0x012) => ex!{|s| le_u a: u16,      b: u8;2       },
-
-            (2, 0, 0x012) => ex!{|s| le_u a: u32,      b: u32;1      },
-            (2, 1, 0x012) => ex!{|s| le_u a: u32,      b: u16;2      },
-            (2, 2, 0x012) => ex!{|s| le_u a: u32,      b: u8;4       },
-
-            (3, 0, 0x012) => ex!{|s| le_u a: u64,      b: u64;1      },
-            (3, 1, 0x012) => ex!{|s| le_u a: u64,      b: u32;2      },
-            (3, 2, 0x012) => ex!{|s| le_u a: u64,      b: u16;4      },
-            (3, 3, 0x012) => ex!{|s| le_u a: u64,      b: u8;8       },
-
-            (4, 0, 0x012) => ex!{|s| le_u a: u128,     b: u128;1     },
-            (4, 1, 0x012) => ex!{|s| le_u a: u128,     b: u64;2      },
-            (4, 2, 0x012) => ex!{|s| le_u a: u128,     b: u32;4      },
-            (4, 3, 0x012) => ex!{|s| le_u a: u128,     b: u16;8      },
-            (4, 4, 0x012) => ex!{|s| le_u a: u128,     b: u8;16      },
-
-            (5, 0, 0x012) => ex!{|s| le_u a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x012) => ex!{|s| le_u a: [u32;8],  b: u128;2     },
-            (5, 2, 0x012) => ex!{|s| le_u a: [u32;8],  b: u64;4      },
-            (5, 3, 0x012) => ex!{|s| le_u a: [u32;8],  b: u32;8      },
-            (5, 4, 0x012) => ex!{|s| le_u a: [u32;8],  b: u16;16     },
-            (5, 5, 0x012) => ex!{|s| le_u a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x012) => ex!{|s| le_u a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x012) => ex!{|s| le_u a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x012) => ex!{|s| le_u a: [u32;16], b: u128;4     },
-            (6, 3, 0x012) => ex!{|s| le_u a: [u32;16], b: u64;8      },
-            (6, 4, 0x012) => ex!{|s| le_u a: [u32;16], b: u32;16     },
-            (6, 5, 0x012) => ex!{|s| le_u a: [u32;16], b: u16;32     },
-            (6, 6, 0x012) => ex!{|s| le_u a: [u32;16], b: u8;64      },
+            0x012 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vle_u(y));
+            }
 
             // le_s
-            (0, 0, 0x013) => ex!{|s| le_s a: u8,       b: u8;1       },
-
-            (1, 0, 0x013) => ex!{|s| le_s a: u16,      b: u16;1      },
-            (1, 1, 0x013) => ex!{|s| le_s a: u16,      b: u8;2       },
-
-            (2, 0, 0x013) => ex!{|s| le_s a: u32,      b: u32;1      },
-            (2, 1, 0x013) => ex!{|s| le_s a: u32,      b: u16;2      },
-            (2, 2, 0x013) => ex!{|s| le_s a: u32,      b: u8;4       },
-
-            (3, 0, 0x013) => ex!{|s| le_s a: u64,      b: u64;1      },
-            (3, 1, 0x013) => ex!{|s| le_s a: u64,      b: u32;2      },
-            (3, 2, 0x013) => ex!{|s| le_s a: u64,      b: u16;4      },
-            (3, 3, 0x013) => ex!{|s| le_s a: u64,      b: u8;8       },
-
-            (4, 0, 0x013) => ex!{|s| le_s a: u128,     b: u128;1     },
-            (4, 1, 0x013) => ex!{|s| le_s a: u128,     b: u64;2      },
-            (4, 2, 0x013) => ex!{|s| le_s a: u128,     b: u32;4      },
-            (4, 3, 0x013) => ex!{|s| le_s a: u128,     b: u16;8      },
-            (4, 4, 0x013) => ex!{|s| le_s a: u128,     b: u8;16      },
-
-            (5, 0, 0x013) => ex!{|s| le_s a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x013) => ex!{|s| le_s a: [u32;8],  b: u128;2     },
-            (5, 2, 0x013) => ex!{|s| le_s a: [u32;8],  b: u64;4      },
-            (5, 3, 0x013) => ex!{|s| le_s a: [u32;8],  b: u32;8      },
-            (5, 4, 0x013) => ex!{|s| le_s a: [u32;8],  b: u16;16     },
-            (5, 5, 0x013) => ex!{|s| le_s a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x013) => ex!{|s| le_s a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x013) => ex!{|s| le_s a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x013) => ex!{|s| le_s a: [u32;16], b: u128;4     },
-            (6, 3, 0x013) => ex!{|s| le_s a: [u32;16], b: u64;8      },
-            (6, 4, 0x013) => ex!{|s| le_s a: [u32;16], b: u32;16     },
-            (6, 5, 0x013) => ex!{|s| le_s a: [u32;16], b: u16;32     },
-            (6, 6, 0x013) => ex!{|s| le_s a: [u32;16], b: u8;64      },
+            0x013 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vle_s(y));
+            }
 
             // ge_u
-            (0, 0, 0x014) => ex!{|s| ge_u a: u8,       b: u8;1       },
-
-            (1, 0, 0x014) => ex!{|s| ge_u a: u16,      b: u16;1      },
-            (1, 1, 0x014) => ex!{|s| ge_u a: u16,      b: u8;2       },
-
-            (2, 0, 0x014) => ex!{|s| ge_u a: u32,      b: u32;1      },
-            (2, 1, 0x014) => ex!{|s| ge_u a: u32,      b: u16;2      },
-            (2, 2, 0x014) => ex!{|s| ge_u a: u32,      b: u8;4       },
-
-            (3, 0, 0x014) => ex!{|s| ge_u a: u64,      b: u64;1      },
-            (3, 1, 0x014) => ex!{|s| ge_u a: u64,      b: u32;2      },
-            (3, 2, 0x014) => ex!{|s| ge_u a: u64,      b: u16;4      },
-            (3, 3, 0x014) => ex!{|s| ge_u a: u64,      b: u8;8       },
-
-            (4, 0, 0x014) => ex!{|s| ge_u a: u128,     b: u128;1     },
-            (4, 1, 0x014) => ex!{|s| ge_u a: u128,     b: u64;2      },
-            (4, 2, 0x014) => ex!{|s| ge_u a: u128,     b: u32;4      },
-            (4, 3, 0x014) => ex!{|s| ge_u a: u128,     b: u16;8      },
-            (4, 4, 0x014) => ex!{|s| ge_u a: u128,     b: u8;16      },
-
-            (5, 0, 0x014) => ex!{|s| ge_u a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x014) => ex!{|s| ge_u a: [u32;8],  b: u128;2     },
-            (5, 2, 0x014) => ex!{|s| ge_u a: [u32;8],  b: u64;4      },
-            (5, 3, 0x014) => ex!{|s| ge_u a: [u32;8],  b: u32;8      },
-            (5, 4, 0x014) => ex!{|s| ge_u a: [u32;8],  b: u16;16     },
-            (5, 5, 0x014) => ex!{|s| ge_u a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x014) => ex!{|s| ge_u a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x014) => ex!{|s| ge_u a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x014) => ex!{|s| ge_u a: [u32;16], b: u128;4     },
-            (6, 3, 0x014) => ex!{|s| ge_u a: [u32;16], b: u64;8      },
-            (6, 4, 0x014) => ex!{|s| ge_u a: [u32;16], b: u32;16     },
-            (6, 5, 0x014) => ex!{|s| ge_u a: [u32;16], b: u16;32     },
-            (6, 6, 0x014) => ex!{|s| ge_u a: [u32;16], b: u8;64      },
+            0x014 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vge_u(y));
+            }
 
             // ge_s
-            (0, 0, 0x015) => ex!{|s| ge_s a: u8,       b: u8;1       },
-
-            (1, 0, 0x015) => ex!{|s| ge_s a: u16,      b: u16;1      },
-            (1, 1, 0x015) => ex!{|s| ge_s a: u16,      b: u8;2       },
-
-            (2, 0, 0x015) => ex!{|s| ge_s a: u32,      b: u32;1      },
-            (2, 1, 0x015) => ex!{|s| ge_s a: u32,      b: u16;2      },
-            (2, 2, 0x015) => ex!{|s| ge_s a: u32,      b: u8;4       },
-
-            (3, 0, 0x015) => ex!{|s| ge_s a: u64,      b: u64;1      },
-            (3, 1, 0x015) => ex!{|s| ge_s a: u64,      b: u32;2      },
-            (3, 2, 0x015) => ex!{|s| ge_s a: u64,      b: u16;4      },
-            (3, 3, 0x015) => ex!{|s| ge_s a: u64,      b: u8;8       },
-
-            (4, 0, 0x015) => ex!{|s| ge_s a: u128,     b: u128;1     },
-            (4, 1, 0x015) => ex!{|s| ge_s a: u128,     b: u64;2      },
-            (4, 2, 0x015) => ex!{|s| ge_s a: u128,     b: u32;4      },
-            (4, 3, 0x015) => ex!{|s| ge_s a: u128,     b: u16;8      },
-            (4, 4, 0x015) => ex!{|s| ge_s a: u128,     b: u8;16      },
-
-            (5, 0, 0x015) => ex!{|s| ge_s a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x015) => ex!{|s| ge_s a: [u32;8],  b: u128;2     },
-            (5, 2, 0x015) => ex!{|s| ge_s a: [u32;8],  b: u64;4      },
-            (5, 3, 0x015) => ex!{|s| ge_s a: [u32;8],  b: u32;8      },
-            (5, 4, 0x015) => ex!{|s| ge_s a: [u32;8],  b: u16;16     },
-            (5, 5, 0x015) => ex!{|s| ge_s a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x015) => ex!{|s| ge_s a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x015) => ex!{|s| ge_s a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x015) => ex!{|s| ge_s a: [u32;16], b: u128;4     },
-            (6, 3, 0x015) => ex!{|s| ge_s a: [u32;16], b: u64;8      },
-            (6, 4, 0x015) => ex!{|s| ge_s a: [u32;16], b: u32;16     },
-            (6, 5, 0x015) => ex!{|s| ge_s a: [u32;16], b: u16;32     },
-            (6, 6, 0x015) => ex!{|s| ge_s a: [u32;16], b: u8;64      },
+            0x015 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vge_s(y));
+            }
 
             // min_u
-            (0, 0, 0x016) => ex!{|s| min_u a: u8,       b: u8;1       },
-
-            (1, 0, 0x016) => ex!{|s| min_u a: u16,      b: u16;1      },
-            (1, 1, 0x016) => ex!{|s| min_u a: u16,      b: u8;2       },
-
-            (2, 0, 0x016) => ex!{|s| min_u a: u32,      b: u32;1      },
-            (2, 1, 0x016) => ex!{|s| min_u a: u32,      b: u16;2      },
-            (2, 2, 0x016) => ex!{|s| min_u a: u32,      b: u8;4       },
-
-            (3, 0, 0x016) => ex!{|s| min_u a: u64,      b: u64;1      },
-            (3, 1, 0x016) => ex!{|s| min_u a: u64,      b: u32;2      },
-            (3, 2, 0x016) => ex!{|s| min_u a: u64,      b: u16;4      },
-            (3, 3, 0x016) => ex!{|s| min_u a: u64,      b: u8;8       },
-
-            (4, 0, 0x016) => ex!{|s| min_u a: u128,     b: u128;1     },
-            (4, 1, 0x016) => ex!{|s| min_u a: u128,     b: u64;2      },
-            (4, 2, 0x016) => ex!{|s| min_u a: u128,     b: u32;4      },
-            (4, 3, 0x016) => ex!{|s| min_u a: u128,     b: u16;8      },
-            (4, 4, 0x016) => ex!{|s| min_u a: u128,     b: u8;16      },
-
-            (5, 0, 0x016) => ex!{|s| min_u a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x016) => ex!{|s| min_u a: [u32;8],  b: u128;2     },
-            (5, 2, 0x016) => ex!{|s| min_u a: [u32;8],  b: u64;4      },
-            (5, 3, 0x016) => ex!{|s| min_u a: [u32;8],  b: u32;8      },
-            (5, 4, 0x016) => ex!{|s| min_u a: [u32;8],  b: u16;16     },
-            (5, 5, 0x016) => ex!{|s| min_u a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x016) => ex!{|s| min_u a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x016) => ex!{|s| min_u a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x016) => ex!{|s| min_u a: [u32;16], b: u128;4     },
-            (6, 3, 0x016) => ex!{|s| min_u a: [u32;16], b: u64;8      },
-            (6, 4, 0x016) => ex!{|s| min_u a: [u32;16], b: u32;16     },
-            (6, 5, 0x016) => ex!{|s| min_u a: [u32;16], b: u16;32     },
-            (6, 6, 0x016) => ex!{|s| min_u a: [u32;16], b: u8;64      },
+            0x016 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmin_u(y));
+            }
 
             // min_s
-            (0, 0, 0x017) => ex!{|s| min_s a: u8,       b: u8;1       },
-
-            (1, 0, 0x017) => ex!{|s| min_s a: u16,      b: u16;1      },
-            (1, 1, 0x017) => ex!{|s| min_s a: u16,      b: u8;2       },
-
-            (2, 0, 0x017) => ex!{|s| min_s a: u32,      b: u32;1      },
-            (2, 1, 0x017) => ex!{|s| min_s a: u32,      b: u16;2      },
-            (2, 2, 0x017) => ex!{|s| min_s a: u32,      b: u8;4       },
-
-            (3, 0, 0x017) => ex!{|s| min_s a: u64,      b: u64;1      },
-            (3, 1, 0x017) => ex!{|s| min_s a: u64,      b: u32;2      },
-            (3, 2, 0x017) => ex!{|s| min_s a: u64,      b: u16;4      },
-            (3, 3, 0x017) => ex!{|s| min_s a: u64,      b: u8;8       },
-
-            (4, 0, 0x017) => ex!{|s| min_s a: u128,     b: u128;1     },
-            (4, 1, 0x017) => ex!{|s| min_s a: u128,     b: u64;2      },
-            (4, 2, 0x017) => ex!{|s| min_s a: u128,     b: u32;4      },
-            (4, 3, 0x017) => ex!{|s| min_s a: u128,     b: u16;8      },
-            (4, 4, 0x017) => ex!{|s| min_s a: u128,     b: u8;16      },
-
-            (5, 0, 0x017) => ex!{|s| min_s a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x017) => ex!{|s| min_s a: [u32;8],  b: u128;2     },
-            (5, 2, 0x017) => ex!{|s| min_s a: [u32;8],  b: u64;4      },
-            (5, 3, 0x017) => ex!{|s| min_s a: [u32;8],  b: u32;8      },
-            (5, 4, 0x017) => ex!{|s| min_s a: [u32;8],  b: u16;16     },
-            (5, 5, 0x017) => ex!{|s| min_s a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x017) => ex!{|s| min_s a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x017) => ex!{|s| min_s a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x017) => ex!{|s| min_s a: [u32;16], b: u128;4     },
-            (6, 3, 0x017) => ex!{|s| min_s a: [u32;16], b: u64;8      },
-            (6, 4, 0x017) => ex!{|s| min_s a: [u32;16], b: u32;16     },
-            (6, 5, 0x017) => ex!{|s| min_s a: [u32;16], b: u16;32     },
-            (6, 6, 0x017) => ex!{|s| min_s a: [u32;16], b: u8;64      },
+            0x017 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmin_s(y));
+            }
 
             // max_u
-            (0, 0, 0x018) => ex!{|s| max_u a: u8,       b: u8;1       },
-
-            (1, 0, 0x018) => ex!{|s| max_u a: u16,      b: u16;1      },
-            (1, 1, 0x018) => ex!{|s| max_u a: u16,      b: u8;2       },
-
-            (2, 0, 0x018) => ex!{|s| max_u a: u32,      b: u32;1      },
-            (2, 1, 0x018) => ex!{|s| max_u a: u32,      b: u16;2      },
-            (2, 2, 0x018) => ex!{|s| max_u a: u32,      b: u8;4       },
-
-            (3, 0, 0x018) => ex!{|s| max_u a: u64,      b: u64;1      },
-            (3, 1, 0x018) => ex!{|s| max_u a: u64,      b: u32;2      },
-            (3, 2, 0x018) => ex!{|s| max_u a: u64,      b: u16;4      },
-            (3, 3, 0x018) => ex!{|s| max_u a: u64,      b: u8;8       },
-
-            (4, 0, 0x018) => ex!{|s| max_u a: u128,     b: u128;1     },
-            (4, 1, 0x018) => ex!{|s| max_u a: u128,     b: u64;2      },
-            (4, 2, 0x018) => ex!{|s| max_u a: u128,     b: u32;4      },
-            (4, 3, 0x018) => ex!{|s| max_u a: u128,     b: u16;8      },
-            (4, 4, 0x018) => ex!{|s| max_u a: u128,     b: u8;16      },
-
-            (5, 0, 0x018) => ex!{|s| max_u a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x018) => ex!{|s| max_u a: [u32;8],  b: u128;2     },
-            (5, 2, 0x018) => ex!{|s| max_u a: [u32;8],  b: u64;4      },
-            (5, 3, 0x018) => ex!{|s| max_u a: [u32;8],  b: u32;8      },
-            (5, 4, 0x018) => ex!{|s| max_u a: [u32;8],  b: u16;16     },
-            (5, 5, 0x018) => ex!{|s| max_u a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x018) => ex!{|s| max_u a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x018) => ex!{|s| max_u a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x018) => ex!{|s| max_u a: [u32;16], b: u128;4     },
-            (6, 3, 0x018) => ex!{|s| max_u a: [u32;16], b: u64;8      },
-            (6, 4, 0x018) => ex!{|s| max_u a: [u32;16], b: u32;16     },
-            (6, 5, 0x018) => ex!{|s| max_u a: [u32;16], b: u16;32     },
-            (6, 6, 0x018) => ex!{|s| max_u a: [u32;16], b: u8;64      },
+            0x018 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmax_u(y));
+            }
 
             // max_s
-            (0, 0, 0x019) => ex!{|s| max_s a: u8,       b: u8;1       },
-
-            (1, 0, 0x019) => ex!{|s| max_s a: u16,      b: u16;1      },
-            (1, 1, 0x019) => ex!{|s| max_s a: u16,      b: u8;2       },
-
-            (2, 0, 0x019) => ex!{|s| max_s a: u32,      b: u32;1      },
-            (2, 1, 0x019) => ex!{|s| max_s a: u32,      b: u16;2      },
-            (2, 2, 0x019) => ex!{|s| max_s a: u32,      b: u8;4       },
-
-            (3, 0, 0x019) => ex!{|s| max_s a: u64,      b: u64;1      },
-            (3, 1, 0x019) => ex!{|s| max_s a: u64,      b: u32;2      },
-            (3, 2, 0x019) => ex!{|s| max_s a: u64,      b: u16;4      },
-            (3, 3, 0x019) => ex!{|s| max_s a: u64,      b: u8;8       },
-
-            (4, 0, 0x019) => ex!{|s| max_s a: u128,     b: u128;1     },
-            (4, 1, 0x019) => ex!{|s| max_s a: u128,     b: u64;2      },
-            (4, 2, 0x019) => ex!{|s| max_s a: u128,     b: u32;4      },
-            (4, 3, 0x019) => ex!{|s| max_s a: u128,     b: u16;8      },
-            (4, 4, 0x019) => ex!{|s| max_s a: u128,     b: u8;16      },
-
-            (5, 0, 0x019) => ex!{|s| max_s a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x019) => ex!{|s| max_s a: [u32;8],  b: u128;2     },
-            (5, 2, 0x019) => ex!{|s| max_s a: [u32;8],  b: u64;4      },
-            (5, 3, 0x019) => ex!{|s| max_s a: [u32;8],  b: u32;8      },
-            (5, 4, 0x019) => ex!{|s| max_s a: [u32;8],  b: u16;16     },
-            (5, 5, 0x019) => ex!{|s| max_s a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x019) => ex!{|s| max_s a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x019) => ex!{|s| max_s a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x019) => ex!{|s| max_s a: [u32;16], b: u128;4     },
-            (6, 3, 0x019) => ex!{|s| max_s a: [u32;16], b: u64;8      },
-            (6, 4, 0x019) => ex!{|s| max_s a: [u32;16], b: u32;16     },
-            (6, 5, 0x019) => ex!{|s| max_s a: [u32;16], b: u16;32     },
-            (6, 6, 0x019) => ex!{|s| max_s a: [u32;16], b: u8;64      },
+            0x019 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmax_s(y));
+            }
 
 
             //// integer instructions ////
 
             // neg
-            (0, 0, 0x01a) => ex!{|s| neg a: u8,       b: u8;1       },
-
-            (1, 0, 0x01a) => ex!{|s| neg a: u16,      b: u16;1      },
-            (1, 1, 0x01a) => ex!{|s| neg a: u16,      b: u8;2       },
-
-            (2, 0, 0x01a) => ex!{|s| neg a: u32,      b: u32;1      },
-            (2, 1, 0x01a) => ex!{|s| neg a: u32,      b: u16;2      },
-            (2, 2, 0x01a) => ex!{|s| neg a: u32,      b: u8;4       },
-
-            (3, 0, 0x01a) => ex!{|s| neg a: u64,      b: u64;1      },
-            (3, 1, 0x01a) => ex!{|s| neg a: u64,      b: u32;2      },
-            (3, 2, 0x01a) => ex!{|s| neg a: u64,      b: u16;4      },
-            (3, 3, 0x01a) => ex!{|s| neg a: u64,      b: u8;8       },
-
-            (4, 0, 0x01a) => ex!{|s| neg a: u128,     b: u128;1     },
-            (4, 1, 0x01a) => ex!{|s| neg a: u128,     b: u64;2      },
-            (4, 2, 0x01a) => ex!{|s| neg a: u128,     b: u32;4      },
-            (4, 3, 0x01a) => ex!{|s| neg a: u128,     b: u16;8      },
-            (4, 4, 0x01a) => ex!{|s| neg a: u128,     b: u8;16      },
-
-            (5, 0, 0x01a) => ex!{|s| neg a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x01a) => ex!{|s| neg a: [u32;8],  b: u128;2     },
-            (5, 2, 0x01a) => ex!{|s| neg a: [u32;8],  b: u64;4      },
-            (5, 3, 0x01a) => ex!{|s| neg a: [u32;8],  b: u32;8      },
-            (5, 4, 0x01a) => ex!{|s| neg a: [u32;8],  b: u16;16     },
-            (5, 5, 0x01a) => ex!{|s| neg a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x01a) => ex!{|s| neg a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x01a) => ex!{|s| neg a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x01a) => ex!{|s| neg a: [u32;16], b: u128;4     },
-            (6, 3, 0x01a) => ex!{|s| neg a: [u32;16], b: u64;8      },
-            (6, 4, 0x01a) => ex!{|s| neg a: [u32;16], b: u32;16     },
-            (6, 5, 0x01a) => ex!{|s| neg a: [u32;16], b: u16;32     },
-            (6, 6, 0x01a) => ex!{|s| neg a: [u32;16], b: u8;64      },
+            0x01a => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vneg());
+            }
 
             // abs
-            (0, 0, 0x01b) => ex!{|s| abs a: u8,       b: u8;1       },
-
-            (1, 0, 0x01b) => ex!{|s| abs a: u16,      b: u16;1      },
-            (1, 1, 0x01b) => ex!{|s| abs a: u16,      b: u8;2       },
-
-            (2, 0, 0x01b) => ex!{|s| abs a: u32,      b: u32;1      },
-            (2, 1, 0x01b) => ex!{|s| abs a: u32,      b: u16;2      },
-            (2, 2, 0x01b) => ex!{|s| abs a: u32,      b: u8;4       },
-
-            (3, 0, 0x01b) => ex!{|s| abs a: u64,      b: u64;1      },
-            (3, 1, 0x01b) => ex!{|s| abs a: u64,      b: u32;2      },
-            (3, 2, 0x01b) => ex!{|s| abs a: u64,      b: u16;4      },
-            (3, 3, 0x01b) => ex!{|s| abs a: u64,      b: u8;8       },
-
-            (4, 0, 0x01b) => ex!{|s| abs a: u128,     b: u128;1     },
-            (4, 1, 0x01b) => ex!{|s| abs a: u128,     b: u64;2      },
-            (4, 2, 0x01b) => ex!{|s| abs a: u128,     b: u32;4      },
-            (4, 3, 0x01b) => ex!{|s| abs a: u128,     b: u16;8      },
-            (4, 4, 0x01b) => ex!{|s| abs a: u128,     b: u8;16      },
-
-            (5, 0, 0x01b) => ex!{|s| abs a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x01b) => ex!{|s| abs a: [u32;8],  b: u128;2     },
-            (5, 2, 0x01b) => ex!{|s| abs a: [u32;8],  b: u64;4      },
-            (5, 3, 0x01b) => ex!{|s| abs a: [u32;8],  b: u32;8      },
-            (5, 4, 0x01b) => ex!{|s| abs a: [u32;8],  b: u16;16     },
-            (5, 5, 0x01b) => ex!{|s| abs a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x01b) => ex!{|s| abs a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x01b) => ex!{|s| abs a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x01b) => ex!{|s| abs a: [u32;16], b: u128;4     },
-            (6, 3, 0x01b) => ex!{|s| abs a: [u32;16], b: u64;8      },
-            (6, 4, 0x01b) => ex!{|s| abs a: [u32;16], b: u32;16     },
-            (6, 5, 0x01b) => ex!{|s| abs a: [u32;16], b: u16;32     },
-            (6, 6, 0x01b) => ex!{|s| abs a: [u32;16], b: u8;64      },
+            0x01b => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vabs());
+            }
 
             // not
-            (0, 0..=0, 0x01c) => ex!{|s| not a: u8,       b: u8       },
-            (1, 0..=1, 0x01c) => ex!{|s| not a: u16,      b: u16      },
-            (2, 0..=2, 0x01c) => ex!{|s| not a: u32,      b: u32      },
-            (3, 0..=3, 0x01c) => ex!{|s| not a: u64,      b: u64      },
-            (4, 0..=4, 0x01c) => ex!{|s| not a: u128,     b: u128     },
-            (5, 0..=5, 0x01c) => ex!{|s| not a: [u32;8],  b: [u32;8]  },
-            (6, 0..=6, 0x01c) => ex!{|s| not a: [u32;16], b: [u32;16] },
+            0x01c => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.vnot();
+            }
 
             // clz
-            (0, 0, 0x01d) => ex!{|s| clz a: u8,       b: u8;1       },
-
-            (1, 0, 0x01d) => ex!{|s| clz a: u16,      b: u16;1      },
-            (1, 1, 0x01d) => ex!{|s| clz a: u16,      b: u8;2       },
-
-            (2, 0, 0x01d) => ex!{|s| clz a: u32,      b: u32;1      },
-            (2, 1, 0x01d) => ex!{|s| clz a: u32,      b: u16;2      },
-            (2, 2, 0x01d) => ex!{|s| clz a: u32,      b: u8;4       },
-
-            (3, 0, 0x01d) => ex!{|s| clz a: u64,      b: u64;1      },
-            (3, 1, 0x01d) => ex!{|s| clz a: u64,      b: u32;2      },
-            (3, 2, 0x01d) => ex!{|s| clz a: u64,      b: u16;4      },
-            (3, 3, 0x01d) => ex!{|s| clz a: u64,      b: u8;8       },
-
-            (4, 0, 0x01d) => ex!{|s| clz a: u128,     b: u128;1     },
-            (4, 1, 0x01d) => ex!{|s| clz a: u128,     b: u64;2      },
-            (4, 2, 0x01d) => ex!{|s| clz a: u128,     b: u32;4      },
-            (4, 3, 0x01d) => ex!{|s| clz a: u128,     b: u16;8      },
-            (4, 4, 0x01d) => ex!{|s| clz a: u128,     b: u8;16      },
-
-            (5, 0, 0x01d) => ex!{|s| clz a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x01d) => ex!{|s| clz a: [u32;8],  b: u128;2     },
-            (5, 2, 0x01d) => ex!{|s| clz a: [u32;8],  b: u64;4      },
-            (5, 3, 0x01d) => ex!{|s| clz a: [u32;8],  b: u32;8      },
-            (5, 4, 0x01d) => ex!{|s| clz a: [u32;8],  b: u16;16     },
-            (5, 5, 0x01d) => ex!{|s| clz a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x01d) => ex!{|s| clz a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x01d) => ex!{|s| clz a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x01d) => ex!{|s| clz a: [u32;16], b: u128;4     },
-            (6, 3, 0x01d) => ex!{|s| clz a: [u32;16], b: u64;8      },
-            (6, 4, 0x01d) => ex!{|s| clz a: [u32;16], b: u32;16     },
-            (6, 5, 0x01d) => ex!{|s| clz a: [u32;16], b: u16;32     },
-            (6, 6, 0x01d) => ex!{|s| clz a: [u32;16], b: u8;64      },
+            0x01d => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vclz());
+            }
 
             // ctz
-            (0, 0, 0x01e) => ex!{|s| ctz a: u8,       b: u8;1       },
-
-            (1, 0, 0x01e) => ex!{|s| ctz a: u16,      b: u16;1      },
-            (1, 1, 0x01e) => ex!{|s| ctz a: u16,      b: u8;2       },
-
-            (2, 0, 0x01e) => ex!{|s| ctz a: u32,      b: u32;1      },
-            (2, 1, 0x01e) => ex!{|s| ctz a: u32,      b: u16;2      },
-            (2, 2, 0x01e) => ex!{|s| ctz a: u32,      b: u8;4       },
-
-            (3, 0, 0x01e) => ex!{|s| ctz a: u64,      b: u64;1      },
-            (3, 1, 0x01e) => ex!{|s| ctz a: u64,      b: u32;2      },
-            (3, 2, 0x01e) => ex!{|s| ctz a: u64,      b: u16;4      },
-            (3, 3, 0x01e) => ex!{|s| ctz a: u64,      b: u8;8       },
-
-            (4, 0, 0x01e) => ex!{|s| ctz a: u128,     b: u128;1     },
-            (4, 1, 0x01e) => ex!{|s| ctz a: u128,     b: u64;2      },
-            (4, 2, 0x01e) => ex!{|s| ctz a: u128,     b: u32;4      },
-            (4, 3, 0x01e) => ex!{|s| ctz a: u128,     b: u16;8      },
-            (4, 4, 0x01e) => ex!{|s| ctz a: u128,     b: u8;16      },
-
-            (5, 0, 0x01e) => ex!{|s| ctz a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x01e) => ex!{|s| ctz a: [u32;8],  b: u128;2     },
-            (5, 2, 0x01e) => ex!{|s| ctz a: [u32;8],  b: u64;4      },
-            (5, 3, 0x01e) => ex!{|s| ctz a: [u32;8],  b: u32;8      },
-            (5, 4, 0x01e) => ex!{|s| ctz a: [u32;8],  b: u16;16     },
-            (5, 5, 0x01e) => ex!{|s| ctz a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x01e) => ex!{|s| ctz a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x01e) => ex!{|s| ctz a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x01e) => ex!{|s| ctz a: [u32;16], b: u128;4     },
-            (6, 3, 0x01e) => ex!{|s| ctz a: [u32;16], b: u64;8      },
-            (6, 4, 0x01e) => ex!{|s| ctz a: [u32;16], b: u32;16     },
-            (6, 5, 0x01e) => ex!{|s| ctz a: [u32;16], b: u16;32     },
-            (6, 6, 0x01e) => ex!{|s| ctz a: [u32;16], b: u8;64      },
+            0x01e => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vctz());
+            }
 
             // popcnt
-            (0, 0, 0x01f) => ex!{|s| popcnt a: u8,       b: u8;1       },
-
-            (1, 0, 0x01f) => ex!{|s| popcnt a: u16,      b: u16;1      },
-            (1, 1, 0x01f) => ex!{|s| popcnt a: u16,      b: u8;2       },
-
-            (2, 0, 0x01f) => ex!{|s| popcnt a: u32,      b: u32;1      },
-            (2, 1, 0x01f) => ex!{|s| popcnt a: u32,      b: u16;2      },
-            (2, 2, 0x01f) => ex!{|s| popcnt a: u32,      b: u8;4       },
-
-            (3, 0, 0x01f) => ex!{|s| popcnt a: u64,      b: u64;1      },
-            (3, 1, 0x01f) => ex!{|s| popcnt a: u64,      b: u32;2      },
-            (3, 2, 0x01f) => ex!{|s| popcnt a: u64,      b: u16;4      },
-            (3, 3, 0x01f) => ex!{|s| popcnt a: u64,      b: u8;8       },
-
-            (4, 0, 0x01f) => ex!{|s| popcnt a: u128,     b: u128;1     },
-            (4, 1, 0x01f) => ex!{|s| popcnt a: u128,     b: u64;2      },
-            (4, 2, 0x01f) => ex!{|s| popcnt a: u128,     b: u32;4      },
-            (4, 3, 0x01f) => ex!{|s| popcnt a: u128,     b: u16;8      },
-            (4, 4, 0x01f) => ex!{|s| popcnt a: u128,     b: u8;16      },
-
-            (5, 0, 0x01f) => ex!{|s| popcnt a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x01f) => ex!{|s| popcnt a: [u32;8],  b: u128;2     },
-            (5, 2, 0x01f) => ex!{|s| popcnt a: [u32;8],  b: u64;4      },
-            (5, 3, 0x01f) => ex!{|s| popcnt a: [u32;8],  b: u32;8      },
-            (5, 4, 0x01f) => ex!{|s| popcnt a: [u32;8],  b: u16;16     },
-            (5, 5, 0x01f) => ex!{|s| popcnt a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x01f) => ex!{|s| popcnt a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x01f) => ex!{|s| popcnt a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x01f) => ex!{|s| popcnt a: [u32;16], b: u128;4     },
-            (6, 3, 0x01f) => ex!{|s| popcnt a: [u32;16], b: u64;8      },
-            (6, 4, 0x01f) => ex!{|s| popcnt a: [u32;16], b: u32;16     },
-            (6, 5, 0x01f) => ex!{|s| popcnt a: [u32;16], b: u16;32     },
-            (6, 6, 0x01f) => ex!{|s| popcnt a: [u32;16], b: u8;64      },
+            0x01f => {
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vpopcnt());
+            }
 
             // add
-            (0, 0, 0x020) => ex!{|s| add a: u8,       b: u8;1       },
-
-            (1, 0, 0x020) => ex!{|s| add a: u16,      b: u16;1      },
-            (1, 1, 0x020) => ex!{|s| add a: u16,      b: u8;2       },
-
-            (2, 0, 0x020) => ex!{|s| add a: u32,      b: u32;1      },
-            (2, 1, 0x020) => ex!{|s| add a: u32,      b: u16;2      },
-            (2, 2, 0x020) => ex!{|s| add a: u32,      b: u8;4       },
-
-            (3, 0, 0x020) => ex!{|s| add a: u64,      b: u64;1      },
-            (3, 1, 0x020) => ex!{|s| add a: u64,      b: u32;2      },
-            (3, 2, 0x020) => ex!{|s| add a: u64,      b: u16;4      },
-            (3, 3, 0x020) => ex!{|s| add a: u64,      b: u8;8       },
-
-            (4, 0, 0x020) => ex!{|s| add a: u128,     b: u128;1     },
-            (4, 1, 0x020) => ex!{|s| add a: u128,     b: u64;2      },
-            (4, 2, 0x020) => ex!{|s| add a: u128,     b: u32;4      },
-            (4, 3, 0x020) => ex!{|s| add a: u128,     b: u16;8      },
-            (4, 4, 0x020) => ex!{|s| add a: u128,     b: u8;16      },
-
-            (5, 0, 0x020) => ex!{|s| add a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x020) => ex!{|s| add a: [u32;8],  b: u128;2     },
-            (5, 2, 0x020) => ex!{|s| add a: [u32;8],  b: u64;4      },
-            (5, 3, 0x020) => ex!{|s| add a: [u32;8],  b: u32;8      },
-            (5, 4, 0x020) => ex!{|s| add a: [u32;8],  b: u16;16     },
-            (5, 5, 0x020) => ex!{|s| add a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x020) => ex!{|s| add a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x020) => ex!{|s| add a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x020) => ex!{|s| add a: [u32;16], b: u128;4     },
-            (6, 3, 0x020) => ex!{|s| add a: [u32;16], b: u64;8      },
-            (6, 4, 0x020) => ex!{|s| add a: [u32;16], b: u32;16     },
-            (6, 5, 0x020) => ex!{|s| add a: [u32;16], b: u16;32     },
-            (6, 6, 0x020) => ex!{|s| add a: [u32;16], b: u8;64      },
+            0x020 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vadd(y));
+            }
 
             // sub
-            (0, 0, 0x021) => ex!{|s| sub a: u8,       b: u8;1       },
-
-            (1, 0, 0x021) => ex!{|s| sub a: u16,      b: u16;1      },
-            (1, 1, 0x021) => ex!{|s| sub a: u16,      b: u8;2       },
-
-            (2, 0, 0x021) => ex!{|s| sub a: u32,      b: u32;1      },
-            (2, 1, 0x021) => ex!{|s| sub a: u32,      b: u16;2      },
-            (2, 2, 0x021) => ex!{|s| sub a: u32,      b: u8;4       },
-
-            (3, 0, 0x021) => ex!{|s| sub a: u64,      b: u64;1      },
-            (3, 1, 0x021) => ex!{|s| sub a: u64,      b: u32;2      },
-            (3, 2, 0x021) => ex!{|s| sub a: u64,      b: u16;4      },
-            (3, 3, 0x021) => ex!{|s| sub a: u64,      b: u8;8       },
-
-            (4, 0, 0x021) => ex!{|s| sub a: u128,     b: u128;1     },
-            (4, 1, 0x021) => ex!{|s| sub a: u128,     b: u64;2      },
-            (4, 2, 0x021) => ex!{|s| sub a: u128,     b: u32;4      },
-            (4, 3, 0x021) => ex!{|s| sub a: u128,     b: u16;8      },
-            (4, 4, 0x021) => ex!{|s| sub a: u128,     b: u8;16      },
-
-            (5, 0, 0x021) => ex!{|s| sub a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x021) => ex!{|s| sub a: [u32;8],  b: u128;2     },
-            (5, 2, 0x021) => ex!{|s| sub a: [u32;8],  b: u64;4      },
-            (5, 3, 0x021) => ex!{|s| sub a: [u32;8],  b: u32;8      },
-            (5, 4, 0x021) => ex!{|s| sub a: [u32;8],  b: u16;16     },
-            (5, 5, 0x021) => ex!{|s| sub a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x021) => ex!{|s| sub a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x021) => ex!{|s| sub a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x021) => ex!{|s| sub a: [u32;16], b: u128;4     },
-            (6, 3, 0x021) => ex!{|s| sub a: [u32;16], b: u64;8      },
-            (6, 4, 0x021) => ex!{|s| sub a: [u32;16], b: u32;16     },
-            (6, 5, 0x021) => ex!{|s| sub a: [u32;16], b: u16;32     },
-            (6, 6, 0x021) => ex!{|s| sub a: [u32;16], b: u8;64      },
+            0x021 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vsub(y));
+            }
 
             // mul
-            (0, 0, 0x022) => ex!{|s| mul a: u8,       b: u8;1       },
-
-            (1, 0, 0x022) => ex!{|s| mul a: u16,      b: u16;1      },
-            (1, 1, 0x022) => ex!{|s| mul a: u16,      b: u8;2       },
-
-            (2, 0, 0x022) => ex!{|s| mul a: u32,      b: u32;1      },
-            (2, 1, 0x022) => ex!{|s| mul a: u32,      b: u16;2      },
-            (2, 2, 0x022) => ex!{|s| mul a: u32,      b: u8;4       },
-
-            (3, 0, 0x022) => ex!{|s| mul a: u64,      b: u64;1      },
-            (3, 1, 0x022) => ex!{|s| mul a: u64,      b: u32;2      },
-            (3, 2, 0x022) => ex!{|s| mul a: u64,      b: u16;4      },
-            (3, 3, 0x022) => ex!{|s| mul a: u64,      b: u8;8       },
-
-            (4, 0, 0x022) => ex!{|s| mul a: u128,     b: u128;1     },
-            (4, 1, 0x022) => ex!{|s| mul a: u128,     b: u64;2      },
-            (4, 2, 0x022) => ex!{|s| mul a: u128,     b: u32;4      },
-            (4, 3, 0x022) => ex!{|s| mul a: u128,     b: u16;8      },
-            (4, 4, 0x022) => ex!{|s| mul a: u128,     b: u8;16      },
-
-            (5, 0, 0x022) => ex!{|s| mul a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x022) => ex!{|s| mul a: [u32;8],  b: u128;2     },
-            (5, 2, 0x022) => ex!{|s| mul a: [u32;8],  b: u64;4      },
-            (5, 3, 0x022) => ex!{|s| mul a: [u32;8],  b: u32;8      },
-            (5, 4, 0x022) => ex!{|s| mul a: [u32;8],  b: u16;16     },
-            (5, 5, 0x022) => ex!{|s| mul a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x022) => ex!{|s| mul a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x022) => ex!{|s| mul a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x022) => ex!{|s| mul a: [u32;16], b: u128;4     },
-            (6, 3, 0x022) => ex!{|s| mul a: [u32;16], b: u64;8      },
-            (6, 4, 0x022) => ex!{|s| mul a: [u32;16], b: u32;16     },
-            (6, 5, 0x022) => ex!{|s| mul a: [u32;16], b: u16;32     },
-            (6, 6, 0x022) => ex!{|s| mul a: [u32;16], b: u8;64      },
+            0x022 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmul(y));
+            }
 
             // and
-            (0, 0..=0, 0x023) => ex!{|s| and a: u8,       b: u8       },
-            (1, 0..=1, 0x023) => ex!{|s| and a: u16,      b: u16      },
-            (2, 0..=2, 0x023) => ex!{|s| and a: u32,      b: u32      },
-            (3, 0..=3, 0x023) => ex!{|s| and a: u64,      b: u64      },
-            (4, 0..=4, 0x023) => ex!{|s| and a: u128,     b: u128     },
-            (5, 0..=5, 0x023) => ex!{|s| and a: [u32;8],  b: [u32;8]  },
-            (6, 0..=6, 0x023) => ex!{|s| and a: [u32;16], b: [u32;16] },
+            0x023 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.vand(*b);
+            }
 
             // andnot
-            (0, 0..=0, 0x024) => ex!{|s| andnot a: u8,       b: u8       },
-            (1, 0..=1, 0x024) => ex!{|s| andnot a: u16,      b: u16      },
-            (2, 0..=2, 0x024) => ex!{|s| andnot a: u32,      b: u32      },
-            (3, 0..=3, 0x024) => ex!{|s| andnot a: u64,      b: u64      },
-            (4, 0..=4, 0x024) => ex!{|s| andnot a: u128,     b: u128     },
-            (5, 0..=5, 0x024) => ex!{|s| andnot a: [u32;8],  b: [u32;8]  },
-            (6, 0..=6, 0x024) => ex!{|s| andnot a: [u32;16], b: [u32;16] },
+            0x024 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.vandnot(*b);
+            }
 
             // or
-            (0, 0..=0, 0x025) => ex!{|s| or a: u8,       b: u8       },
-            (1, 0..=1, 0x025) => ex!{|s| or a: u16,      b: u16      },
-            (2, 0..=2, 0x025) => ex!{|s| or a: u32,      b: u32      },
-            (3, 0..=3, 0x025) => ex!{|s| or a: u64,      b: u64      },
-            (4, 0..=4, 0x025) => ex!{|s| or a: u128,     b: u128     },
-            (5, 0..=5, 0x025) => ex!{|s| or a: [u32;8],  b: [u32;8]  },
-            (6, 0..=6, 0x025) => ex!{|s| or a: [u32;16], b: [u32;16] },
+            0x025 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.vor(*b);
+            }
 
             // xor
-            (0, 0..=0, 0x026) => ex!{|s| xor a: u8,       b: u8       },
-            (1, 0..=1, 0x026) => ex!{|s| xor a: u16,      b: u16      },
-            (2, 0..=2, 0x026) => ex!{|s| xor a: u32,      b: u32      },
-            (3, 0..=3, 0x026) => ex!{|s| xor a: u64,      b: u64      },
-            (4, 0..=4, 0x026) => ex!{|s| xor a: u128,     b: u128     },
-            (5, 0..=5, 0x026) => ex!{|s| xor a: [u32;8],  b: [u32;8]  },
-            (6, 0..=6, 0x026) => ex!{|s| xor a: [u32;16], b: [u32;16] },
+            0x026 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.vxor(*b);
+            }
 
             // shl
-            (0, 0, 0x027) => ex!{|s| shl a: u8,       b: u8;1       },
-
-            (1, 0, 0x027) => ex!{|s| shl a: u16,      b: u16;1      },
-            (1, 1, 0x027) => ex!{|s| shl a: u16,      b: u8;2       },
-
-            (2, 0, 0x027) => ex!{|s| shl a: u32,      b: u32;1      },
-            (2, 1, 0x027) => ex!{|s| shl a: u32,      b: u16;2      },
-            (2, 2, 0x027) => ex!{|s| shl a: u32,      b: u8;4       },
-
-            (3, 0, 0x027) => ex!{|s| shl a: u64,      b: u64;1      },
-            (3, 1, 0x027) => ex!{|s| shl a: u64,      b: u32;2      },
-            (3, 2, 0x027) => ex!{|s| shl a: u64,      b: u16;4      },
-            (3, 3, 0x027) => ex!{|s| shl a: u64,      b: u8;8       },
-
-            (4, 0, 0x027) => ex!{|s| shl a: u128,     b: u128;1     },
-            (4, 1, 0x027) => ex!{|s| shl a: u128,     b: u64;2      },
-            (4, 2, 0x027) => ex!{|s| shl a: u128,     b: u32;4      },
-            (4, 3, 0x027) => ex!{|s| shl a: u128,     b: u16;8      },
-            (4, 4, 0x027) => ex!{|s| shl a: u128,     b: u8;16      },
-
-            (5, 0, 0x027) => ex!{|s| shl a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x027) => ex!{|s| shl a: [u32;8],  b: u128;2     },
-            (5, 2, 0x027) => ex!{|s| shl a: [u32;8],  b: u64;4      },
-            (5, 3, 0x027) => ex!{|s| shl a: [u32;8],  b: u32;8      },
-            (5, 4, 0x027) => ex!{|s| shl a: [u32;8],  b: u16;16     },
-            (5, 5, 0x027) => ex!{|s| shl a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x027) => ex!{|s| shl a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x027) => ex!{|s| shl a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x027) => ex!{|s| shl a: [u32;16], b: u128;4     },
-            (6, 3, 0x027) => ex!{|s| shl a: [u32;16], b: u64;8      },
-            (6, 4, 0x027) => ex!{|s| shl a: [u32;16], b: u32;16     },
-            (6, 5, 0x027) => ex!{|s| shl a: [u32;16], b: u16;32     },
-            (6, 6, 0x027) => ex!{|s| shl a: [u32;16], b: u8;64      },
+            0x027 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vshl(y));
+            }
 
             // shr_u
-            (0, 0, 0x028) => ex!{|s| shr_u a: u8,       b: u8;1       },
-
-            (1, 0, 0x028) => ex!{|s| shr_u a: u16,      b: u16;1      },
-            (1, 1, 0x028) => ex!{|s| shr_u a: u16,      b: u8;2       },
-
-            (2, 0, 0x028) => ex!{|s| shr_u a: u32,      b: u32;1      },
-            (2, 1, 0x028) => ex!{|s| shr_u a: u32,      b: u16;2      },
-            (2, 2, 0x028) => ex!{|s| shr_u a: u32,      b: u8;4       },
-
-            (3, 0, 0x028) => ex!{|s| shr_u a: u64,      b: u64;1      },
-            (3, 1, 0x028) => ex!{|s| shr_u a: u64,      b: u32;2      },
-            (3, 2, 0x028) => ex!{|s| shr_u a: u64,      b: u16;4      },
-            (3, 3, 0x028) => ex!{|s| shr_u a: u64,      b: u8;8       },
-
-            (4, 0, 0x028) => ex!{|s| shr_u a: u128,     b: u128;1     },
-            (4, 1, 0x028) => ex!{|s| shr_u a: u128,     b: u64;2      },
-            (4, 2, 0x028) => ex!{|s| shr_u a: u128,     b: u32;4      },
-            (4, 3, 0x028) => ex!{|s| shr_u a: u128,     b: u16;8      },
-            (4, 4, 0x028) => ex!{|s| shr_u a: u128,     b: u8;16      },
-
-            (5, 0, 0x028) => ex!{|s| shr_u a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x028) => ex!{|s| shr_u a: [u32;8],  b: u128;2     },
-            (5, 2, 0x028) => ex!{|s| shr_u a: [u32;8],  b: u64;4      },
-            (5, 3, 0x028) => ex!{|s| shr_u a: [u32;8],  b: u32;8      },
-            (5, 4, 0x028) => ex!{|s| shr_u a: [u32;8],  b: u16;16     },
-            (5, 5, 0x028) => ex!{|s| shr_u a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x028) => ex!{|s| shr_u a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x028) => ex!{|s| shr_u a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x028) => ex!{|s| shr_u a: [u32;16], b: u128;4     },
-            (6, 3, 0x028) => ex!{|s| shr_u a: [u32;16], b: u64;8      },
-            (6, 4, 0x028) => ex!{|s| shr_u a: [u32;16], b: u32;16     },
-            (6, 5, 0x028) => ex!{|s| shr_u a: [u32;16], b: u16;32     },
-            (6, 6, 0x028) => ex!{|s| shr_u a: [u32;16], b: u8;64      },
+            0x028 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vshr_u(y));
+            }
 
             // shr_s
-            (0, 0, 0x029) => ex!{|s| shr_s a: u8,       b: u8;1       },
-
-            (1, 0, 0x029) => ex!{|s| shr_s a: u16,      b: u16;1      },
-            (1, 1, 0x029) => ex!{|s| shr_s a: u16,      b: u8;2       },
-
-            (2, 0, 0x029) => ex!{|s| shr_s a: u32,      b: u32;1      },
-            (2, 1, 0x029) => ex!{|s| shr_s a: u32,      b: u16;2      },
-            (2, 2, 0x029) => ex!{|s| shr_s a: u32,      b: u8;4       },
-
-            (3, 0, 0x029) => ex!{|s| shr_s a: u64,      b: u64;1      },
-            (3, 1, 0x029) => ex!{|s| shr_s a: u64,      b: u32;2      },
-            (3, 2, 0x029) => ex!{|s| shr_s a: u64,      b: u16;4      },
-            (3, 3, 0x029) => ex!{|s| shr_s a: u64,      b: u8;8       },
-
-            (4, 0, 0x029) => ex!{|s| shr_s a: u128,     b: u128;1     },
-            (4, 1, 0x029) => ex!{|s| shr_s a: u128,     b: u64;2      },
-            (4, 2, 0x029) => ex!{|s| shr_s a: u128,     b: u32;4      },
-            (4, 3, 0x029) => ex!{|s| shr_s a: u128,     b: u16;8      },
-            (4, 4, 0x029) => ex!{|s| shr_s a: u128,     b: u8;16      },
-
-            (5, 0, 0x029) => ex!{|s| shr_s a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x029) => ex!{|s| shr_s a: [u32;8],  b: u128;2     },
-            (5, 2, 0x029) => ex!{|s| shr_s a: [u32;8],  b: u64;4      },
-            (5, 3, 0x029) => ex!{|s| shr_s a: [u32;8],  b: u32;8      },
-            (5, 4, 0x029) => ex!{|s| shr_s a: [u32;8],  b: u16;16     },
-            (5, 5, 0x029) => ex!{|s| shr_s a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x029) => ex!{|s| shr_s a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x029) => ex!{|s| shr_s a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x029) => ex!{|s| shr_s a: [u32;16], b: u128;4     },
-            (6, 3, 0x029) => ex!{|s| shr_s a: [u32;16], b: u64;8      },
-            (6, 4, 0x029) => ex!{|s| shr_s a: [u32;16], b: u32;16     },
-            (6, 5, 0x029) => ex!{|s| shr_s a: [u32;16], b: u16;32     },
-            (6, 6, 0x029) => ex!{|s| shr_s a: [u32;16], b: u8;64      },
+            0x029 => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vshr_s(y));
+            }
 
             // rotl
-            (0, 0, 0x02a) => ex!{|s| rotl a: u8,       b: u8;1       },
-
-            (1, 0, 0x02a) => ex!{|s| rotl a: u16,      b: u16;1      },
-            (1, 1, 0x02a) => ex!{|s| rotl a: u16,      b: u8;2       },
-
-            (2, 0, 0x02a) => ex!{|s| rotl a: u32,      b: u32;1      },
-            (2, 1, 0x02a) => ex!{|s| rotl a: u32,      b: u16;2      },
-            (2, 2, 0x02a) => ex!{|s| rotl a: u32,      b: u8;4       },
-
-            (3, 0, 0x02a) => ex!{|s| rotl a: u64,      b: u64;1      },
-            (3, 1, 0x02a) => ex!{|s| rotl a: u64,      b: u32;2      },
-            (3, 2, 0x02a) => ex!{|s| rotl a: u64,      b: u16;4      },
-            (3, 3, 0x02a) => ex!{|s| rotl a: u64,      b: u8;8       },
-
-            (4, 0, 0x02a) => ex!{|s| rotl a: u128,     b: u128;1     },
-            (4, 1, 0x02a) => ex!{|s| rotl a: u128,     b: u64;2      },
-            (4, 2, 0x02a) => ex!{|s| rotl a: u128,     b: u32;4      },
-            (4, 3, 0x02a) => ex!{|s| rotl a: u128,     b: u16;8      },
-            (4, 4, 0x02a) => ex!{|s| rotl a: u128,     b: u8;16      },
-
-            (5, 0, 0x02a) => ex!{|s| rotl a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x02a) => ex!{|s| rotl a: [u32;8],  b: u128;2     },
-            (5, 2, 0x02a) => ex!{|s| rotl a: [u32;8],  b: u64;4      },
-            (5, 3, 0x02a) => ex!{|s| rotl a: [u32;8],  b: u32;8      },
-            (5, 4, 0x02a) => ex!{|s| rotl a: [u32;8],  b: u16;16     },
-            (5, 5, 0x02a) => ex!{|s| rotl a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x02a) => ex!{|s| rotl a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x02a) => ex!{|s| rotl a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x02a) => ex!{|s| rotl a: [u32;16], b: u128;4     },
-            (6, 3, 0x02a) => ex!{|s| rotl a: [u32;16], b: u64;8      },
-            (6, 4, 0x02a) => ex!{|s| rotl a: [u32;16], b: u32;16     },
-            (6, 5, 0x02a) => ex!{|s| rotl a: [u32;16], b: u16;32     },
-            (6, 6, 0x02a) => ex!{|s| rotl a: [u32;16], b: u8;64      },
+            0x02a => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vrotl(y));
+            }
 
             // rotr
-            (0, 0, 0x02b) => ex!{|s| rotr a: u8,       b: u8;1       },
-
-            (1, 0, 0x02b) => ex!{|s| rotr a: u16,      b: u16;1      },
-            (1, 1, 0x02b) => ex!{|s| rotr a: u16,      b: u8;2       },
-
-            (2, 0, 0x02b) => ex!{|s| rotr a: u32,      b: u32;1      },
-            (2, 1, 0x02b) => ex!{|s| rotr a: u32,      b: u16;2      },
-            (2, 2, 0x02b) => ex!{|s| rotr a: u32,      b: u8;4       },
-
-            (3, 0, 0x02b) => ex!{|s| rotr a: u64,      b: u64;1      },
-            (3, 1, 0x02b) => ex!{|s| rotr a: u64,      b: u32;2      },
-            (3, 2, 0x02b) => ex!{|s| rotr a: u64,      b: u16;4      },
-            (3, 3, 0x02b) => ex!{|s| rotr a: u64,      b: u8;8       },
-
-            (4, 0, 0x02b) => ex!{|s| rotr a: u128,     b: u128;1     },
-            (4, 1, 0x02b) => ex!{|s| rotr a: u128,     b: u64;2      },
-            (4, 2, 0x02b) => ex!{|s| rotr a: u128,     b: u32;4      },
-            (4, 3, 0x02b) => ex!{|s| rotr a: u128,     b: u16;8      },
-            (4, 4, 0x02b) => ex!{|s| rotr a: u128,     b: u8;16      },
-
-            (5, 0, 0x02b) => ex!{|s| rotr a: [u32;8],  b: [u32;8];1  },
-            (5, 1, 0x02b) => ex!{|s| rotr a: [u32;8],  b: u128;2     },
-            (5, 2, 0x02b) => ex!{|s| rotr a: [u32;8],  b: u64;4      },
-            (5, 3, 0x02b) => ex!{|s| rotr a: [u32;8],  b: u32;8      },
-            (5, 4, 0x02b) => ex!{|s| rotr a: [u32;8],  b: u16;16     },
-            (5, 5, 0x02b) => ex!{|s| rotr a: [u32;8],  b: u8;32      },
-
-            (6, 0, 0x02b) => ex!{|s| rotr a: [u32;16], b: [u32;16];1 },
-            (6, 1, 0x02b) => ex!{|s| rotr a: [u32;16], b: [u32;8];2  },
-            (6, 2, 0x02b) => ex!{|s| rotr a: [u32;16], b: u128;4     },
-            (6, 3, 0x02b) => ex!{|s| rotr a: [u32;16], b: u64;8      },
-            (6, 4, 0x02b) => ex!{|s| rotr a: [u32;16], b: u32;16     },
-            (6, 5, 0x02b) => ex!{|s| rotr a: [u32;16], b: u16;32     },
-            (6, 6, 0x02b) => ex!{|s| rotr a: [u32;16], b: u8;64      },
-
-
-            //// unknown instruction? ////
-
-            // unknown instruction?
-            _ => {
-                Err(Error::InvalidOpcode(ins))?
-            },
+            0x02b => {
+                let a = s.reg::<U>(ra)?;
+                let b = s.reg::<U>(rb)?;
+                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vrotr(y));
+            }
         }
     }
 }
