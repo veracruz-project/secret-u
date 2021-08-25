@@ -4,8 +4,8 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Invalid opcode {0:#010x}")]
-    InvalidOpcode(u32),
+    #[error("Invalid opcode {0:#018x}")]
+    InvalidOpcode(u64),
     #[error("Invalid return")]
     InvalidReturn,
     #[error("Unaligned access")]

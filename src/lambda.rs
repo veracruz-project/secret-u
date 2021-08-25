@@ -43,7 +43,7 @@ macro_rules! compile_object {
                 )*
 
                 // bytecode, initial state, and working state
-                __bytecode: Vec<u32>,
+                __bytecode: Vec<u64>,
                 __init: $crate::lambda::AlignedBytes,
                 __state: RefCell<$crate::lambda::AlignedBytes>,
             }
@@ -86,7 +86,7 @@ macro_rules! compile_object {
 
                 /// Access to the underlying bytecode
                 #[allow(dead_code)]
-                pub fn bytecode<'a>(&'a self) -> &'a [u32] {
+                pub fn bytecode<'a>(&'a self) -> &'a [u64] {
                     &self.__bytecode
                 }
 

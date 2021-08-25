@@ -46,7 +46,7 @@ trait Bytes: Sized {
     fn from_le(self) -> Self;
 
     // extract/replace
-    fn extract<T>(self, i: u32) -> Option<T>
+    fn extract<T>(self, i: u16) -> Option<T>
     where
         T: Bytes
     {
@@ -61,7 +61,7 @@ trait Bytes: Sized {
             })
     }
 
-    fn replace<T>(self, i: u32, t: T) -> Option<Self>
+    fn replace<T>(self, i: u16, t: T) -> Option<Self>
     where
         T: Bytes
     {
@@ -952,11 +952,11 @@ impl AsMut<[u8]> for State<'_> {
 
 impl State<'_> {
     // accessors
-    fn reg<'a, T: 'a>(&'a self, idx: u8) -> Result<&'a T, Error> {
+    fn reg<'a, T: 'a>(&'a self, idx: u16) -> Result<&'a T, Error> {
         self.slice(usize::from(idx))
     }
 
-    fn reg_mut<'a, T: 'a>(&'a mut self, idx: u8) -> Result<&'a mut T, Error> {
+    fn reg_mut<'a, T: 'a>(&'a mut self, idx: u16) -> Result<&'a mut T, Error> {
         self.slice_mut(usize::from(idx))
     }
 
@@ -1030,15 +1030,15 @@ thread_local! {
 /// Not constant time!
 ///
 pub fn exec<'a>(
-    bytecode: &[u32],
+    bytecode: &[u64],
     state: &'a mut [u8]
 ) -> Result<&'a [u8], Error> {
     // setup PC, bytecode must end in return, which means we can avoid
     // checking for end-of-code every step
-    let mut pc: *const u32 = bytecode.as_ptr();
+    let mut pc: *const u64 = bytecode.as_ptr();
 
     let last = bytecode.last().copied().unwrap_or(0);
-    if last & 0x03ffff00 != 0x00020000 {
+    if last & 0x00ffffff00000000 != 0x0002000000000000 {
         // bytecode must end in return
         Err(Error::InvalidReturn)?;
     }
@@ -1053,7 +1053,7 @@ pub fn exec<'a>(
 
     // core loop
     loop {
-        let ins: u32 = unsafe { *pc };
+        let ins: u64 = unsafe { *pc };
         pc = unsafe { pc.add(1) };
 
         #[cfg(feature="debug-cycle-count")]
@@ -1063,7 +1063,7 @@ pub fn exec<'a>(
         {
             match OpIns::try_from(ins) {
                 Ok(ins) => print!("    {:<24} :", format!("{}", ins)),
-                _       => print!("    {:<24} :", format!("unknown {:#06x}", ins)),
+                _       => print!("    {:<24} :", format!("unknown {:#018x}", ins)),
             }
             for i in 0..s.state.len() {
                 print!(" {:02x}", s.state[i]);
@@ -1071,13 +1071,13 @@ pub fn exec<'a>(
             println!();
         }
 
-        let npw2  = ((ins & 0xe0000000) >> 29) as u8;
-        let lnpw2 = ((ins & 0x1c000000) >> 26) as u8;
-        let opc   = ((ins & 0x03ff0000) >> 16) as u16;
-        let rp    = ((ins & 0x00ff0000) >> 16) as u8;
-        let l     = ((ins & 0x007f0000) >> 16) as u8;
-        let ra    = ((ins & 0x0000ff00) >>  8) as u8;
-        let rb    = ((ins & 0x000000ff) >>  0) as u8;
+        let npw2  = ((ins & 0xf000000000000000) >> 60) as u8;
+        let lnpw2 = ((ins & 0x0f00000000000000) >> 56) as u8;
+        let op    = ((ins & 0x00ff000000000000) >> 48) as u8;
+        let d     = ((ins & 0x0000ffff00000000) >> 32) as u16;
+        let a     = ((ins & 0x00000000ffff0000) >> 16) as u16;
+        let b     = ((ins & 0x000000000000ffff) >>  0) as u16;
+        let ab    = ((ins & 0x00000000ffffffff) >>  0) as u32;
 
         // engine_match sort of breaks macro hygiene, this was much easier than
         // proper scoping and engine_match is really only intended to be used here
@@ -1089,40 +1089,139 @@ pub fn exec<'a>(
             //// arg/ret instructions ////
 
             // arg (convert to ne)
-            0x001 if lnpw2 == 0 => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.from_le();
+            0x01 if __lnpw2 == 0 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.from_le();
             }
 
             // ret (convert from ne and exit)
-            0x002 if lnpw2 == 0 => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.to_le();
+            0x02 if __lnpw2 == 0 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.to_le();
                 return s.ret(size_of::<U>());
+            }
+
+
+            //// conversion instructions ////
+
+            // extend_const_u
+            0x03 if __lane_npw2 >= 3 => {
+                // must be aligned to u64
+                const WORDS: usize = size_of::<L>() / 8;
+
+                // we need to check the bounds on this
+                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
+                    Err(Error::OutOfBounds)?;
+                }
+
+                // load from instruction stream
+                let mut bytes = [0u8; 8*WORDS];
+                for i in 0..WORDS {
+                    let word = unsafe { *pc };
+                    pc = unsafe { pc.add(1) };
+                    bytes[i*8..(i+1)*8].copy_from_slice(&word.to_le_bytes());
+                }
+                let rb = <L>::from_le_bytes(bytes);
+
+                // cast if needed
+                *s.reg_mut::<U>(d)? = <U>::extend_u(rb);
+            }
+
+            // extend_const_s
+            0x04 if __lane_npw2 >= 3 => {
+                // must be aligned to u64
+                const WORDS: usize = size_of::<L>() / 8;
+
+                // we need to check the bounds on this
+                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
+                    Err(Error::OutOfBounds)?;
+                }
+
+                // load from instruction stream
+                let mut bytes = [0u8; 8*WORDS];
+                for i in 0..WORDS {
+                    let word = unsafe { *pc };
+                    pc = unsafe { pc.add(1) };
+                    bytes[i*8..(i+1)*8].copy_from_slice(&word.to_le_bytes());
+                }
+                let rb = <L>::from_le_bytes(bytes);
+
+                // cast if needed
+                *s.reg_mut::<U>(d)? = <U>::extend_s(rb);
+            }
+
+            // splat_const
+            0x05 if __lane_npw2 >= 3 => {
+                // must be aligned to u64
+                const WORDS: usize = size_of::<L>() / 8;
+
+                // we need to check the bounds on this
+                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
+                    Err(Error::OutOfBounds)?;
+                }
+
+                // load from instruction stream
+                let mut bytes = [0u8; 8*WORDS];
+                for i in 0..WORDS {
+                    let word = unsafe { *pc };
+                    pc = unsafe { pc.add(1) };
+                    bytes[i*8..(i+1)*8].copy_from_slice(&word.to_le_bytes());
+                }
+                let rb = <L>::from_le_bytes(bytes);
+
+                // cast if needed
+                *s.reg_mut::<U>(d)? = <U>::splat(rb);
+            }
+
+            // extend_u
+            0x06 => {
+                let ra = s.reg::<L>(a)?;
+                *s.reg_mut::<U>(d)? = <U>::extend_u(*ra);
+            }
+
+            // extend_s
+            0x07 => {
+                let ra = s.reg::<L>(a)?;
+                *s.reg_mut::<U>(d)? = <U>::extend_s(*ra);
+            }
+
+            // splat
+            0x08 => {
+                let ra = s.reg::<L>(a)?;
+                *s.reg_mut::<U>(d)? = <U>::splat(*ra);
+            }
+
+            // splat_c
+            // TODO should this be handled differently?
+            0x09 if __lane_npw2 <= 2 => {
+                *s.reg_mut::<U>(d)? = <U>::splat(ab as L);
+            }
+            0x09 if __lane_npw2 > 2 => {
+                *s.reg_mut::<U>(d)? = <U>::splat(<L>::extend_s(ab));
             }
 
 
             //// special instructions ////
 
             // extract (le)
-            0x100..=0x13f => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<L>(ra)? = b.extract(u32::from(l)).unwrap();
+            0x0a => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<L>(d)? = ra.extract(b).unwrap();
             }
 
             // replace (le)
-            0x180..=0x1bf => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<L>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.replace(u32::from(l), *b).unwrap();
+            0x0b => {
+                let rd = s.reg::<U>(d)?;
+                let ra = s.reg::<L>(a)?;
+                *s.reg_mut::<U>(d)? = rd.replace(b, *ra).unwrap();
             }
 
             // select
-            0x200..=0x2ff => {
-                let p = s.reg::<U>(rp)?;
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = p.xmap3(*a, *b, |x: L, y: L, z: L| {
+            0x0c => {
+                let rd = s.reg::<U>(d)?;
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = rb.xmap3(*ra, *rd, |x: L, y: L, z: L| {
                     if x != <L>::ZERO {
                         y
                     } else {
@@ -1132,13 +1231,13 @@ pub fn exec<'a>(
             }
 
             // shuffle
-            0x300..=0x3ff => {
-                let p = s.reg::<U>(rp)?;
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
+            0x0d => {
+                let rd = s.reg::<U>(d)?;
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
                 let mut i  = 0;
-                *s.reg_mut::<U>(ra)? = a.xfold2(*b, |r, x: L, y: L| {
-                    let r = p.xmap2(r, |w: L, z: L| {
+                *s.reg_mut::<U>(d)? = ra.xfold2(*rd, |r, x: L, y: L| {
+                    let r = rb.xmap2(r, |w: L, z: L| {
                         let j = w.try_into_u32().unwrap_or(u32::MAX);
                         if j == i {
                             x
@@ -1154,343 +1253,242 @@ pub fn exec<'a>(
             }
 
 
-            //// conversion instructions ////
-
-            // extend_const_u
-            0x003 => {
-                // align to u32
-                const WORDS: usize = (size_of::<L>()+3) / 4;
-
-                // we need to check the bounds on this
-                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
-                    Err(Error::OutOfBounds)?;
-                }
-
-                // load from instruction stream
-                let mut bytes = [0u8; 4*WORDS];
-                for i in 0..WORDS {
-                    let word = unsafe { *pc };
-                    pc = unsafe { pc.add(1) };
-                    bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
-                }
-                let b = <L>::from_le_bytes(
-                    <[u8;size_of::<L>()]>::try_from(&bytes[..size_of::<L>()]).unwrap()
-                );
-
-                // cast if needed
-                *s.reg_mut::<U>(ra)? = <U>::extend_u(b);
-            }
-
-            // extend_const_s
-            0x004 => {
-                // align to u32
-                const WORDS: usize = (size_of::<L>()+3) / 4;
-
-                // we need to check the bounds on this
-                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
-                    Err(Error::OutOfBounds)?;
-                }
-
-                // load from instruction stream
-                let mut bytes = [0u8; 4*WORDS];
-                for i in 0..WORDS {
-                    let word = unsafe { *pc };
-                    pc = unsafe { pc.add(1) };
-                    bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
-                }
-                let b = <L>::from_le_bytes(
-                    <[u8;size_of::<L>()]>::try_from(&bytes[..size_of::<L>()]).unwrap()
-                );
-
-                // cast if needed
-                *s.reg_mut::<U>(ra)? = <U>::extend_s(b);
-            }
-
-            // splat_const
-            0x005 => {
-                // align to u32
-                const WORDS: usize = (size_of::<L>()+3) / 4;
-
-                // we need to check the bounds on this
-                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
-                    Err(Error::OutOfBounds)?;
-                }
-
-                // load from instruction stream
-                let mut bytes = [0u8; 4*WORDS];
-                for i in 0..WORDS {
-                    let word = unsafe { *pc };
-                    pc = unsafe { pc.add(1) };
-                    bytes[i*4..(i+1)*4].copy_from_slice(&word.to_le_bytes());
-                }
-                let b = <L>::from_le_bytes(
-                    <[u8;size_of::<L>()]>::try_from(&bytes[..size_of::<L>()]).unwrap()
-                );
-
-                // cast if needed
-                *s.reg_mut::<U>(ra)? = <U>::splat(b);
-            }
-
-            // extend_u
-            0x006 => {
-                let b = s.reg::<L>(rb)?;
-                *s.reg_mut::<U>(ra)? = <U>::extend_u(*b);
-            }
-
-            // extend_s
-            0x007 => {
-                let b = s.reg::<L>(rb)?;
-                *s.reg_mut::<U>(ra)? = <U>::extend_s(*b);
-            }
-
-            // splat
-            0x008 => {
-                let b = s.reg::<L>(rb)?;
-                *s.reg_mut::<U>(ra)? = <U>::splat(*b);
-            }
-
-            // splat_c
-            0x009 => {
-                *s.reg_mut::<U>(ra)? = <U>::splat(<L>::extend_s(rb));
-            }
-
-
             //// comparison instructions ////
 
             // none
-            0x00a => {
-                let b = s.reg::<U>(rb)?;
+            0x0f => {
+                let ra = s.reg::<U>(a)?;
                 // note these apply to whole word!
-                *s.reg_mut::<U>(ra)? = b.xfilter(|x: U| x == <U>::ZERO);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: U| x == <U>::ZERO);
             }
 
             // all
-            0x00b => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.xfilter(|x: U| {
+            0x10 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: U| {
                     x.xfold(|p, x: L| p && x != <L>::ZERO, true)
                 });
             }
 
             // eq
-            0x00c => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x == y);
+            0x11 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x == y);
             }
 
             // ne
-            0x00d => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x != y);
+            0x12 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x != y);
             }
 
             // lt_u
-            0x00e => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vlt_u(y));
+            0x13 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vlt_u(y));
             }
 
             // lt_s
-            0x00f => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vlt_s(y));
+            0x14 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vlt_s(y));
             }
 
             // gt_u
-            0x010 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vgt_u(y));
+            0x15 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vgt_u(y));
             }
 
             // gt_s
-            0x011 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vgt_s(y));
+            0x16 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vgt_s(y));
             }
 
             // le_u
-            0x012 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vle_u(y));
+            0x17 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vle_u(y));
             }
 
             // le_s
-            0x013 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vle_s(y));
+            0x18 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vle_s(y));
             }
 
             // ge_u
-            0x014 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vge_u(y));
+            0x19 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vge_u(y));
             }
 
             // ge_s
-            0x015 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xfilter2(*b, |x: L, y: L| x.vge_s(y));
+            0x1a => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vge_s(y));
             }
 
             // min_u
-            0x016 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmin_u(y));
+            0x1b => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmin_u(y));
             }
 
             // min_s
-            0x017 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmin_s(y));
+            0x1c => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmin_s(y));
             }
 
             // max_u
-            0x018 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmax_u(y));
+            0x1d => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmax_u(y));
             }
 
             // max_s
-            0x019 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmax_s(y));
+            0x1e => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmax_s(y));
             }
 
 
             //// integer instructions ////
 
             // neg
-            0x01a => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vneg());
+            0x1f => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vneg());
             }
 
             // abs
-            0x01b => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vabs());
+            0x20 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vabs());
             }
 
             // not
-            0x01c => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.vnot();
+            0x21 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.vnot();
             }
 
             // clz
-            0x01d => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vclz());
+            0x22 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vclz());
             }
 
             // ctz
-            0x01e => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vctz());
+            0x23 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vctz());
             }
 
             // popcnt
-            0x01f => {
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = b.xmap(|x: L| x.vpopcnt());
+            0x24 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vpopcnt());
             }
 
             // add
-            0x020 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vadd(y));
+            0x25 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vadd(y));
             }
 
             // sub
-            0x021 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vsub(y));
+            0x26 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vsub(y));
             }
 
             // mul
-            0x022 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vmul(y));
+            0x27 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmul(y));
             }
 
             // and
-            0x023 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.vand(*b);
+            0x28 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.vand(*rb);
             }
 
             // andnot
-            0x024 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.vandnot(*b);
+            0x29 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.vandnot(*rb);
             }
 
             // or
-            0x025 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.vor(*b);
+            0x2a => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.vor(*rb);
             }
 
             // xor
-            0x026 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.vxor(*b);
+            0x2b => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.vxor(*rb);
             }
 
             // shl
-            0x027 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vshl(y));
+            0x2c => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshl(y));
             }
 
             // shr_u
-            0x028 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vshr_u(y));
+            0x2d => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshr_u(y));
             }
 
             // shr_s
-            0x029 => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vshr_s(y));
+            0x2e => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshr_s(y));
             }
 
             // rotl
-            0x02a => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vrotl(y));
+            0x2f => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vrotl(y));
             }
 
             // rotr
-            0x02b => {
-                let a = s.reg::<U>(ra)?;
-                let b = s.reg::<U>(rb)?;
-                *s.reg_mut::<U>(ra)? = a.xmap2(*b, |x: L, y: L| x.vrotr(y));
+            0x30 => {
+                let ra = s.reg::<U>(a)?;
+                let rb = s.reg::<U>(b)?;
+                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vrotr(y));
             }
         }
     }

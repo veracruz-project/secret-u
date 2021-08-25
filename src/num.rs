@@ -888,13 +888,17 @@ for_secret_t! {
             /// Extract a specific lane
             pub fn extract(self, lane: usize) -> SecretBool {
                 assert!(lane < __lanes);
-                SecretBool::defer(Rc::new(OpTree::<__lane_U>::extract(lane as u8, self.0)))
+                SecretBool::defer(Rc::new(OpTree::<__lane_U>::extract(
+                    u16::try_from(lane).unwrap(), self.0
+                )))
             }
 
             /// Replace a specific lane
             pub fn replace(self, lane: usize, value: SecretBool) -> Self {
                 assert!(lane < __lanes);
-                Self(OpTree::replace::<__lane_U>(lane as u8, self.0, value.resolve().into_owned()))
+                Self(OpTree::replace::<__lane_U>(
+                    u16::try_from(lane).unwrap(), self.0, value.resolve().into_owned()
+                ))
             }
 
             /// Reverse lanes
@@ -1315,13 +1319,17 @@ for_secret_t! {
             /// Extract a specific lane
             pub fn extract(self, lane: usize) -> __lane_t {
                 assert!(lane < __lanes);
-                <__lane_t>::from_tree(OpTree::<__lane_U>::extract(lane as u8, self.0))
+                <__lane_t>::from_tree(OpTree::<__lane_U>::extract(
+                    u16::try_from(lane).unwrap(), self.0
+                ))
             }
 
             /// Replace a specific lane
             pub fn replace(self, lane: usize, value: __lane_t) -> Self {
                 assert!(lane < __lanes);
-                Self(OpTree::replace::<__lane_U>(lane as u8, self.0, value.0))
+                Self(OpTree::replace::<__lane_U>(
+                    u16::try_from(lane).unwrap(), self.0, value.0
+                ))
             }
 
             /// Reverse lanes

@@ -31,111 +31,88 @@ use secret_u_macros::for_secret_t;
 /// Based originally on the numeric instructions of Wasm, with the
 /// noticable omission of the division instructions (uncommon for
 /// both SIMD instruction sets and constant-time instruction sets)
-/// but extended to larger integer sizes (u8-u512), and with multiple
-/// SIMD lanes (u8x2, u16x4, etc).
+/// but extended to larger integer sizes (u8-u262144), and with multiple
+/// SIMD lanes (u8x2, u16x4, etc). (Ok things got a bit out of hand).
 ///
 /// Instead of operating on locals/globals with a stack, instructions
-/// operate directly on 256 registers (sometimes called "slots"), which
-/// share a common blob of memory but must not overlap or be reinterpreted.
+/// operate directly on up to 65536 registers (sometimes called "slots" in
+/// this code), which share a common blob of memory but must not overlap or be
+/// reinterpreted.
 ///
-/// Most instructions follow a 2-register format:
-/// 
-/// [-3-|-3-|00|--  8  --|--  8  --|--  8  --]
-///   ^   ^         ^         ^         ^- 8-bit source slot
-///   |   |         |         '----------- 8-bit destination slot
-///   |   |         '--------------------- 8-bit opcode
-///   |   '------------------------------- 3-bit npw2(lanes)
-///   '----------------------------------- 3-bit npw2(size)
+/// Instructions follow a 3-register format:
 ///
-/// However there are 4 special instruction which use either a 7-bit
-/// immediate or 3-register format:
+/// [4|4|- 8 -|--  16  --|--  16  --|--  16  --]
+///  ^ ^   ^        ^          ^          ^-- 16-bit ra
+///  | |   |        |          '------------- 16-bit rb
+///  | |   |        '------------------------ 16-bit rd
+///  | |   '--------------------------------- 8-bit opcode
+///  | '------------------------------------- 4-bit npw2(lanes)
+///  '--------------------------------------- 4-bit npw2(size)
 ///
-/// extract + replace:
-/// [-3-|-3-|01-|-- 7  --|--  8  --|--  8  --]
-///   ^   ^    ^    ^         ^         ^- 8-bit source slot
-///   |   |    |    |         '----------- 8-bit destination slot
-///   |   |    |    '--------------------- 7-bit lane number
-///   |   |    '-------------------------- 1-bit extract or replace
-///   |   '------------------------------- 3-bit npw2(lanes)
-///   '----------------------------------- 3-bit npw2(size)
-///
-/// select + shuffle:
-/// [-3-|-3-|1-|--  8  --|--  8  --|--  8  --]
-///   ^   ^   ^     ^         ^         ^- 8-bit source slot
-///   |   |   |     |         '----------- 8-bit destination slot
-///   |   |   |     '--------------------- 8-bit predicate slot
-///   |   |   '--------------------------- 1-bit select or shuffle
-///   |   '------------------------------- 3-bit npw2(lanes)
-///   '----------------------------------- 3-bit npw2(size)
-///
-/// Most instructions are a fixed 32-bits, except for const instructions
-/// which are followed by a 32-bit aligned little-endian immediate in the
-/// instruction stream.
+/// Despite the massive 64-bit instruction size, the instruction encoding is
+/// still rather tight thanks to needing to encode the integer geometry and
+/// large register file.
 ///
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[repr(u32)]
+#[repr(u8)]
 pub enum OpCode {
-    Extract       = 0x01000000,
-    Replace       = 0x01800000,
-    Select        = 0x02000000,
-    Shuffle       = 0x03000000,
+    Arg           = 0x01,
+    Ret           = 0x02,
 
-    Arg           = 0x00010000,
-    Ret           = 0x00020000,
+    ExtendConstU  = 0x03,
+    ExtendConstS  = 0x04,
+    SplatConst    = 0x05,
+    ExtendU       = 0x06,
+    ExtendS       = 0x07,
+    Splat         = 0x08,
+    SplatC        = 0x09,
 
-    ExtendConstU  = 0x00030000,
-    ExtendConstS  = 0x00040000,
-    SplatConst    = 0x00050000,
-    ExtendU       = 0x00060000,
-    ExtendS       = 0x00070000,
-    Splat         = 0x00080000,
-    SplatC        = 0x00090000,
+    Extract       = 0x0a,
+    Replace       = 0x0b,
+    Select        = 0x0c,
+    Shuffle       = 0x0d,
+    Shuffle2      = 0x0e,
 
-    None          = 0x000a0000,
-    All           = 0x000b0000,
-    Eq            = 0x000c0000,
-    Ne            = 0x000d0000,
-    LtU           = 0x000e0000,
-    LtS           = 0x000f0000,
-    GtU           = 0x00100000,
-    GtS           = 0x00110000,
-    LeU           = 0x00120000,
-    LeS           = 0x00130000,
-    GeU           = 0x00140000,
-    GeS           = 0x00150000,
-    MinU          = 0x00160000,
-    MinS          = 0x00170000,
-    MaxU          = 0x00180000,
-    MaxS          = 0x00190000,
+    None          = 0x0f,
+    All           = 0x10,
+    Eq            = 0x11,
+    Ne            = 0x12,
+    LtU           = 0x13,
+    LtS           = 0x14,
+    GtU           = 0x15,
+    GtS           = 0x16,
+    LeU           = 0x17,
+    LeS           = 0x18,
+    GeU           = 0x19,
+    GeS           = 0x1a,
+    MinU          = 0x1b,
+    MinS          = 0x1c,
+    MaxU          = 0x1d,
+    MaxS          = 0x1e,
 
-    Neg           = 0x001a0000,
-    Abs           = 0x001b0000,
-    Not           = 0x001c0000,
-    Clz           = 0x001d0000,
-    Ctz           = 0x001e0000,
-    Popcnt        = 0x001f0000,
-    Add           = 0x00200000,
-    Sub           = 0x00210000,
-    Mul           = 0x00220000,
-    And           = 0x00230000,
-    Andnot        = 0x00240000,
-    Or            = 0x00250000,
-    Xor           = 0x00260000,
-    Shl           = 0x00270000,
-    ShrU          = 0x00280000,
-    ShrS          = 0x00290000,
-    Rotl          = 0x002a0000,
-    Rotr          = 0x002b0000,
+    Neg           = 0x1f,
+    Abs           = 0x20,
+    Not           = 0x21,
+    Clz           = 0x22,
+    Ctz           = 0x23,
+    Popcnt        = 0x24,
+    Add           = 0x25,
+    Sub           = 0x26,
+    Mul           = 0x27,
+    And           = 0x28,
+    Andnot        = 0x29,
+    Or            = 0x2a,
+    Xor           = 0x2b,
+    Shl           = 0x2c,
+    ShrU          = 0x2d,
+    ShrS          = 0x2e,
+    Rotl          = 0x2f,
+    Rotr          = 0x30,
 }
 
 impl fmt::Display for OpCode {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let name = match self {
-            OpCode::Extract       => "extract",
-            OpCode::Replace       => "replace",
-            OpCode::Select        => "select",
-            OpCode::Shuffle       => "shuffle",
-
             OpCode::Arg           => "arg",
             OpCode::Ret           => "ret",
 
@@ -146,6 +123,12 @@ impl fmt::Display for OpCode {
             OpCode::ExtendS       => "extend_s",
             OpCode::Splat         => "splat",
             OpCode::SplatC        => "splat_c",
+
+            OpCode::Extract       => "extract",
+            OpCode::Replace       => "replace",
+            OpCode::Select        => "select",
+            OpCode::Shuffle       => "shuffle",
+            OpCode::Shuffle2      => "shuffle2",
 
             OpCode::None          => "none",
             OpCode::All           => "all",
@@ -190,7 +173,7 @@ impl fmt::Display for OpCode {
 
 /// An encoded instruction
 #[derive(Debug, Copy, Clone)]
-pub struct OpIns(u32);
+pub struct OpIns(u64);
 
 impl OpIns {
     /// Create a new instruction from its components
@@ -199,29 +182,33 @@ impl OpIns {
         npw2: u8,
         lnpw2: u8,
         opcode: OpCode,
-        p: u8,
-        a: u8,
-        b: u8
+        d: u16,
+        a: u16,
+        b: u16
     ) -> OpIns {
         OpIns(
-            ((npw2 as u32) << 29)
-                | ((lnpw2 as u32) << 26)
-                | (opcode as u32)
-                | ((p as u32) << 16)
-                | ((a as u32) << 8)
-                | ((b as u32) << 0)
+            ((npw2 as u64) << 60)
+                | ((lnpw2 as u64) << 56)
+                | ((opcode as u64) << 48)
+                | ((d as u64) << 32)
+                | ((a as u64) << 16)
+                | ((b as u64) << 0)
         )
+    }
+
+    pub const fn with_ab(
+        npw2: u8,
+        lnpw2: u8,
+        opcode: OpCode,
+        d: u16,
+        ab: u32
+    ) -> OpIns {
+        OpIns::new(npw2, lnpw2, opcode, d, (ab >> 16) as u16, ab as u16)
     }
 
     #[inline]
     pub fn opcode(&self) -> OpCode {
-        let opcode = if self.0 & 0x02000000 != 0 {
-            self.0 & 0x03000000
-        } else if self.0 & 0x01000000 != 0 {
-            self.0 & 0x03800000
-        } else {
-            self.0 & 0x03ff0000
-        };
+        let opcode = ((self.0 & 0x00ff000000000000) >> 48) as u8;
 
         // we check for OpCode validity on every function that can build
         // an Op, so this should only result in valid OpCodes
@@ -230,27 +217,27 @@ impl OpIns {
 
     #[inline]
     pub fn npw2(&self) -> u8 {
-        ((self.0 & 0xe0000000) >> 29) as u8
-    }
-
-    #[inline]
-    pub fn size(&self) -> usize {
-        1usize << self.npw2()
-    }
-
-    #[inline]
-    pub fn width(&self) -> usize {
-        8*self.size()
+        ((self.0 & 0xf000000000000000) >> 60) as u8
     }
 
     #[inline]
     pub fn lnpw2(&self) -> u8 {
-        ((self.0 & 0x1c000000) >> 26) as u8
+        ((self.0 & 0x0f00000000000000) >> 56) as u8
+    }
+
+    #[inline]
+    pub fn size(&self) -> usize {
+        1 << self.npw2()
+    }
+
+    #[inline]
+    pub fn width(&self) -> usize {
+        8 << self.npw2()
     }
 
     #[inline]
     pub fn lcount(&self) -> usize {
-        1usize << self.lnpw2()
+        1 << self.lnpw2()
     }
 
     #[inline]
@@ -260,88 +247,94 @@ impl OpIns {
 
     #[inline]
     pub fn lwidth(&self) -> usize {
-        8*self.lsize()
+        self.width() >> self.lnpw2()
     }
 
     #[inline]
-    pub fn p(&self) -> u8 {
-        (self.0 >> 16) as u8
+    pub fn d(&self) -> u16 {
+        ((self.0 & 0x0000ffff00000000) >> 32) as u16
     }
 
     #[inline]
-    pub fn a(&self) -> u8 {
-        (self.0 >> 8) as u8
+    pub fn a(&self) -> u16 {
+        ((self.0 & 0x00000000ffff0000) >> 16) as u16
     }
 
     #[inline]
-    pub fn b(&self) -> u8 {
-        (self.0 >> 0) as u8
+    pub fn b(&self) -> u16 {
+        ((self.0 & 0x000000000000ffff) >>  0) as u16
+    }
+
+    #[inline]
+    pub fn ab(&self) -> u32 {
+        ((self.0 & 0x00000000ffffffff) >>  0) as u32
     }
 }
 
-impl From<OpIns> for u32 {
-    fn from(ins: OpIns) -> u32 {
+impl From<OpIns> for u64 {
+    fn from(ins: OpIns) -> u64 {
         ins.0
     }
 }
 
-impl TryFrom<u32> for OpIns {
+impl TryFrom<u64> for OpIns {
     type Error = Error;
 
-    fn try_from(ins: u32) -> Result<Self, Self::Error> {
+    fn try_from(ins: u64) -> Result<Self, Self::Error> {
         // ensure opcode is valid
-        match (ins & 0x03ff0000) >> 16 {
-            0x100..=0x17f => OpCode::Extract,
-            0x180..=0x1ff => OpCode::Replace,
-            0x200..=0x2ff => OpCode::Select,
-            0x300..=0x3ff => OpCode::Shuffle,
+        match ((ins & 0x00ff000000000000) >> 48) as u8 {
+            0x01 => OpCode::Arg,
+            0x02 => OpCode::Ret,
 
-            0x001 => OpCode::Arg,
-            0x002 => OpCode::Ret,
+            0x03 => OpCode::ExtendConstU,
+            0x04 => OpCode::ExtendConstS,
+            0x05 => OpCode::SplatConst,
+            0x06 => OpCode::ExtendU,
+            0x07 => OpCode::ExtendS,
+            0x08 => OpCode::Splat,
+            0x09 => OpCode::SplatC,
 
-            0x003 => OpCode::ExtendConstU,
-            0x004 => OpCode::ExtendConstS,
-            0x005 => OpCode::SplatConst,
-            0x006 => OpCode::ExtendU,
-            0x007 => OpCode::ExtendS,
-            0x008 => OpCode::Splat,
-            0x009 => OpCode::SplatC,
+            0x0a => OpCode::Extract,
+            0x0b => OpCode::Replace,
+            0x0c => OpCode::Select,
+            0x0d => OpCode::Shuffle,
+            0x0e => OpCode::Shuffle2,
 
-            0x00a => OpCode::None,
-            0x00b => OpCode::All,
-            0x00c => OpCode::Eq,
-            0x00d => OpCode::Ne,
-            0x00e => OpCode::LtU,
-            0x00f => OpCode::LtS,
-            0x010 => OpCode::GtU,
-            0x011 => OpCode::GtS,
-            0x012 => OpCode::LeU,
-            0x013 => OpCode::LeS,
-            0x014 => OpCode::GeU,
-            0x015 => OpCode::GeS,
-            0x016 => OpCode::MinU,
-            0x017 => OpCode::MinS,
-            0x018 => OpCode::MaxU,
-            0x019 => OpCode::MaxS,
+            0x0f => OpCode::None,
+            0x10 => OpCode::All,
+            0x11 => OpCode::Eq,
+            0x12 => OpCode::Ne,
+            0x13 => OpCode::LtU,
+            0x14 => OpCode::LtS,
+            0x15 => OpCode::GtU,
+            0x16 => OpCode::GtS,
+            0x17 => OpCode::LeU,
+            0x18 => OpCode::LeS,
+            0x19 => OpCode::GeU,
+            0x1a => OpCode::GeS,
+            0x1b => OpCode::MinU,
+            0x1c => OpCode::MinS,
+            0x1d => OpCode::MaxU,
+            0x1e => OpCode::MaxS,
 
-            0x01a => OpCode::Neg,
-            0x01c => OpCode::Abs,
-            0x01b => OpCode::Not,
-            0x01d => OpCode::Clz,
-            0x01e => OpCode::Ctz,
-            0x01f => OpCode::Popcnt,
-            0x020 => OpCode::Add,
-            0x021 => OpCode::Sub,
-            0x022 => OpCode::Mul,
-            0x023 => OpCode::And,
-            0x024 => OpCode::Andnot,
-            0x025 => OpCode::Or,
-            0x026 => OpCode::Xor,
-            0x027 => OpCode::Shl,
-            0x028 => OpCode::ShrU,
-            0x029 => OpCode::ShrS,
-            0x02a => OpCode::Rotl,
-            0x02b => OpCode::Rotr,
+            0x1f => OpCode::Neg,
+            0x21 => OpCode::Abs,
+            0x20 => OpCode::Not,
+            0x22 => OpCode::Clz,
+            0x23 => OpCode::Ctz,
+            0x24 => OpCode::Popcnt,
+            0x25 => OpCode::Add,
+            0x26 => OpCode::Sub,
+            0x27 => OpCode::Mul,
+            0x28 => OpCode::And,
+            0x29 => OpCode::Andnot,
+            0x2a => OpCode::Or,
+            0x2b => OpCode::Xor,
+            0x2c => OpCode::Shl,
+            0x2d => OpCode::ShrU,
+            0x2e => OpCode::ShrS,
+            0x2f => OpCode::Rotl,
+            0x30 => OpCode::Rotr,
 
             _ => Err(Error::InvalidOpcode(ins))?,
         };
@@ -354,81 +347,127 @@ impl fmt::Display for OpIns {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self.opcode() {
             OpCode::Extract => {
-                write!(fmt, "u{}.{} r{}, r{}[{}]",
+                write!(fmt, "{}.{} r{}, r{}[{}]",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
+                    self.d(),
                     self.a(),
-                    self.b(),
-                    self.p() & 0x7f
+                    self.b()
                 )
             }
 
             OpCode::Replace => {
-                write!(fmt, "u{}.{} r{}[{}], r{}",
+                write!(fmt, "{}.{} r{}[{}], r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.a(),
-                    self.p() & 0x7f,
-                    self.b()
+                    self.d(),
+                    self.b(),
+                    self.a()
                 )
             }
-
-            OpCode::Select | OpCode::Shuffle => {
-                write!(fmt, "u{}.{} r{}, r{}, r{}",
-                    prefix(self.npw2(), self.lnpw2()),
-                    self.opcode(),
-                    self.p(),
-                    self.a(),
-                    self.b()
-                )
-            }
-
 
             // special format for moves because they are so common
-            OpCode::ExtendConstU if self.lnpw2() == 0 => {
-                write!(fmt, "u{}.move_const r{}",
-                    self.width(),
-                    self.a()
+            OpCode::SplatConst if self.lnpw2() == 0 => {
+                write!(fmt, "{}.move_const r{}",
+                    prefix(self.npw2(), 0),
+                    self.d()
                 )
             }
 
-            OpCode::ExtendConstU | OpCode::ExtendConstS | OpCode::SplatConst => {
-                write!(fmt, "u{}.{} r{}",
+            OpCode::ExtendConstU
+                | OpCode::ExtendConstS
+                | OpCode::SplatConst
+                => {
+                write!(fmt, "{}.{} r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.a()
+                    self.d()
                 )
             }
 
             // special format for moves because they are so common
             OpCode::SplatC if self.lnpw2() == 0 => {
-                write!(fmt, "u{}.move_c r{}",
-                    self.width(),
-                    self.a()
+                write!(fmt, "{}.move_c r{}",
+                    prefix(self.npw2(), 0),
+                    self.d()
                 )
             }
 
             OpCode::SplatC => {
-                write!(fmt, "u{}.{} r{}",
+                write!(fmt, "{}.{} r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.a()
+                    self.d()
                 )
             }
 
             // special format for moves because they are so common
             OpCode::ExtendU if self.lnpw2() == 0 => {
-                write!(fmt, "u{}.move r{}, r{}",
-                    self.width(),
-                    self.a(),
-                    self.b()
+                write!(fmt, "{}.move r{}, r{}",
+                    prefix(self.npw2(), 0),
+                    self.d(),
+                    self.a()
                 )
             }
 
-            _ => {
-                write!(fmt, "u{}.{} r{}, r{}",
+            // unops
+            OpCode::Arg
+                | OpCode::Ret
+                | OpCode::ExtendU
+                | OpCode::ExtendS
+                | OpCode::Splat
+                | OpCode::None
+                | OpCode::All
+                | OpCode::Neg
+                | OpCode::Abs
+                | OpCode::Not
+                | OpCode::Clz
+                | OpCode::Ctz
+                | OpCode::Popcnt
+                => {
+                write!(fmt, "{}.{} r{}, r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
+                    self.d(),
+                    self.a()
+                )
+            }
+
+            // binops/triops
+            OpCode::Select
+                | OpCode::Shuffle
+                | OpCode::Shuffle2
+                | OpCode::Eq
+                | OpCode::Ne
+                | OpCode::LtU
+                | OpCode::LtS
+                | OpCode::GtU
+                | OpCode::GtS
+                | OpCode::LeU
+                | OpCode::LeS
+                | OpCode::GeU
+                | OpCode::GeS
+                | OpCode::MinU
+                | OpCode::MinS
+                | OpCode::MaxU
+                | OpCode::MaxS
+                | OpCode::Add
+                | OpCode::Sub
+                | OpCode::Mul
+                | OpCode::And
+                | OpCode::Andnot
+                | OpCode::Or
+                | OpCode::Xor
+                | OpCode::Shl
+                | OpCode::ShrU
+                | OpCode::ShrS
+                | OpCode::Rotl
+                | OpCode::Rotr
+                => {
+                write!(fmt, "{}.{} r{}, r{}, r{}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.opcode(),
+                    self.d(),
                     self.a(),
                     self.b()
                 )
@@ -454,15 +493,15 @@ fn arbitrary_names() -> impl Iterator<Item=String> {
 
 fn prefix(npw2: u8, lnpw2: u8) -> String {
     if lnpw2 == 0 {
-        format!("{}", 8usize << npw2)
+        format!("u{}", 8usize << npw2)
     } else {
-        format!("{}x{}", (8usize << npw2) >> lnpw2, 1usize << lnpw2)
+        format!("u{}x{}", (8usize << npw2) >> lnpw2, 1usize << lnpw2)
     }
 }
 
 /// helper function for debugging
 pub fn disas<W: io::Write>(
-    bytecode: &[u32],
+    bytecode: &[u64],
     mut out: W
 ) -> Result<(), io::Error> {
     let mut i = 0;
@@ -474,40 +513,36 @@ pub fn disas<W: io::Write>(
             Ok(ins) => {
                 match ins.opcode() {
                     OpCode::ExtendConstU | OpCode::ExtendConstS | OpCode::SplatConst => {
-                        let const_size = max(1, ins.lsize()/4);
-                        write!(out, "    {:08x} {}, 0x", u32::from(ins), ins)?;
+                        write!(out, "    {:016x} {}, 0x", u64::from(ins), ins)?;
                         // fetch from instruction stream
-                        for j in (0..const_size).rev() {
-                            write!(out, "{:0w$x}",
-                                &bytecode[i+j],
-                                w=2*min(4, ins.lsize())
-                            )?;
+                        for j in (0 .. ins.lsize()/8).rev() {
+                            write!(out, "{:016x}", bytecode[i+j])?;
                         }
                         writeln!(out)?;
-                        for _ in 0..const_size {
-                            writeln!(out, "    {:08x}", bytecode[i])?;
+                        for _ in 0 .. ins.lsize()/8 {
+                            writeln!(out, "    {:016x}", bytecode[i])?;
                             i += 1;
                         }
                     }
                     OpCode::SplatC => {
-                        write!(out, "    {:08x} {}, 0x", u32::from(ins), ins)?;
-                        for _ in 0 .. ins.lsize()-1 {
+                        write!(out, "    {:016x} {}, 0x", u64::from(ins), ins)?;
+                        for _ in (4..ins.lsize()).step_by(4) {
                             // sign extend?
-                            if ins.b() & 0x80 == 0x80 {
-                                write!(out, "ff")?;
+                            if ins.ab() & 0x80000000 == 0x80000000 {
+                                write!(out, "ffffffff")?;
                             } else {
-                                write!(out, "00")?;
+                                write!(out, "00000000")?;
                             }
                         }
-                        writeln!(out, "{:02x}", ins.b())?;
+                        writeln!(out, "{:0w$x}", ins.ab(), w=2*min(4, ins.lsize()))?;
                     }
                     _ => {
-                        writeln!(out, "    {:08x} {}", u32::from(ins), ins)?;
+                        writeln!(out, "    {:016x} {}", u64::from(ins), ins)?;
                     }
                 }
             }
             Err(Error::InvalidOpcode(ins)) => {
-                writeln!(out, "    {:08x} unknown {:#010x}", ins, ins)?;
+                writeln!(out, "    {:016x} unknown {:#018x}", ins, ins)?;
             }
             Err(err) => {
                 panic!("unexpected error in disas: {}", err);
@@ -740,8 +775,8 @@ pub enum OpKind<T: OpU> {
     Imm(T),
     Sym(&'static str),
 
-    Extract(u8, RefCell<Rc<dyn DynOpNode>>),
-    Replace(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<dyn DynOpNode>>),
+    Extract(u16, RefCell<Rc<dyn DynOpNode>>),
+    Replace(u16, RefCell<Rc<OpNode<T>>>, RefCell<Rc<dyn DynOpNode>>),
     Select(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     Shuffle(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
 
@@ -793,7 +828,7 @@ pub enum OpKind<T: OpU> {
 pub struct OpNode<T: OpU> {
     kind: OpKind<T>,
     refs: Cell<u32>,
-    slot: Cell<Option<u8>>,
+    slot: Cell<Option<u16>>,
     flags: u8,
     #[cfg(feature="opt-schedule-slots")]
     depth: u32,
@@ -843,7 +878,7 @@ struct SlotPool {
     // order so that we are sorted first by slot size,
     // and second by decreasing slot numbers
     #[cfg(feature="opt-color-slots")]
-    pool: BTreeSet<(u8, i16)>,
+    pool: BTreeSet<(u8, i32)>,
     //              ^   ^- negative slot number
     //              '----- slot npw2
 
@@ -861,15 +896,15 @@ impl SlotPool {
             #[cfg(feature="opt-color-slots")]
             pool: BTreeSet::new(),
             size: 0,
-            max_npw2: 9,
+            max_npw2: 0,
         }
     }
 
     /// Allocate a slot with the required npw2 size,
     /// note it's possible to run out of slots here
-    fn alloc(&mut self, npw2: u8) -> Result<u8, Error> {
+    fn alloc(&mut self, npw2: u8) -> Result<u16, Error> {
         // The allocation scheme here is a bit complicated.
-        // 
+        //
         // Slots of all sizes share a common buffer, which means
         // smaller slots have a smaller addressable range than larger
         // slots.
@@ -893,11 +928,11 @@ impl SlotPool {
         #[cfg(feature="opt-color-slots")]
         {
             // find smallest slot where size >= npw2 but slot*size < 256
-            let best_slot = self.pool.range((npw2, i16::MIN)..)
+            let best_slot = self.pool.range((npw2, i32::MIN)..)
                 .copied()
                 .filter(|(best_npw2, best_islot)| {
                     // fits in slot number?
-                    u8::try_from(
+                    u16::try_from(
                         (usize::try_from(-best_islot).unwrap() << best_npw2)
                             >> npw2
                     ).is_ok()
@@ -906,7 +941,7 @@ impl SlotPool {
             if let Some((mut best_npw2, best_islot)) = best_slot {
                 // remove from pool
                 self.pool.remove(&(best_npw2, best_islot));
-                let mut best_slot = u8::try_from(-best_islot).unwrap();
+                let mut best_slot = u16::try_from(-best_islot).unwrap();
 
                 // pad
                 while best_npw2 > npw2 {
@@ -938,12 +973,12 @@ impl SlotPool {
             let padding_npw2 = self.size.trailing_zeros();
             let padding_slot = self.size >> padding_npw2;
             self.size += 1 << padding_npw2;
-            if let Ok(padding_slot) = u8::try_from(padding_slot) {
+            if let Ok(padding_slot) = u16::try_from(padding_slot) {
                 self.dealloc(padding_slot, u8::try_from(padding_npw2).unwrap());
             }
         }
 
-        match u8::try_from(self.size >> npw2) {
+        match u16::try_from(self.size >> npw2) {
             Ok(slot) => {
                 self.size += 1 << npw2;
                 self.max_npw2 = max(self.max_npw2, npw2);
@@ -958,7 +993,7 @@ impl SlotPool {
     /// Return a slot to the pool
     fn dealloc(
         &mut self,
-        #[allow(unused)] mut slot: u8,
+        #[allow(unused)] mut slot: u16,
         #[allow(unused)] mut npw2: u8
     ) {
         // do nothing here if we aren't reusing slots
@@ -970,14 +1005,14 @@ impl SlotPool {
             // big one
             if slot & !1 != 0 {
                 // try to defragment?
-                while self.pool.remove(&(npw2, -i16::from(slot ^ 1))) {
+                while self.pool.remove(&(npw2, -i32::from(slot ^ 1))) {
                     slot /= 2;
                     npw2 += 1;
                 }
             }
 
             assert!(
-                self.pool.insert((npw2, -i16::from(slot))),
+                self.pool.insert((npw2, -i32::from(slot))),
                 "Found duplicate slot in pool!? ({}, {})\n{:?}",
                 slot, npw2,
                 self.pool
@@ -988,7 +1023,7 @@ impl SlotPool {
 
 /// Compilation state
 pub struct OpCompile {
-    bytecode: Vec<u32>,
+    bytecode: Vec<u64>,
     slots: Vec<u8>,
 
     #[allow(dead_code)]
@@ -1233,14 +1268,14 @@ impl<T: OpU> OpTree<T> {
         Self::from_kind(OpKind::Sym(name), OpNode::<T>::SECRET | OpNode::<T>::SYM, 0)
     }
 
-    pub fn extract<U: OpU>(x: u8, a: OpTree<U>) -> Self {
+    pub fn extract<U: OpU>(x: u16, a: OpTree<U>) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
         Self::from_kind(OpKind::Extract(x, RefCell::new(a)), flags, depth)
     }
 
-    pub fn replace<U: OpU>(x: u8, a: Self, b: OpTree<U>) -> Self {
+    pub fn replace<U: OpU>(x: u16, a: Self, b: OpTree<U>) -> Self {
         let a = a.node();
         let b = b.dyn_node();
         let flags = a.flags() | b.flags();
@@ -1591,7 +1626,7 @@ impl<T: OpU> OpTree<T> {
     }
 
     /// high-level compile into bytecode, stack, and initial stack pointer
-    pub fn compile(&self, opt: bool) -> (Vec<u32>, AlignedBytes) {
+    pub fn compile(&self, opt: bool) -> (Vec<u64>, AlignedBytes) {
         // force to tree form
         self.node();
 
@@ -1625,12 +1660,12 @@ impl<T: OpU> OpTree<T> {
     }
 
     /// execute bytecode, resulting in an immediate OpTree
-    pub fn exec(bytecode: &[u32], slots: &mut [u8]) -> Self {
+    pub fn exec(bytecode: &[u64], slots: &mut [u8]) -> Self {
         Self::try_exec(bytecode, slots).unwrap()
     }
 
     /// execute bytecode, resulting in an immediate OpTree
-    pub fn try_exec(bytecode: &[u32], slots: &mut [u8]) -> Result<Self, Error> {
+    pub fn try_exec(bytecode: &[u64], slots: &mut [u8]) -> Result<Self, Error> {
         let res = exec(bytecode, slots)?;
         Ok(OpTree(RefCell::new(OpRoot::Imm(T::from_le_bytes(
             T::Bytes::try_from(res).map_err(|_| Error::InvalidReturn)?
@@ -1729,7 +1764,7 @@ impl<T: OpU> OpNode<T> {
     }
 
     /// high-level compile into bytecode, stack, and initial stack pointer
-    pub fn compile(&self, opt: bool) -> (Vec<u32>, AlignedBytes) {
+    pub fn compile(&self, opt: bool) -> (Vec<u64>, AlignedBytes) {
         // debug?
         #[cfg(feature="debug-ast")]
         {
@@ -1760,8 +1795,8 @@ impl<T: OpU> OpNode<T> {
         self.check_refs();
 
         // add required return instruction
-        state.bytecode.push(u32::from(OpIns::new(
-            T::NPW2, 0, OpCode::Ret, 0, 0, slot
+        state.bytecode.push(u64::from(OpIns::new(
+            T::NPW2, 0, OpCode::Ret, 0, slot, 0
         )));
 
         // align slots
@@ -1883,7 +1918,7 @@ pub trait DynOpNode: Debug {
 
     /// Second compile pass, used to actually compile both the
     /// immediates and bytecode. Returns the resulting slot + npw2.
-    fn compile_pass2(&self, state: &mut OpCompile) -> (u8, u8);
+    fn compile_pass2(&self, state: &mut OpCompile) -> (u16, u8);
 }
 
 
@@ -2213,215 +2248,215 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
 
         let expr = match &self.kind {
-            OpKind::Const(v) => format!("(u{}.const {:x})",
+            OpKind::Const(v) => format!("({}.const {:x})",
                 8 << T::NPW2,
                 v
             ),
-            OpKind::Imm(v) => format!("(u{}.imm {:x})",
+            OpKind::Imm(v) => format!("({}.imm {:x})",
                 8 << T::NPW2,
                 v
             ),
-            OpKind::Sym(s) => format!("(u{}.sym {:?})",
+            OpKind::Sym(s) => format!("({}.sym {:?})",
                 8 << T::NPW2,
                 s
             ),
 
-            OpKind::Extract(x, a) => format!("(u{}.extract {} {})",
+            OpKind::Extract(x, a) => format!("({}.extract {} {})",
                 prefix(a.borrow().npw2(), a.borrow().npw2()-T::NPW2),
                 x,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Replace(x, a, b) => format!("(u{}.replace {} {} {})",
+            OpKind::Replace(x, a, b) => format!("({}.replace {} {} {})",
                 prefix(T::NPW2, T::NPW2-b.borrow().npw2()),
                 x,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Select(lnpw2, p, a, b) => format!("(u{}.select {} {} {})",
+            OpKind::Select(lnpw2, p, a, b) => format!("({}.select {} {} {})",
                 prefix(T::NPW2, *lnpw2),
                 p.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Shuffle(lnpw2, p, a, b) => format!("(u{}.shuffle {} {} {})",
+            OpKind::Shuffle(lnpw2, p, a, b) => format!("({}.shuffle {} {} {})",
                 prefix(T::NPW2, *lnpw2),
                 p.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
 
-            OpKind::ExtendU(a) => format!("(u{}.extend_u {})",
+            OpKind::ExtendU(a) => format!("({}.extend_u {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::ExtendS(a) => format!("(u{}.extend_s {})",
+            OpKind::ExtendS(a) => format!("({}.extend_s {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Splat(a) => format!("(u{}.splat {})",
+            OpKind::Splat(a) => format!("({}.splat {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
 
-            OpKind::None(a) => format!("(u{}.none {})",
+            OpKind::None(a) => format!("({}.none {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::All(lnpw2, a) => format!("(u{}.all {})",
+            OpKind::All(lnpw2, a) => format!("({}.all {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Eq(lnpw2, a, b) => format!("(u{}.eq {} {})",
+            OpKind::Eq(lnpw2, a, b) => format!("({}.eq {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Ne(lnpw2, a, b) => format!("(u{}.ne {} {})",
+            OpKind::Ne(lnpw2, a, b) => format!("({}.ne {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::LtU(lnpw2, a, b) => format!("(u{}.lt_u {} {})",
+            OpKind::LtU(lnpw2, a, b) => format!("({}.lt_u {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::LtS(lnpw2, a, b) => format!("(u{}.lt_s {} {})",
+            OpKind::LtS(lnpw2, a, b) => format!("({}.lt_s {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::GtU(lnpw2, a, b) => format!("(u{}.gt_u {} {})",
+            OpKind::GtU(lnpw2, a, b) => format!("({}.gt_u {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::GtS(lnpw2, a, b) => format!("(u{}.gt_s {} {})",
+            OpKind::GtS(lnpw2, a, b) => format!("({}.gt_s {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::LeU(lnpw2, a, b) => format!("(u{}.le_u {} {})",
+            OpKind::LeU(lnpw2, a, b) => format!("({}.le_u {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::LeS(lnpw2, a, b) => format!("(u{}.le_s {} {})",
+            OpKind::LeS(lnpw2, a, b) => format!("({}.le_s {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::GeU(lnpw2, a, b) => format!("(u{}.ge_u {} {})",
+            OpKind::GeU(lnpw2, a, b) => format!("({}.ge_u {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::GeS(lnpw2, a, b) => format!("(u{}.ge_s {} {})",
+            OpKind::GeS(lnpw2, a, b) => format!("({}.ge_s {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::MinU(lnpw2, a, b) => format!("(u{}.min_u {} {})",
+            OpKind::MinU(lnpw2, a, b) => format!("({}.min_u {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::MinS(lnpw2, a, b) => format!("(u{}.min_s {} {})",
+            OpKind::MinS(lnpw2, a, b) => format!("({}.min_s {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::MaxU(lnpw2, a, b) => format!("(u{}.max_u {} {})",
+            OpKind::MaxU(lnpw2, a, b) => format!("({}.max_u {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::MaxS(lnpw2, a, b) => format!("(u{}.max_s {} {})",
+            OpKind::MaxS(lnpw2, a, b) => format!("({}.max_s {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
 
-            OpKind::Neg(lnpw2, a) => format!("(u{}.neg {})",
+            OpKind::Neg(lnpw2, a) => format!("({}.neg {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Abs(lnpw2, a) => format!("(u{}.abs {})",
+            OpKind::Abs(lnpw2, a) => format!("({}.abs {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Not(a) => format!("(u{}.not {})",
+            OpKind::Not(a) => format!("({}.not {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Clz(lnpw2, a) => format!("(u{}.clz {})",
+            OpKind::Clz(lnpw2, a) => format!("({}.clz {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Ctz(lnpw2, a) => format!("(u{}.ctz {})",
+            OpKind::Ctz(lnpw2, a) => format!("({}.ctz {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Popcnt(lnpw2, a) => format!("(u{}.popcnt {})",
+            OpKind::Popcnt(lnpw2, a) => format!("({}.popcnt {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::Add(lnpw2, a, b) => format!("(u{}.add {} {})",
+            OpKind::Add(lnpw2, a, b) => format!("({}.add {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Sub(lnpw2, a, b) => format!("(u{}.sub {} {})",
+            OpKind::Sub(lnpw2, a, b) => format!("({}.sub {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Mul(lnpw2, a, b) => format!("(u{}.mul {} {})",
+            OpKind::Mul(lnpw2, a, b) => format!("({}.mul {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::And(a, b) => format!("(u{}.and {} {})",
-                8 << T::NPW2,
-                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
-                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
-            ),
-            OpKind::Andnot(a, b) => format!("(u{}.andnot {} {})",
+            OpKind::And(a, b) => format!("({}.and {} {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Or(a, b) => format!("(u{}.or {} {})",
+            OpKind::Andnot(a, b) => format!("({}.andnot {} {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Xor(a, b) => format!("(u{}.xor {} {})",
+            OpKind::Or(a, b) => format!("({}.or {} {})",
                 8 << T::NPW2,
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Shl(lnpw2, a, b) => format!("(u{}.shl {} {})",
+            OpKind::Xor(a, b) => format!("({}.xor {} {})",
+                8 << T::NPW2,
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+            ),
+            OpKind::Shl(lnpw2, a, b) => format!("({}.shl {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::ShrU(lnpw2, a, b) => format!("(u{}.shr_u {} {})",
+            OpKind::ShrU(lnpw2, a, b) => format!("({}.shr_u {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::ShrS(lnpw2, a, b) => format!("(u{}.shr_s {} {})",
+            OpKind::ShrS(lnpw2, a, b) => format!("({}.shr_s {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Rotl(lnpw2, a, b) => format!("(u{}.rotl {} {})",
+            OpKind::Rotl(lnpw2, a, b) => format!("({}.rotl {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
-            OpKind::Rotr(lnpw2, a, b) => format!("(u{}.rotr {} {})",
+            OpKind::Rotr(lnpw2, a, b) => format!("({}.rotr {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
@@ -2617,7 +2652,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             return None;
         }
         self.folded.set(true);
-        
+
         if self.is_const() && !self.is_imm() {
             // oh hey, we're const
             //
@@ -3216,8 +3251,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 ].copy_from_slice(v.to_le_bytes().as_ref());
 
                 // initialize arg in bytecode
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, 0, OpCode::Arg, 0, slot, slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::Arg, slot, slot, 0
                 )));
             }
             OpKind::Sym(_) => {
@@ -3239,8 +3274,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 ].fill(0xcc);
 
                 // initialize arg in bytecode
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, 0, OpCode::Arg, 0, slot, slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::Arg, slot, slot, 0
                 )));
             }
 
@@ -3255,11 +3290,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 p.borrow().compile_pass1(state);
                 a.borrow().compile_pass1(state);
                 b.borrow().compile_pass1(state);
-            }
-            OpKind::Shuffle(_, p, a, b) if Rc::ptr_eq(&a.borrow(), &b.borrow()) => {
-                // avoid an unecessary slot alloc for this common case
-                p.borrow().compile_pass1(state);
-                a.borrow().compile_pass1(state);
             }
             OpKind::Shuffle(_, p, a, b) => {
                 p.borrow().compile_pass1(state);
@@ -3409,7 +3439,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
     }
 
-    fn compile_pass2(&self, state: &mut OpCompile) -> (u8, u8) {
+    fn compile_pass2(&self, state: &mut OpCompile) -> (u16, u8) {
         // already computed?
         if let Some(slot) = self.slot.get() {
             return (slot, T::NPW2);
@@ -3418,29 +3448,32 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         match &self.kind {
             OpKind::Const(v) => {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                #[allow(unused_mut)] let mut best_lnpw2 = T::NPW2;
+                #[allow(unused_mut)] let mut best_lnpw2 = 0;
                 #[allow(unused_mut)] let mut best_npw2 = T::NPW2;
-                #[allow(unused_mut)] let mut best_ins = OpCode::ExtendConstS;
+                #[allow(unused_mut)] let mut best_ins = OpCode::SplatConst;
 
                 // can we use a smaller encoding?
+                //
+                // the smallest encoding, splat_c, encodes a u32, or npw2=2
                 #[cfg(feature="opt-compress-consts")]
                 {
                     if state.opt {
-                        for npw2 in 0..T::NPW2 {
+                        for npw2 in 2..T::NPW2 {
                             // note these are in decreasing order of efficient
                             // encodings (splat and extend_s can leverage
                             // splat_c, but not extend_u)
-                            if v.is_extend_s(npw2) {
+                            if v.is_splat(npw2) {
+                                best_lnpw2 = T::NPW2 - npw2;
+                                best_npw2 = npw2;
+                                best_ins  = OpCode::SplatConst;
+                                break;
+                            } else if v.is_extend_s(npw2) {
                                 best_lnpw2 = 0;
                                 best_npw2 = npw2;
                                 best_ins  = OpCode::ExtendConstS;
                                 break;
-                            } else if v.is_splat(npw2) {
-                                best_lnpw2 = T::NPW2;
-                                best_npw2 = npw2;
-                                best_ins  = OpCode::SplatConst;
-                                break;
-                            } else if v.is_extend_u(npw2) {
+                            } else if npw2 > 2 && v.is_extend_u(npw2) {
+                                best_lnpw2 = 0;
                                 best_npw2 = npw2;
                                 best_ins  = OpCode::ExtendConstU;
                                 break;
@@ -3448,34 +3481,35 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                         }
 
                         // can we combine extend_s+splat with splat_c?
-                        if best_npw2 > 0 && best_ins == OpCode::SplatConst && v.is_extend_splat_s(0, best_npw2) {
+                        if best_npw2 > 2 && best_ins == OpCode::SplatConst && v.is_extend_splat_s(2, best_npw2) {
                             best_lnpw2 = T::NPW2 - best_npw2;
-                            best_npw2 = 0;
+                            best_npw2 = 2;
                         }
                     }
                 }
 
                 // fall back to uncompressed encodings
-                if best_npw2 == 0 && (best_ins == OpCode::ExtendConstS || best_ins == OpCode::SplatConst) {
+                if best_npw2 <= 2 && (best_ins == OpCode::SplatConst || best_ins == OpCode::ExtendConstS) {
                     let mut buf = Vec::from(v.to_le_bytes().as_ref());
-                    buf.truncate(1);
+                    buf.truncate(1 << best_npw2);
+                    buf.resize(4, 0);
 
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, best_lnpw2, OpCode::SplatC, 0, slot, buf[0]
+                    state.bytecode.push(u64::from(OpIns::with_ab(
+                        T::NPW2, best_lnpw2, OpCode::SplatC, slot,
+                        u32::from_le_bytes(<_>::try_from(&buf[..]).unwrap())
                     )));
                 } else {
                     // encode const into bytecode stream
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, T::NPW2 - best_npw2, best_ins, 0, slot, 0
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, T::NPW2 - best_npw2, best_ins, slot, 0, 0
                     )));
 
                     let mut buf = Vec::from(v.to_le_bytes().as_ref());
                     buf.truncate(1 << best_npw2);
-                    buf.resize(max(4, buf.len()), 0);
-                    for i in (0..buf.len()).step_by(4) {
-                        state.bytecode.push(u32::from_le_bytes(
-                            <[u8;4]>::try_from(&buf[i..i+4]).unwrap()
-                        ));
+                    for i in (0..buf.len()).step_by(8) {
+                        state.bytecode.push(
+                            u64::from_le_bytes(<_>::try_from(&buf[i..i+8]).unwrap())
+                        );
                     }
                 }
 
@@ -3505,58 +3539,25 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Select, p_slot, a_slot, b_slot
+                if b_refs == 0 {
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Select, b_slot, a_slot, p_slot
                     )));
                     if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    self.slot.set(Some(b_slot));
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, 0, OpCode::ExtendU, slot, b_slot, 0
                     )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Select, p_slot, slot, b_slot
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Select, slot, a_slot, p_slot
                     )));
                     if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
-            }
-            OpKind::Shuffle(lnpw2, p, a, b) if Rc::ptr_eq(&a.borrow(), &b.borrow()) => {
-                // avoid an unnecessary slot alloc for this common case
-                let p = p.borrow();
-                let a = a.borrow();
-                schedule! {
-                    let (p_slot, p_npw2) = p.compile_pass2(state);
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                }
-                let p_refs = p.dec_refs();
-                let a_refs = a.dec_refs();
-
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, a_slot, a_slot
-                    )));
-                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, slot, a_slot
-                    )));
-                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     self.slot.set(Some(slot));
                     (slot, T::NPW2)
                 }
@@ -3575,21 +3576,21 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, a_slot, b_slot
+                if b_refs == 0 {
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Shuffle, b_slot, a_slot, p_slot
                     )));
                     if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
+                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                    self.slot.set(Some(b_slot));
+                    (b_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, 0, OpCode::ExtendU, slot, b_slot, 0
                     )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, slot, b_slot
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, *lnpw2, OpCode::Shuffle, slot, a_slot, p_slot
                     )));
                     if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3606,8 +3607,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    a_npw2, a_npw2-T::NPW2, OpCode::Extract, *lane, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    a_npw2, a_npw2-T::NPW2, OpCode::Extract, slot, a_slot, *lane
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3625,19 +3626,19 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
                 // can we reuse slots?
                 if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, T::NPW2-b_npw2, OpCode::Replace, *lane, a_slot, b_slot
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, T::NPW2-b_npw2, OpCode::Replace, a_slot, b_slot, *lane
                     )));
                     if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
                     self.slot.set(Some(a_slot));
                     (a_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, 0, OpCode::ExtendU, slot, a_slot, 0
                     )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, T::NPW2-b_npw2, OpCode::Replace, *lane, slot, b_slot
+                    state.bytecode.push(u64::from(OpIns::new(
+                        T::NPW2, T::NPW2-b_npw2, OpCode::Replace, slot, b_slot, *lane
                     )));
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
                     if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
@@ -3654,8 +3655,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendU, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendU, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3668,8 +3669,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendS, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendS, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3682,8 +3683,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, T::NPW2-a_npw2, OpCode::Splat, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, T::NPW2-a_npw2, OpCode::Splat, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3696,8 +3697,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, 0, OpCode::None, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::None, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3709,8 +3710,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, *lnpw2, OpCode::All, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::All, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3724,35 +3725,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Eq, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Eq, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Eq, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Eq, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Ne(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -3763,35 +3744,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Ne, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Ne, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Ne, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Ne, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::LtU(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -3802,35 +3763,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LtU, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GtU, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LtU, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LtU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::LtS(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -3841,35 +3782,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LtS, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GtS, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LtS, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LtS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::GtU(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -3880,35 +3801,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GtU, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LtU, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GtU, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GtU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::GtS(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -3919,35 +3820,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GtS, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LtS, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GtS, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GtS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::LeU(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -3958,35 +3839,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LeU, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GeU, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LeU, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LeU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::LeS(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -3997,35 +3858,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LeS, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GeS, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LeS, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LeS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::GeU(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4036,35 +3877,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GeU, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LeU, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GeU, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GeU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::GeS(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4075,35 +3896,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GeS, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::LeS, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::GeS, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GeS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::MinU(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4114,35 +3915,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MinU, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MinU, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MinU, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MinU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::MinS(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4153,35 +3934,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MinS, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MinS, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MinS, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MinS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::MaxU(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4192,35 +3953,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MaxU, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MaxU, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MaxU, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MaxU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::MaxS(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4231,35 +3972,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MaxS, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MaxS, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::MaxS, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MaxS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Neg(lnpw2, a) => {
                 let a = a.borrow();
@@ -4268,8 +3989,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, *lnpw2, OpCode::Neg, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Neg, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4281,8 +4002,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, *lnpw2, OpCode::Abs, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Abs, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4294,8 +4015,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, 0, OpCode::Not, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::Not, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4307,8 +4028,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, *lnpw2, OpCode::Clz, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Clz, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4320,8 +4041,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, *lnpw2, OpCode::Ctz, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Ctz, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4333,8 +4054,8 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u32::from(OpIns::new(
-                    T::NPW2, *lnpw2, OpCode::Popcnt, 0, slot, a_slot
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Popcnt, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4348,35 +4069,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Add, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Add, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Add, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Add, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Sub(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4387,28 +4088,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Sub, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Sub, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Sub, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Mul(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4419,35 +4107,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Mul, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Mul, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Mul, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Mul, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::And(a, b) => {
                 let a = a.borrow();
@@ -4458,35 +4126,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::And, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::And, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::And, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::And, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Andnot(a, b) => {
                 let a = a.borrow();
@@ -4497,28 +4145,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Andnot, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Andnot, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::Andnot, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Or(a, b) => {
                 let a = a.borrow();
@@ -4529,35 +4164,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Or, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Or, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Or, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::Or, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Xor(a, b) => {
                 let a = a.borrow();
@@ -4568,35 +4183,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Xor, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else if b_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Xor, 0, b_slot, a_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Xor, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, 0, OpCode::Xor, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Shl(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4607,28 +4202,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shl, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shl, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Shl, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::ShrU(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4639,28 +4221,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::ShrU, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::ShrU, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::ShrU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::ShrS(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4671,28 +4240,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::ShrS, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::ShrS, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::ShrS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Rotl(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4703,28 +4259,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Rotl, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Rotl, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Rotl, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
             OpKind::Rotr(lnpw2, a, b) => {
                 let a = a.borrow();
@@ -4735,28 +4278,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
 
-                // can we reuse slots?
-                if a_refs == 0 {
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Rotr, 0, a_slot, b_slot
-                    )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
-                } else {
-                    let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, 0, slot, a_slot
-                    )));
-                    state.bytecode.push(u32::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Rotr, 0, slot, b_slot
-                    )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
-                    self.slot.set(Some(slot));
-                    (slot, T::NPW2)
-                }
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Rotr, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
             }
         }
     }
@@ -4873,8 +4403,8 @@ mod tests {
         }
         println!();
 
-        assert_eq!(bytecode.len(), 12);
-        assert_eq!(stack.len(), 5*4);
+        assert_eq!(bytecode.len(), 10);
+        assert_eq!(stack.len(), 16);
     }
 
     #[test]
@@ -4944,7 +4474,7 @@ mod tests {
         println!();
 
         assert_eq!(bytecode.len(), 23);
-        assert_eq!(stack.len(), 80);
+        assert_eq!(stack.len(), 96);
     }
 
     #[test]
@@ -5102,7 +4632,7 @@ mod tests {
         }
         println!();
 
-        assert_eq!(bytecode.len(), 17);
+        assert_eq!(bytecode.len(), 14);
         assert_eq!(stack.len(), 48);
     }
 }
