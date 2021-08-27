@@ -576,7 +576,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
         });
     let ret: syn::Expr = if parallel > 1 {
         parse_quote! { 
-            #ret_secret_ty::from_slice(&[#(#b_rets),*])
+            #ret_secret_ty::from_lanes([#(#b_rets),*])
         }
     } else {
         parse_quote! { 
@@ -865,8 +865,8 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
                 table1 = parse_quote! { #table_secret_ty::const_(#(#prim_table1),*) };
                 table2 = parse_quote! { #table_secret_ty::const_(#(#prim_table2),*) };
             } else {
-                table1 = parse_quote! { #table_secret_ty::const_slice(&[#(#prim_table1),*]) };
-                table2 = parse_quote! { #table_secret_ty::const_slice(&[#(#prim_table2),*]) };
+                table1 = parse_quote! { #table_secret_ty::const_lanes([#(#prim_table1),*]) };
+                table2 = parse_quote! { #table_secret_ty::const_lanes([#(#prim_table2),*]) };
             }
 
             // select between shuffle tables

@@ -126,50 +126,6 @@ fn token_if(input: TokenStream) -> TokenStream {
     output.into_iter().collect()
 }
 
-fn token_for_lanes(input: TokenStream, lanes: usize) -> TokenStream {
-    let mut output = Vec::new();
-    let mut stream = input.into_iter();
-    while let Some(tt) = stream.next() {
-        match tt {
-            TokenTree::Ident(ident) => {
-                if ident.to_string() == "__for_lanes" {
-                    // grab block
-                    let block = match stream.next().unwrap() {
-                        TokenTree::Group(group) => group,
-                        _ => panic!("expected group?"),
-                    };
-
-                    for i in 0..lanes {
-                        // replace hard-coded iterator names, don't bother
-                        // to recurse, that would require a significant rewrite
-                        let stream = block.stream();
-                        let stream = token_replace(stream, &HashMap::from_iter([
-                            (format!("__a"), ident!("a{}", i)),
-                            (format!("__i"), lit!(Literal::usize_unsuffixed(i))),
-                        ]));
-                        output.extend(stream)
-                    }
-                } else {
-                    output.push(TokenTree::Ident(ident));
-                }
-            }
-            TokenTree::Group(group) => {
-                let mut ngroup = Group::new(
-                    group.delimiter(),
-                    token_for_lanes(group.stream(), lanes),
-                );
-                ngroup.set_span(group.span());
-                output.push(TokenTree::Group(ngroup));
-            }
-            _ => {
-                output.push(tt);
-            }
-        }
-    }
-
-    output.into_iter().collect()
-}
-
 // core generator for secret types
 fn secret_t_map<'a>(
     suffix: &'a str
@@ -233,10 +189,9 @@ pub fn for_secret_t(input: TokenStream) -> TokenStream {
     }
 
     let mut output = Vec::new();
-    for (_, lnpw2, map) in secret_t_map("") {
+    for (_, _, map) in secret_t_map("") {
         let tokens = input.clone();
         let tokens = token_replace(tokens, &map);
-        let tokens = token_for_lanes(tokens, 1usize << lnpw2);
         let tokens = token_if(tokens);
         output.push(tokens);
     }

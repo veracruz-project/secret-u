@@ -56,14 +56,14 @@ mod tests {
 
         f.disas(io::stdout()).unwrap();
 
-        let a = f.call(&SecretU8x4::new_lanes(
+        let a = f.call(&SecretU8x4::new_lanes([
             0,
             1,
             2,
             3
-        )).declassify_lanes();
+        ])).declassify_lanes();
         println!("{:?}", a);
-        assert_eq!(a, (0x12, 0x34, 0x56, 0x78));
+        assert_eq!(a, [0x12, 0x34, 0x56, 0x78]);
     }
 
     #[bitslice_table(index_type="u32")]
@@ -247,11 +247,11 @@ mod tests {
 
         let mut a = Vec::new();
         for i in (0..16).step_by(4) {
-            let p = f.call(&SecretU8x4::new_lanes(i, i+1, i+2, i+3)).declassify_lanes();
-            if p.0 { a.push(i)   }
-            if p.1 { a.push(i+1) }
-            if p.2 { a.push(i+2) }
-            if p.3 { a.push(i+3) }
+            let p = f.call(&SecretU8x4::new_lanes([i, i+1, i+2, i+3])).declassify_lanes();
+            if p[0] { a.push(i)   }
+            if p[1] { a.push(i+1) }
+            if p[2] { a.push(i+2) }
+            if p[3] { a.push(i+3) }
         }
         println!("{:?}", a);
         assert_eq!(
@@ -306,14 +306,14 @@ mod tests {
 
         f.disas(io::stdout()).unwrap();
 
-        let a = f.call(&SecretU8x4::new_lanes(
+        let a = f.call(&SecretU8x4::new_lanes([
             0,
             1,
             2,
             3
-        )).declassify_lanes();
+        ])).declassify_lanes();
         println!("{:?}", a);
-        assert_eq!(a, (0x12, 0x34, 0x56, 0x78));
+        assert_eq!(a, [0x12, 0x34, 0x56, 0x78]);
     }
 
     #[shuffle_table(index_type="u32")]
@@ -497,11 +497,11 @@ mod tests {
 
         let mut a = Vec::new();
         for i in (0..16).step_by(4) {
-            let p = f.call(&SecretU8x4::new_lanes(i, i+1, i+2, i+3)).declassify_lanes();
-            if p.0 { a.push(i)   }
-            if p.1 { a.push(i+1) }
-            if p.2 { a.push(i+2) }
-            if p.3 { a.push(i+3) }
+            let p = f.call(&SecretU8x4::new_lanes([i, i+1, i+2, i+3])).declassify_lanes();
+            if p[0] { a.push(i)   }
+            if p[1] { a.push(i+1) }
+            if p[2] { a.push(i+2) }
+            if p[3] { a.push(i+3) }
         }
         println!("{:?}", a);
         assert_eq!(

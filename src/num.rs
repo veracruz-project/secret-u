@@ -4,9 +4,10 @@ use crate::opcode::*;
 use crate::traits::*;
 use crate::error::Error;
 use std::rc::Rc;
-use std::mem::size_of;
 use std::convert::TryFrom;
 use std::borrow::Cow;
+use std::mem::transmute;
+use std::mem::MaybeUninit;
 
 use std::ops::Not;
 use std::ops::BitAnd;
@@ -703,13 +704,17 @@ for_secret_t! {
             pub const LANES: usize = __lanes;
 
             /// Wraps a non-secret value as a secret value
-            pub fn classify_lanes(__for_lanes { __a: bool, }) -> Self {
+            pub fn classify_lanes(lanes: [bool; __lanes]) -> Self {
                 let mut bytes = [0; __size];
-                __for_lanes {
-                    bytes[__i*size_of::<bool>() .. (__i+1)*size_of::<bool>()]
+                for (i, lane) in lanes.iter().enumerate() {
+                    bytes[i*__lane_size .. (i+1)*__lane_size]
                         .copy_from_slice(
-                            &if __a { <__lane_U>::ones() } else { <__lane_U>::zero() }.to_le_bytes()
-                        );
+                            &if *lane {
+                                <__lane_U>::ones()
+                            } else {
+                                <__lane_U>::zero()
+                            }.to_le_bytes()
+                        )
                 }
                 Self(OpTree::imm(bytes))
             }
@@ -717,108 +722,43 @@ for_secret_t! {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
-            pub fn declassify_lanes(&self) -> (__for_lanes { bool, }) {
+            pub fn declassify_lanes(&self) -> [bool; __lanes] {
                 self.try_declassify_lanes().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
-            pub fn try_declassify_lanes(&self) -> Result<(__for_lanes { bool, }), Error> {
+            pub fn try_declassify_lanes(&self) -> Result<[bool; __lanes], Error> {
                 let bytes: [u8; __size] = self.try_eval()?.0.result();
-                Ok((__for_lanes {
-                    !<__lane_U>::from_le_bytes(
+                let mut lanes = [false; __lanes];
+                for i in 0..__lanes {
+                    lanes[i] = !<__lane_U>::from_le_bytes(
                         <_>::try_from(
-                            &bytes[__i*size_of::<bool>() .. (__i+1)*size_of::<bool>()]
+                            &bytes[i*__lane_size .. (i+1)*__lane_size]
                         ).unwrap()
-                    ).is_zero(),
-                }))
+                    ).is_zero();
+                }
+                Ok(lanes)
             }
 
             /// Wraps a non-secret value as a secret value
-            pub fn new_lanes(__for_lanes { __a: bool, }) -> Self {
-                Self::classify_lanes(__for_lanes { __a, })
+            pub fn new_lanes(lanes: [bool; __lanes]) -> Self {
+                Self::classify_lanes(lanes)
             }
 
             /// Wraps a non-secret value as a secret value
-            pub fn const_lanes(__for_lanes { __a: bool, }) -> Self {
+            pub fn const_lanes(lanes: [bool; __lanes]) -> Self {
                 let mut bytes = [0; __size];
-                __for_lanes {
-                    bytes[__i*size_of::<bool>() .. (__i+1)*size_of::<bool>()]
+                for (i, lane) in lanes.iter().enumerate() {
+                    bytes[i*__lane_size .. (i+1)*__lane_size]
                         .copy_from_slice(
-                            &if __a { <__lane_U>::ones() } else { <__lane_U>::zero() }.to_le_bytes()
-                        );
+                            &if *lane {
+                                <__lane_U>::ones()
+                            } else {
+                                <__lane_U>::zero()
+                            }.to_le_bytes()
+                        )
                 }
                 Self(OpTree::const_(bytes))
-            }
-
-            /// Wraps a non-secret value as a secret value
-            pub fn classify_slice(slice: &[bool]) -> Self {
-                Self::try_classify_slice(slice).unwrap()
-            }
-
-            /// Wraps a non-secret value as a secret value
-            pub fn try_classify_slice(slice: &[bool]) -> Option<Self> {
-                if slice.len() == __lanes {
-                    let mut bytes = [0; __size];
-                    __for_lanes{
-                        bytes[__i*size_of::<bool>() .. (__i+1)*size_of::<bool>()]
-                            .copy_from_slice(
-                                &if slice[__i] { <__lane_U>::ones() } else { <__lane_U>::zero() }.to_le_bytes()
-                            );
-                    }
-                    Some(Self(OpTree::imm(bytes)))
-                } else {
-                    None
-                }
-            }
-
-            /// Extracts the secret value into a non-secret value, this
-            /// effectively "leaks" the secret value, but is necessary
-            /// to actually do anything
-            pub fn declassify_vec(&self) -> Vec<bool> {
-                self.try_declassify_vec().unwrap()
-            }
-
-            /// Same as declassify but propagating internal VM errors
-            pub fn try_declassify_vec(&self) -> Result<Vec<bool>, Error> {
-                let bytes: [u8; __size] = self.try_eval()?.0.result();
-                Ok(vec![__for_lanes {
-                    !<__lane_U>::from_le_bytes(
-                        <_>::try_from(
-                            &bytes[__i*size_of::<bool>() .. (__i+1)*size_of::<bool>()]
-                        ).unwrap()
-                    ).is_zero(),
-                }])
-            }
-
-            /// Wraps a non-secret value as a secret value
-            pub fn new_slice(slice: &[bool]) -> Self {
-                Self::classify_slice(slice)
-            }
-
-            /// Wraps a non-secret value as a secret value
-            pub fn try_new_slice(slice: &[bool]) -> Option<Self> {
-                Self::try_classify_slice(slice)
-            }
-
-            /// Wraps a non-secret value as a secret value
-            pub fn const_slice(slice: &[bool]) -> Self {
-                Self::try_const_slice(slice).unwrap()
-            }
-
-            /// Wraps a non-secret value as a secret value
-            pub fn try_const_slice(slice: &[bool]) -> Option<Self> {
-                if slice.len() == __lanes {
-                    let mut bytes = [0; __size];
-                    __for_lanes {
-                        bytes[__i*size_of::<bool>() .. (__i+1)*size_of::<bool>()]
-                            .copy_from_slice(
-                                &if slice[__i] { <__lane_U>::ones() } else { <__lane_U>::zero() }.to_le_bytes()
-                            );
-                    }
-                    Some(Self(OpTree::const_(bytes)))
-                } else {
-                    None
-                }
             }
 
             /// Wraps a non-secret value as a secret value
@@ -833,51 +773,24 @@ for_secret_t! {
             }
 
             /// Build from lanes
-            pub fn from_lanes(__for_lanes { __a: SecretBool, }) -> Self {
-                __for_lanes {
-                    __if(__i == 0) {
-                        let x = Self(__a.resolve().into_owned());
-                    }
-                    __if(__i > 0) {
-                        let x = x.replace(__i, __a);
-                    } 
+            pub fn from_lanes(lanes: [SecretBool; __lanes]) -> Self {
+                // into iter here to avoid cloning
+                let mut lanes = IntoIterator::into_iter(lanes);
+                let mut x = Self(lanes.next().unwrap().resolve().into_owned());
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap())
                 }
-
                 x
             }
 
             /// Extract all lanes
-            pub fn to_lanes(self) -> (__for_lanes { SecretBool, }) {
-                (__for_lanes { self.clone().extract(__i), })
-            }
-
-            /// Build from lanes, panicking if the slice length does not match
-            pub fn from_slice(slice: &[SecretBool]) -> Self {
-                Self::try_from_slice(slice).unwrap()
-            }
-
-            /// Build from lanes, returning None if the slice length does not match
-            pub fn try_from_slice(slice: &[SecretBool]) -> Option<Self> {
-                if slice.len() == __lanes {
-                    __for_lanes {
-                        __if(__i == 0) {
-                            let x = Self(slice[__i].clone().resolve().into_owned());
-                        }
-                        __if(__i > 0) {
-                            let x = x.replace(__i, slice[__i].clone());
-                        } 
-                    }
-                    Some(x)
-                } else {
-                    None
+            pub fn to_lanes(self) -> [SecretBool; __lanes] {
+                let mut lanes: [MaybeUninit<SecretBool>; __lanes]
+                    = unsafe { MaybeUninit::uninit().assume_init() };
+                for i in 0..__lanes {
+                    lanes[i] = MaybeUninit::new(self.clone().extract(i))
                 }
-            }
-
-            /// Extract all lanes
-            pub fn to_vec(self) -> Vec<SecretBool> {
-                vec![__for_lanes {
-                    self.clone().extract(__i),
-                }]
+                unsafe { transmute(lanes) }
             }
 
             /// Splat a given value to all lanes
@@ -1138,11 +1051,11 @@ for_secret_t! {
 
             __if(__has_prim) {
                 /// Wraps a non-secret value as a secret value
-                pub fn classify_lanes(__for_lanes {__a: __prim_t,}) -> Self {
+                pub fn classify_lanes(lanes: [__prim_t; __lanes]) -> Self {
                     let mut bytes = [0; __size];
-                    __for_lanes {
-                        bytes[__i*size_of::<__prim_t>() .. (__i+1)*size_of::<__prim_t>()]
-                            .copy_from_slice(&<__lane_U>::from(__a).to_le_bytes());
+                    for (i, lane) in lanes.iter().enumerate() {
+                        bytes[i*__lane_size .. (i+1)*__lane_size]
+                            .copy_from_slice(&<__lane_U>::from(*lane).to_le_bytes())
                     }
                     Self(OpTree::imm(bytes))
                 }
@@ -1150,102 +1063,37 @@ for_secret_t! {
                 /// Extracts the secret value into a non-secret value, this
                 /// effectively "leaks" the secret value, but is necessary
                 /// to actually do anything
-                pub fn declassify_lanes(&self) -> (__for_lanes {__prim_t,}) {
+                pub fn declassify_lanes(&self) -> [__prim_t; __lanes] {
                     self.try_declassify_lanes().unwrap()
                 }
 
                 /// Same as declassify but propagating internal VM errors
-                pub fn try_declassify_lanes(&self) -> Result<(__for_lanes {__prim_t,}), Error> {
+                pub fn try_declassify_lanes(&self) -> Result<[__prim_t; __lanes], Error> {
                     let bytes: [u8; __size] = self.try_eval()?.0.result();
-                    Ok((__for_lanes {
-                        <__prim_t>::from_le_bytes(
+                    let mut lanes = [0; __lanes];
+                    for i in 0..__lanes {
+                        lanes[i] = <__prim_t>::from_le_bytes(
                             <_>::try_from(
-                                &bytes[__i*size_of::<__prim_t>() .. (__i+1)*size_of::<__prim_t>()]
+                                &bytes[i*__lane_size .. (i+1)*__lane_size]
                             ).unwrap()
-                        ),
-                    }))
+                        );
+                    }
+                    Ok(lanes)
                 }
 
                 /// Wraps a non-secret value as a secret value
-                pub fn new_lanes(__for_lanes {__a: __prim_t,}) -> Self {
-                    Self::classify_lanes(__for_lanes {__a,})
+                pub fn new_lanes(lanes: [__prim_t; __lanes]) -> Self {
+                    Self::classify_lanes(lanes)
                 }
 
                 /// Wraps a non-secret value as a secret value
-                pub fn const_lanes(__for_lanes {__a: __prim_t,}) -> Self {
+                pub fn const_lanes(lanes: [__prim_t; __lanes]) -> Self {
                     let mut bytes = [0; __size];
-                    __for_lanes {
-                        bytes[__i*size_of::<__prim_t>() .. (__i+1)*size_of::<__prim_t>()]
-                            .copy_from_slice(&<__lane_U>::from(__a).to_le_bytes());
+                    for (i, lane) in lanes.iter().enumerate() {
+                        bytes[i*__lane_size .. (i+1)*__lane_size]
+                            .copy_from_slice(&<__lane_U>::from(*lane).to_le_bytes())
                     }
-                    Self(OpTree::const_(bytes))
-                }
-
-                /// Wraps a non-secret value as a secret value
-                pub fn classify_slice(slice: &[__prim_t]) -> Self {
-                    Self::try_classify_slice(slice).unwrap()
-                }
-
-                /// Wraps a non-secret value as a secret value
-                pub fn try_classify_slice(slice: &[__prim_t]) -> Option<Self> {
-                    if slice.len() == __lanes {
-                        let mut bytes = [0; __size];
-                        __for_lanes {
-                            bytes[__i*size_of::<__prim_t>() .. (__i+1)*size_of::<__prim_t>()]
-                                .copy_from_slice(&<__lane_U>::from(slice[__i]).to_le_bytes());
-                        }
-                        Some(Self(OpTree::imm(bytes)))
-                    } else {
-                        None
-                    }
-                }
-
-                /// Extracts the secret value into a non-secret value, this
-                /// effectively "leaks" the secret value, but is necessary
-                /// to actually do anything
-                pub fn declassify_vec(&self) -> Vec<__prim_t> {
-                    self.try_declassify_vec().unwrap()
-                }
-
-                /// Same as declassify but propagating internal VM errors
-                pub fn try_declassify_vec(&self) -> Result<Vec<__prim_t>, Error> {
-                    let bytes: [u8; __size] = self.try_eval()?.0.result();
-                    Ok(vec![__for_lanes {
-                        <__prim_t>::from_le_bytes(
-                            <_>::try_from(
-                                &bytes[__i*size_of::<__prim_t>() .. (__i+1)*size_of::<__prim_t>()]
-                            ).unwrap()
-                        ),
-                    }])
-                }
-
-                /// Wraps a non-secret value as a secret value
-                pub fn new_slice(slice: &[__prim_t]) -> Self {
-                    Self::classify_slice(slice)
-                }
-
-                /// Wraps a non-secret value as a secret value
-                pub fn try_new_slice(slice: &[__prim_t]) -> Option<Self> {
-                    Self::try_classify_slice(slice)
-                }
-
-                /// Wraps a non-secret value as a secret value
-                pub fn const_slice(slice: &[__prim_t]) -> Self {
-                    Self::try_const_slice(slice).unwrap()
-                }
-
-                /// Wraps a non-secret value as a secret value
-                pub fn try_const_slice(slice: &[__prim_t]) -> Option<Self> {
-                    if slice.len() == __lanes {
-                        let mut bytes = [0; __size];
-                        __for_lanes {
-                            bytes[__i*size_of::<__prim_t>() .. (__i+1)*size_of::<__prim_t>()]
-                                .copy_from_slice(&<__lane_U>::from(slice[__i]).to_le_bytes());
-                        }
-                        Some(Self(OpTree::const_(bytes)))
-                    } else {
-                        None
-                    }
+                    Self(OpTree::imm(bytes))
                 }
 
                 /// Wraps a non-secret value as a secret value
@@ -1261,54 +1109,24 @@ for_secret_t! {
             }
 
             /// Build from lanes
-            pub fn from_lanes(__for_lanes {__a: __lane_t,}) -> Self {
-                #[allow(unused)]
-                let x: Self;
-                __for_lanes {
-                    __if(__i == 0) {
-                        let x = Self(OpTree::extend_u(__a.0));
-                    }
-                    __if(__i > 0) {
-                        let x = x.replace(__i, __a);
-                    } 
+            pub fn from_lanes(lanes: [__lane_t; __lanes]) -> Self {
+                // into iter here to avoid cloning
+                let mut lanes = IntoIterator::into_iter(lanes);
+                let mut x = Self(OpTree::extend_u(lanes.next().unwrap().0));
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap())
                 }
                 x
             }
 
             /// Extract all lanes
-            pub fn to_lanes(self) -> (__for_lanes {__lane_t,}) {
-                (__for_lanes {
-                    self.clone().extract(__i),
-                })
-            }
-
-            /// Build from lanes, panicking if the slice length does not match
-            pub fn from_slice(slice: &[__lane_t]) -> Self {
-                Self::try_from_slice(slice).unwrap()
-            }
-
-            /// Build from lanes, returning None if the slice length does not match
-            pub fn try_from_slice(slice: &[__lane_t]) -> Option<Self> {
-                if slice.len() == __lanes {
-                    __for_lanes {
-                        __if(__i == 0) {
-                            let x = Self(OpTree::extend_u(slice[__i].clone().0));
-                        }
-                        __if(__i > 0) {
-                            let x = x.replace(__i, slice[__i].clone());
-                        } 
-                    }
-                    Some(x)
-                } else {
-                    None
+            pub fn to_lanes(self) -> [__lane_t; __lanes] {
+                let mut lanes: [MaybeUninit<__lane_t>; __lanes]
+                    = unsafe { MaybeUninit::uninit().assume_init() };
+                for i in 0..__lanes {
+                    lanes[i] = MaybeUninit::new(self.clone().extract(i))
                 }
-            }
-
-            /// Extract all lanes
-            pub fn to_vec(self) -> Vec<__lane_t> {
-                vec![__for_lanes {
-                    self.clone().extract(__i),
-                }]
+                unsafe { transmute(lanes) }
             }
 
             /// Splat a given value to all lanes
@@ -2157,19 +1975,19 @@ mod tests {
     fn int_reduce() {
         println!();
 
-        let a = SecretU8x64::new_lanes(
+        let a = SecretU8x64::new_lanes([
             0,   1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
             16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
             32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-            48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63);
+            48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
         let x = a.horizontal_max();
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 63);
 
-        let a = SecretU32x16::new_lanes(
-            0,   1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15);
+        let a = SecretU32x16::new_lanes([
+            0,   1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15]);
         let x = a.horizontal_sum();
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify();
@@ -2181,69 +1999,69 @@ mod tests {
     fn int_lane_casts() {
         println!();
 
-        let a = SecretU32x16::new_lanes(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
+        let a = SecretU32x16::new_lanes([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
         let x = SecretU8x16::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
-        let v = x.declassify_vec();
+        let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, vec![0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
+        assert_eq!(v, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
 
-        let a = SecretU256x2::from_lanes(
+        let a = SecretU256x2::from_lanes([
             SecretU256::from(SecretU16::new(1000)),
             SecretU256::from(SecretU16::new(2000))
-        );
+        ]);
         let x = SecretU16x2::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, (1000, 2000));
+        assert_eq!(v, [1000, 2000]);
 
-        let a = SecretU8x16::new_lanes(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
+        let a = SecretU8x16::new_lanes([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
         let x = SecretU32x16::from(a);
         x.tree().disas(io::stdout()).unwrap();
-        let v = x.declassify_vec();
+        let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, vec![0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
+        assert_eq!(v, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]);
 
-        let a = SecretU16x2::new_lanes(1000, 2000);
+        let a = SecretU16x2::new_lanes([1000, 2000]);
         let b = SecretU256x2::from(a);
         let x = SecretU32x2::from_cast(b);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, (1000, 2000));
+        assert_eq!(v, [1000, 2000]);
 
-        let a = SecretI32x16::new_lanes(-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16);
+        let a = SecretI32x16::new_lanes([-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
         let x = SecretI8x16::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
-        let v = x.declassify_vec();
+        let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, vec![-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
+        assert_eq!(v, [-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
 
-        let a = SecretI256x2::from_lanes(
+        let a = SecretI256x2::from_lanes([
             SecretI256::from(SecretI16::new(-1000)),
             SecretI256::from(SecretI16::new(-2000))
-        );
+        ]);
         let x = SecretI16x2::from_cast(a);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, (-1000, -2000));
+        assert_eq!(v, [-1000, -2000]);
 
-        let a = SecretI8x16::new_lanes(-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16);
+        let a = SecretI8x16::new_lanes([-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
         let x = SecretI32x16::from(a);
         x.tree().disas(io::stdout()).unwrap();
-        let v = x.declassify_vec();
+        let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, vec![-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
+        assert_eq!(v, [-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14,-15,-16]);
 
-        let a = SecretI16x2::new_lanes(-1000, -2000);
+        let a = SecretI16x2::new_lanes([-1000, -2000]);
         let b = SecretI256x2::from(a);
         let x = SecretI32x2::from_cast(b);
         x.tree().disas(io::stdout()).unwrap();
         let v = x.declassify_lanes();
         println!("{:?}", v);
-        assert_eq!(v, (-1000, -2000));
+        assert_eq!(v, [-1000, -2000]);
     }
 }
 
