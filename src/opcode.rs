@@ -56,115 +56,111 @@ use secret_u_macros::for_secret_t;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 pub enum OpCode {
-    Arg           = 0x01,
-    Ret           = 0x02,
+    Arg             = 0x01,
+    Ret             = 0x02,
 
-    ExtendConstU  = 0x03,
-    ExtendConstS  = 0x04,
-    SplatConst    = 0x05,
-    ExtendU       = 0x06,
-    ExtendS       = 0x07,
-    Splat         = 0x08,
-    SplatC        = 0x09,
+    ExtendU         = 0x03,
+    ExtendS         = 0x04,
+    Truncate        = 0x05,
+    Splat           = 0x06,
+    SplatConst      = 0x07,
+    SplatLongConst  = 0x08,
 
-    Extract       = 0x0a,
-    Replace       = 0x0b,
-    Select        = 0x0c,
-    Shuffle       = 0x0d,
-    Shuffle2      = 0x0e,
+    Extract         = 0x0a,
+    Replace         = 0x0b,
+    Select          = 0x0c,
+    Shuffle         = 0x0d,
 
-    None          = 0x0f,
-    All           = 0x10,
-    Eq            = 0x11,
-    Ne            = 0x12,
-    LtU           = 0x13,
-    LtS           = 0x14,
-    GtU           = 0x15,
-    GtS           = 0x16,
-    LeU           = 0x17,
-    LeS           = 0x18,
-    GeU           = 0x19,
-    GeS           = 0x1a,
-    MinU          = 0x1b,
-    MinS          = 0x1c,
-    MaxU          = 0x1d,
-    MaxS          = 0x1e,
+    None            = 0x0f,
+    All             = 0x10,
+    Eq              = 0x11,
+    Ne              = 0x12,
+    LtU             = 0x13,
+    LtS             = 0x14,
+    GtU             = 0x15,
+    GtS             = 0x16,
+    LeU             = 0x17,
+    LeS             = 0x18,
+    GeU             = 0x19,
+    GeS             = 0x1a,
+    MinU            = 0x1b,
+    MinS            = 0x1c,
+    MaxU            = 0x1d,
+    MaxS            = 0x1e,
 
-    Neg           = 0x1f,
-    Abs           = 0x20,
-    Not           = 0x21,
-    Clz           = 0x22,
-    Ctz           = 0x23,
-    Popcnt        = 0x24,
-    Add           = 0x25,
-    Sub           = 0x26,
-    Mul           = 0x27,
-    And           = 0x28,
-    Andnot        = 0x29,
-    Or            = 0x2a,
-    Xor           = 0x2b,
-    Shl           = 0x2c,
-    ShrU          = 0x2d,
-    ShrS          = 0x2e,
-    Rotl          = 0x2f,
-    Rotr          = 0x30,
+    Neg             = 0x1f,
+    Abs             = 0x20,
+    Not             = 0x21,
+    Clz             = 0x22,
+    Ctz             = 0x23,
+    Popcnt          = 0x24,
+    Add             = 0x25,
+    Sub             = 0x26,
+    Mul             = 0x27,
+    And             = 0x28,
+    Andnot          = 0x29,
+    Or              = 0x2a,
+    Xor             = 0x2b,
+    Shl             = 0x2c,
+    ShrU            = 0x2d,
+    ShrS            = 0x2e,
+    Rotl            = 0x2f,
+    Rotr            = 0x30,
 }
 
 impl fmt::Display for OpCode {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let name = match self {
-            OpCode::Arg           => "arg",
-            OpCode::Ret           => "ret",
+            OpCode::Arg             => "arg",
+            OpCode::Ret             => "ret",
 
-            OpCode::ExtendConstU  => "extend_const_u",
-            OpCode::ExtendConstS  => "extend_const_s",
-            OpCode::SplatConst    => "splat_const",
-            OpCode::ExtendU       => "extend_u",
-            OpCode::ExtendS       => "extend_s",
-            OpCode::Splat         => "splat",
-            OpCode::SplatC        => "splat_c",
+            OpCode::ExtendU         => "extend_u",
+            OpCode::ExtendS         => "extend_s",
+            OpCode::Truncate        => "truncate",
+            OpCode::Splat           => "splat",
+            OpCode::SplatConst      => "splat",
+            OpCode::SplatLongConst  => "splat",
 
-            OpCode::Extract       => "extract",
-            OpCode::Replace       => "replace",
-            OpCode::Select        => "select",
-            OpCode::Shuffle       => "shuffle",
-            OpCode::Shuffle2      => "shuffle2",
+            OpCode::Extract         => "extract",
+            OpCode::Replace         => "replace",
+            OpCode::Select          => "select",
+            OpCode::Shuffle         => "shuffle",
 
-            OpCode::None          => "none",
-            OpCode::All           => "all",
-            OpCode::Eq            => "eq",
-            OpCode::Ne            => "ne",
-            OpCode::LtU           => "lt_u",
-            OpCode::LtS           => "lt_s",
-            OpCode::GtU           => "gt_u",
-            OpCode::GtS           => "gt_s",
-            OpCode::LeU           => "le_u",
-            OpCode::LeS           => "le_s",
-            OpCode::GeU           => "ge_u",
-            OpCode::GeS           => "ge_s",
-            OpCode::MinU          => "min_u",
-            OpCode::MinS          => "min_s",
-            OpCode::MaxU          => "max_u",
-            OpCode::MaxS          => "max_s",
+            OpCode::None            => "none",
+            OpCode::All             => "all",
+            OpCode::Eq              => "eq",
+            OpCode::Ne              => "ne",
+            OpCode::LtU             => "lt_u",
+            OpCode::LtS             => "lt_s",
+            OpCode::GtU             => "gt_u",
+            OpCode::GtS             => "gt_s",
+            OpCode::LeU             => "le_u",
+            OpCode::LeS             => "le_s",
+            OpCode::GeU             => "ge_u",
+            OpCode::GeS             => "ge_s",
+            OpCode::MinU            => "min_u",
+            OpCode::MinS            => "min_s",
+            OpCode::MaxU            => "max_u",
+            OpCode::MaxS            => "max_s",
 
-            OpCode::Neg           => "neg",
-            OpCode::Abs           => "abs",
-            OpCode::Not           => "not",
-            OpCode::Clz           => "clz",
-            OpCode::Ctz           => "ctz",
-            OpCode::Popcnt        => "popcnt",
-            OpCode::Add           => "add",
-            OpCode::Sub           => "sub",
-            OpCode::Mul           => "mul",
-            OpCode::And           => "and",
-            OpCode::Andnot        => "andnot",
-            OpCode::Or            => "or",
-            OpCode::Xor           => "xor",
-            OpCode::Shl           => "shl",
-            OpCode::ShrU          => "shr_u",
-            OpCode::ShrS          => "shr_s",
-            OpCode::Rotl          => "rotl",
-            OpCode::Rotr          => "rotr",
+            OpCode::Neg             => "neg",
+            OpCode::Abs             => "abs",
+            OpCode::Not             => "not",
+            OpCode::Clz             => "clz",
+            OpCode::Ctz             => "ctz",
+            OpCode::Popcnt          => "popcnt",
+            OpCode::Add             => "add",
+            OpCode::Sub             => "sub",
+            OpCode::Mul             => "mul",
+            OpCode::And             => "and",
+            OpCode::Andnot          => "andnot",
+            OpCode::Or              => "or",
+            OpCode::Xor             => "xor",
+            OpCode::Shl             => "shl",
+            OpCode::ShrU            => "shr_u",
+            OpCode::ShrS            => "shr_s",
+            OpCode::Rotl            => "rotl",
+            OpCode::Rotr            => "rotr",
         };
         write!(fmt, "{}", name)
     }
@@ -226,28 +222,8 @@ impl OpIns {
     }
 
     #[inline]
-    pub fn size(&self) -> usize {
-        1 << self.npw2()
-    }
-
-    #[inline]
-    pub fn width(&self) -> usize {
-        8 << self.npw2()
-    }
-
-    #[inline]
-    pub fn lcount(&self) -> usize {
-        1 << self.lnpw2()
-    }
-
-    #[inline]
-    pub fn lsize(&self) -> usize {
-        self.size() >> self.lnpw2()
-    }
-
-    #[inline]
-    pub fn lwidth(&self) -> usize {
-        self.width() >> self.lnpw2()
+    pub fn lane_npw2(&self) -> u8 {
+        self.npw2() - self.lnpw2()
     }
 
     #[inline]
@@ -269,6 +245,16 @@ impl OpIns {
     pub fn ab(&self) -> u32 {
         ((self.0 & 0x00000000ffffffff) >>  0) as u32
     }
+
+    #[inline]
+    pub fn b_npw2(&self) -> u8 {
+        self.b() as u8
+    }
+
+    #[inline]
+    pub fn b_lane_npw2(&self) -> u8 {
+        self.b_npw2() - self.lnpw2()
+    }
 }
 
 impl From<OpIns> for u64 {
@@ -286,19 +272,17 @@ impl TryFrom<u64> for OpIns {
             0x01 => OpCode::Arg,
             0x02 => OpCode::Ret,
 
-            0x03 => OpCode::ExtendConstU,
-            0x04 => OpCode::ExtendConstS,
-            0x05 => OpCode::SplatConst,
-            0x06 => OpCode::ExtendU,
-            0x07 => OpCode::ExtendS,
-            0x08 => OpCode::Splat,
-            0x09 => OpCode::SplatC,
+            0x03 => OpCode::ExtendU,
+            0x04 => OpCode::ExtendS,
+            0x05 => OpCode::Truncate,
+            0x06 => OpCode::Splat,
+            0x07 => OpCode::SplatConst,
+            0x08 => OpCode::SplatLongConst,
 
             0x0a => OpCode::Extract,
             0x0b => OpCode::Replace,
             0x0c => OpCode::Select,
             0x0d => OpCode::Shuffle,
-            0x0e => OpCode::Shuffle2,
 
             0x0f => OpCode::None,
             0x10 => OpCode::All,
@@ -346,6 +330,7 @@ impl TryFrom<u64> for OpIns {
 impl fmt::Display for OpIns {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self.opcode() {
+            // extract/replace
             OpCode::Extract => {
                 write!(fmt, "{}.{} r{}, r{}[{}]",
                     prefix(self.npw2(), self.lnpw2()),
@@ -366,56 +351,78 @@ impl fmt::Display for OpIns {
                 )
             }
 
-            // special format for moves because they are so common
-            OpCode::SplatConst if self.lnpw2() == 0 => {
-                write!(fmt, "{}.move_const r{}",
-                    prefix(self.npw2(), 0),
-                    self.d()
-                )
-            }
-
-            OpCode::ExtendConstU
-                | OpCode::ExtendConstS
-                | OpCode::SplatConst
-                => {
-                write!(fmt, "{}.{} r{}",
-                    prefix(self.npw2(), self.lnpw2()),
+            // conversion ops
+            OpCode::ExtendU | OpCode::ExtendS => {
+                write!(fmt, "{}.{} r{}, r{}, {}",
+                    prefix(self.npw2(), self.b_npw2()),
                     self.opcode(),
-                    self.d()
+                    self.d(),
+                    self.a(),
+                    prefix(self.lane_npw2(), self.b_npw2())
                 )
             }
 
-            // special format for moves because they are so common
-            OpCode::SplatC if self.lnpw2() == 0 => {
-                write!(fmt, "{}.move_c r{}",
-                    prefix(self.npw2(), 0),
-                    self.d()
-                )
-            }
-
-            OpCode::SplatC => {
-                write!(fmt, "{}.{} r{}",
-                    prefix(self.npw2(), self.lnpw2()),
+            OpCode::Truncate => {
+                write!(fmt, "{}.{} r{}, r{}, {}",
+                    prefix(self.lane_npw2(), self.b_npw2()),
                     self.opcode(),
-                    self.d()
+                    self.d(),
+                    self.a(),
+                    prefix(self.npw2(), self.b_npw2())
                 )
             }
 
-            // special format for moves because they are so common
-            OpCode::ExtendU if self.lnpw2() == 0 => {
+            // splats and moves (synonym)
+            OpCode::Splat if self.lnpw2() == 0 => {
                 write!(fmt, "{}.move r{}, r{}",
-                    prefix(self.npw2(), 0),
+                    prefix(self.npw2(), self.lnpw2()),
                     self.d(),
                     self.a()
+                )
+            }
+
+            OpCode::Splat => {
+                write!(fmt, "{}.{} r{}, r{}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.opcode(),
+                    self.d(),
+                    self.a(),
+                )
+            }
+
+            OpCode::SplatConst if self.lnpw2() == 0 => {
+                write!(fmt, "{}.move r{}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.d()
+                )
+            }
+
+            OpCode::SplatConst => {
+                write!(fmt, "{}.{} r{}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.opcode(),
+                    self.d()
+                )
+            }
+
+            OpCode::SplatLongConst if self.lnpw2() == 0 => {
+                write!(fmt, "{}.move r{}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.d()
+                )
+            }
+
+            OpCode::SplatLongConst => {
+                write!(fmt, "{}.{} r{}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.opcode(),
+                    self.d()
                 )
             }
 
             // unops
             OpCode::Arg
                 | OpCode::Ret
-                | OpCode::ExtendU
-                | OpCode::ExtendS
-                | OpCode::Splat
                 | OpCode::None
                 | OpCode::All
                 | OpCode::Neg
@@ -436,7 +443,6 @@ impl fmt::Display for OpIns {
             // binops/triops
             OpCode::Select
                 | OpCode::Shuffle
-                | OpCode::Shuffle2
                 | OpCode::Eq
                 | OpCode::Ne
                 | OpCode::LtU
@@ -512,29 +518,27 @@ pub fn disas<W: io::Write>(
         match OpIns::try_from(ins) {
             Ok(ins) => {
                 match ins.opcode() {
-                    OpCode::ExtendConstU | OpCode::ExtendConstS | OpCode::SplatConst => {
+                    OpCode::SplatConst => {
+                        write!(out, "    {:016x} {}, 0x", u64::from(ins), ins)?;
+                        writeln!(out, "{:0w$x}",
+                            ins.ab()
+                                & 1u32.checked_shl(8*(1 << ins.lane_npw2()))
+                                    .map(|mask| mask-1)
+                                    .unwrap_or(u32::MAX),
+                            w=2*min(4, 1 << ins.lane_npw2())
+                        )?;
+                    }
+                    OpCode::SplatLongConst => {
                         write!(out, "    {:016x} {}, 0x", u64::from(ins), ins)?;
                         // fetch from instruction stream
-                        for j in (0 .. ins.lsize()/8).rev() {
+                        for j in (0 .. (1 << ins.b_npw2())/8).rev() {
                             write!(out, "{:016x}", bytecode[i+j])?;
                         }
                         writeln!(out)?;
-                        for _ in 0 .. ins.lsize()/8 {
+                        for _ in 0 .. (1 << ins.b_npw2())/8 {
                             writeln!(out, "    {:016x}", bytecode[i])?;
                             i += 1;
                         }
-                    }
-                    OpCode::SplatC => {
-                        write!(out, "    {:016x} {}, 0x", u64::from(ins), ins)?;
-                        for _ in (4..ins.lsize()).step_by(4) {
-                            // sign extend?
-                            if ins.ab() & 0x80000000 == 0x80000000 {
-                                write!(out, "ffffffff")?;
-                            } else {
-                                write!(out, "00000000")?;
-                            }
-                        }
-                        writeln!(out, "{:0w$x}", ins.ab(), w=2*min(4, ins.lsize()))?;
                     }
                     _ => {
                         writeln!(out, "    {:016x} {}", u64::from(ins), ins)?;
@@ -600,51 +604,40 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
         self == &Self::ones()
     }
 
-    /// Can we compress into an extend_const_u instruction?
-    fn is_extend_u(&self, npw2: u8) -> bool {
+    /// Can we compress into a sign-extend followed by a splat?
+    fn is_extend_splat(&self, extend_npw2: u8, splat_npw2: u8) -> bool {
         let bytes = self.to_le_bytes();
         let bytes = bytes.as_ref();
-        let width = 1usize << npw2;
-        bytes[width..].iter().all(|b| *b == 0)
-    }
-
-    /// Can we compress into an extend_const_s instruction?
-    fn is_extend_s(&self, npw2: u8) -> bool {
-        let bytes = self.to_le_bytes();
-        let bytes = bytes.as_ref();
-        let width = 1usize << npw2;
-        if bytes[width-1] & 0x80 == 0x80 {
-            bytes[width..].iter().all(|b| *b == 0xff)
-        } else {
-            bytes[width..].iter().all(|b| *b == 0x00)
-        }
-    }
-
-    /// Can we compress into a splat_const instruction?
-    fn is_splat(&self, npw2: u8) -> bool {
-        let bytes = self.to_le_bytes();
-        let bytes = bytes.as_ref();
-        let width = 1usize << npw2;
-        (width..bytes.len())
-            .step_by(width)
-            .all(|i| &bytes[i..i+width] == &bytes[..width])
-    }
-
-    /// Can we compress into an splat_c instruction?
-    fn is_extend_splat_s(&self, extend_npw2: u8, splat_npw2: u8) -> bool {
-        if !self.is_splat(splat_npw2) {
-            return false;
-        }
-
-        let bytes = self.to_le_bytes();
-        let bytes = bytes.as_ref();
-        let extend_width = 1usize << extend_npw2;
         let splat_width = 1usize << splat_npw2;
-        if bytes[extend_width-1] & 0x80 == 0x80 {
-            bytes[extend_width..splat_width].iter().all(|b| *b == 0xff)
-        } else {
-            bytes[extend_width..splat_width].iter().all(|b| *b == 0x00)
+        let extend_width = 1usize << extend_npw2;
+
+        // is extend?
+        (splat_width..bytes.len())
+            .step_by(splat_width)
+            .all(|i| &bytes[i..i+splat_width] == &bytes[..splat_width])
+            // is extend?
+            && if bytes[extend_width-1] & 0x80 == 0x80 {
+                bytes[extend_width..splat_width].iter().all(|b| *b == 0xff)
+            } else {
+                bytes[extend_width..splat_width].iter().all(|b| *b == 0x00)
+            }
+    }
+
+    /// Find the smallest sign-extend splat representation
+    fn find_extend_splat(&self) -> (u8, u8) {
+        // find best splat
+        for splat_npw2 in 0..=Self::NPW2 {
+            if self.is_extend_splat(splat_npw2, splat_npw2) {
+                // find best extend-splat
+                for extend_npw2 in 0..=splat_npw2 {
+                    if self.is_extend_splat(extend_npw2, splat_npw2) {
+                        return (extend_npw2, splat_npw2);
+                    }
+                }
+            }
         }
+
+        unreachable!();
     }
 }
 
@@ -780,8 +773,9 @@ pub enum OpKind<T: OpU> {
     Select(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     Shuffle(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
 
-    ExtendU(RefCell<Rc<dyn DynOpNode>>),
-    ExtendS(RefCell<Rc<dyn DynOpNode>>),
+    ExtendU(u8, RefCell<Rc<dyn DynOpNode>>),
+    ExtendS(u8, RefCell<Rc<dyn DynOpNode>>),
+    Truncate(u8, RefCell<Rc<dyn DynOpNode>>),
     Splat(RefCell<Rc<dyn DynOpNode>>),
 
     None(RefCell<Rc<OpNode<T>>>),
@@ -1205,12 +1199,12 @@ impl<T: OpU> OpTree<T> {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Cow::Owned(Self::from_kind(OpKind::ExtendU(RefCell::new(a)), flags, depth))
+            Cow::Owned(Self::from_kind(OpKind::ExtendU(0, RefCell::new(a)), flags, depth))
         } else if T::NPW2 < a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Cow::Owned(Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth))
+            Cow::Owned(Self::from_kind(OpKind::Truncate(0, RefCell::new(a)), flags, depth))
         } else {
             Cow::Borrowed(Self::dyn_downcast(a))
         }
@@ -1224,12 +1218,12 @@ impl<T: OpU> OpTree<T> {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Cow::Owned(Self::from_kind(OpKind::ExtendS(RefCell::new(a)), flags, depth))
+            Cow::Owned(Self::from_kind(OpKind::ExtendS(0, RefCell::new(a)), flags, depth))
         } else if T::NPW2 < a.npw2() {
             let a = a.dyn_node();
             let flags = a.flags();
             let depth = a.depth();
-            Cow::Owned(Self::from_kind(OpKind::Extract(0, RefCell::new(a)), flags, depth))
+            Cow::Owned(Self::from_kind(OpKind::Truncate(0, RefCell::new(a)), flags, depth))
         } else {
             Cow::Borrowed(Self::dyn_downcast(a))
         }
@@ -1303,18 +1297,25 @@ impl<T: OpU> OpTree<T> {
         Self::from_kind(OpKind::Shuffle(lnpw2, RefCell::new(p), RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
-    pub fn extend_u<U: OpU>(a: OpTree<U>) -> Self {
+    pub fn extend_u<U: OpU>(lnpw2: u8, a: OpTree<U>) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::ExtendU(RefCell::new(a)), flags, depth)
+        Self::from_kind(OpKind::ExtendU(lnpw2, RefCell::new(a)), flags, depth)
     }
 
-    pub fn extend_s<U: OpU>(a: OpTree<U>) -> Self {
+    pub fn extend_s<U: OpU>(lnpw2: u8, a: OpTree<U>) -> Self {
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
-        Self::from_kind(OpKind::ExtendS(RefCell::new(a)), flags, depth)
+        Self::from_kind(OpKind::ExtendS(lnpw2, RefCell::new(a)), flags, depth)
+    }
+
+    pub fn truncate<U: OpU>(lnpw2: u8, a: OpTree<U>) -> Self {
+        let a = a.node();
+        let flags = a.flags();
+        let depth = a.depth();
+        Self::from_kind(OpKind::Truncate(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn splat<U: OpU>(a: OpTree<U>) -> Self {
@@ -2090,10 +2091,13 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.borrow().disas_pass1();
             }
 
-            OpKind::ExtendU(a) => {
+            OpKind::ExtendU(_, a) => {
                 a.borrow().disas_pass1();
             }
-            OpKind::ExtendS(a) => {
+            OpKind::ExtendS(_, a) => {
+                a.borrow().disas_pass1();
+            }
+            OpKind::Truncate(_, a) => {
                 a.borrow().disas_pass1();
             }
             OpKind::Splat(a) => {
@@ -2249,15 +2253,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
         let expr = match &self.kind {
             OpKind::Const(v) => format!("({}.const {:x})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 v
             ),
             OpKind::Imm(v) => format!("({}.imm {:x})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 v
             ),
             OpKind::Sym(s) => format!("({}.sym {:?})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 s
             ),
 
@@ -2285,21 +2289,25 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
 
-            OpKind::ExtendU(a) => format!("({}.extend_u {})",
-                8 << T::NPW2,
+            OpKind::ExtendU(lnpw2, a) => format!("({}.extend_u {})",
+                prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
-            OpKind::ExtendS(a) => format!("({}.extend_s {})",
-                8 << T::NPW2,
+            OpKind::ExtendS(lnpw2, a) => format!("({}.extend_s {})",
+                prefix(T::NPW2, *lnpw2),
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
+            ),
+            OpKind::Truncate(lnpw2, a) => format!("({}.truncate {})",
+                prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::Splat(a) => format!("({}.splat {})",
-                8 << T::NPW2,
+                prefix(T::NPW2, T::NPW2-a.borrow().npw2()),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
 
             OpKind::None(a) => format!("({}.none {})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
             OpKind::All(lnpw2, a) => format!("({}.all {})",
@@ -2417,22 +2425,22 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::And(a, b) => format!("({}.and {} {})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Andnot(a, b) => format!("({}.andnot {} {})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Or(a, b) => format!("({}.or {} {})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
             OpKind::Xor(a, b) => format!("({}.xor {} {})",
-                8 << T::NPW2,
+                prefix(T::NPW2, 0),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
@@ -2502,10 +2510,13 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.borrow().check_refs();
             }
 
-            OpKind::ExtendU(a) => {
+            OpKind::ExtendU(_, a) => {
                 a.borrow().check_refs();
             }
-            OpKind::ExtendS(a) => {
+            OpKind::ExtendS(_, a) => {
+                a.borrow().check_refs();
+            }
+            OpKind::Truncate(_, a) => {
                 a.borrow().check_refs();
             }
             OpKind::Splat(a) => {
@@ -2700,11 +2711,15 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
             }
 
-            OpKind::ExtendU(a) => {
+            OpKind::ExtendU(_, a) => {
                 let mut a = a.borrow_mut();
                 a.fold_consts().map(|x| *a = x);
             }
-            OpKind::ExtendS(a) => {
+            OpKind::ExtendS(_, a) => {
+                let mut a = a.borrow_mut();
+                a.fold_consts().map(|x| *a = x);
+            }
+            OpKind::Truncate(_, a) => {
                 let mut a = a.borrow_mut();
                 a.fold_consts().map(|x| *a = x);
             }
@@ -3297,10 +3312,13 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.borrow().compile_pass1(state);
             }
 
-            OpKind::ExtendU(a) => {
+            OpKind::ExtendU(_, a) => {
                 a.borrow().compile_pass1(state);
             }
-            OpKind::ExtendS(a) => {
+            OpKind::ExtendS(_, a) => {
+                a.borrow().compile_pass1(state);
+            }
+            OpKind::Truncate(_, a) => {
                 a.borrow().compile_pass1(state);
             }
             OpKind::Splat(a) => {
@@ -3448,64 +3466,37 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         match &self.kind {
             OpKind::Const(v) => {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                #[allow(unused_mut)] let mut best_lnpw2 = 0;
-                #[allow(unused_mut)] let mut best_npw2 = T::NPW2;
-                #[allow(unused_mut)] let mut best_ins = OpCode::SplatConst;
+                #[allow(unused_mut, unused_assignments)] let mut extend_npw2 = T::NPW2;
+                #[allow(unused_mut, unused_assignments)] let mut splat_npw2 = T::NPW2;
 
                 // can we use a smaller encoding?
-                //
-                // the smallest encoding, splat_c, encodes a u32, or npw2=2
                 #[cfg(feature="opt-compress-consts")]
                 {
-                    if state.opt {
-                        for npw2 in 2..T::NPW2 {
-                            // note these are in decreasing order of efficient
-                            // encodings (splat and extend_s can leverage
-                            // splat_c, but not extend_u)
-                            if v.is_splat(npw2) {
-                                best_lnpw2 = T::NPW2 - npw2;
-                                best_npw2 = npw2;
-                                best_ins  = OpCode::SplatConst;
-                                break;
-                            } else if v.is_extend_s(npw2) {
-                                best_lnpw2 = 0;
-                                best_npw2 = npw2;
-                                best_ins  = OpCode::ExtendConstS;
-                                break;
-                            } else if npw2 > 2 && v.is_extend_u(npw2) {
-                                best_lnpw2 = 0;
-                                best_npw2 = npw2;
-                                best_ins  = OpCode::ExtendConstU;
-                                break;
-                            }
-                        }
-
-                        // can we combine extend_s+splat with splat_c?
-                        if best_npw2 > 2 && best_ins == OpCode::SplatConst && v.is_extend_splat_s(2, best_npw2) {
-                            best_lnpw2 = T::NPW2 - best_npw2;
-                            best_npw2 = 2;
-                        }
-                    }
+                    let extend_splat = v.find_extend_splat();
+                    extend_npw2 = extend_splat.0;
+                    splat_npw2 = extend_splat.1;
                 }
 
                 // fall back to uncompressed encodings
-                if best_npw2 <= 2 && (best_ins == OpCode::SplatConst || best_ins == OpCode::ExtendConstS) {
+                if extend_npw2 <= 2 {
+                    // fits in a splat_const (32-bit immediate)
                     let mut buf = Vec::from(v.to_le_bytes().as_ref());
-                    buf.truncate(1 << best_npw2);
-                    buf.resize(4, 0);
+                    buf.truncate(1 << extend_npw2);
+                    buf.resize(4, if buf[buf.len()-1] & 0x80 == 0x80 { 0xff } else { 0x00 });
 
                     state.bytecode.push(u64::from(OpIns::with_ab(
-                        T::NPW2, best_lnpw2, OpCode::SplatC, slot,
+                        T::NPW2, T::NPW2-splat_npw2, OpCode::SplatConst, slot,
                         u32::from_le_bytes(<_>::try_from(&buf[..]).unwrap())
                     )));
                 } else {
-                    // encode const into bytecode stream
+                    // does not fit, just follows in instruction stream
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, T::NPW2 - best_npw2, best_ins, slot, 0, 0
+                        T::NPW2, T::NPW2-splat_npw2, OpCode::SplatLongConst, slot,
+                        0, u16::from(extend_npw2), 
                     )));
 
                     let mut buf = Vec::from(v.to_le_bytes().as_ref());
-                    buf.truncate(1 << best_npw2);
+                    buf.truncate(1 << extend_npw2);
                     for i in (0..buf.len()).step_by(8) {
                         state.bytecode.push(
                             u64::from_le_bytes(<_>::try_from(&buf[i..i+8]).unwrap())
@@ -3550,7 +3541,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, slot, b_slot, 0
+                        T::NPW2, 0, OpCode::Splat, slot, b_slot, 0
                     )));
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Select, slot, a_slot, p_slot
@@ -3587,7 +3578,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, slot, b_slot, 0
+                        T::NPW2, 0, OpCode::Splat, slot, b_slot, 0
                     )));
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Shuffle, slot, a_slot, p_slot
@@ -3635,7 +3626,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, 0, OpCode::ExtendU, slot, a_slot, 0
+                        T::NPW2, 0, OpCode::Splat, slot, a_slot, 0
                     )));
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, T::NPW2-b_npw2, OpCode::Replace, slot, b_slot, *lane
@@ -3647,7 +3638,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
 
-            OpKind::ExtendU(a) => {
+            OpKind::ExtendU(lnpw2, a) => {
                 let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
                 let (a_slot, a_npw2) = a.compile_pass2(state);
@@ -3656,12 +3647,12 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
-                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendU, slot, a_slot, 0
+                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendU, slot, a_slot, u16::from(*lnpw2)
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
-            OpKind::ExtendS(a) => {
+            OpKind::ExtendS(lnpw2, a) => {
                 let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
                 let (a_slot, a_npw2) = a.compile_pass2(state);
@@ -3670,7 +3661,21 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
-                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendS, slot, a_slot, 0
+                    T::NPW2, T::NPW2-a_npw2, OpCode::ExtendS, slot, a_slot, u16::from(*lnpw2)
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            OpKind::Truncate(lnpw2, a) => {
+                let a = a.borrow();
+                assert!(T::NPW2 <= a.npw2());
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let a_refs = a.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    a_npw2, a_npw2-T::NPW2, OpCode::Truncate, slot, a_slot, u16::from(*lnpw2)
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4346,10 +4351,10 @@ mod tests {
     #[test]
     fn compile_alignment() {
         let example = OpTree::add(0,
-            OpTree::<U16>::extend_s(
+            OpTree::<U16>::extend_s(0,
                 OpTree::<U8>::imm(2u8)
             ),
-            OpTree::<U16>::extract(0,
+            OpTree::<U16>::truncate(0,
                 OpTree::<U32>::imm(1u32),
             ),
         );
@@ -4445,20 +4450,20 @@ mod tests {
         let d = OpTree::<U64>::imm(3u64);
         let e = OpTree::<U128>::imm(5u128);
         let fib_3 = OpTree::add(0,
-            OpTree::<U32>::extend_u(b.clone()), OpTree::<U32>::extend_u(a.clone())
+            OpTree::<U32>::extend_u(0, b.clone()), OpTree::<U32>::extend_u(0, a.clone())
         );
         let fib_4 = OpTree::add(0,
-            OpTree::<U64>::extend_u(fib_3.clone()), OpTree::<U64>::extend_u(b.clone())
+            OpTree::<U64>::extend_u(0, fib_3.clone()), OpTree::<U64>::extend_u(0, b.clone())
         );
         let fib_5 = OpTree::add(0,
-            OpTree::<U128>::extend_u(fib_4.clone()), OpTree::<U128>::extend_u(fib_3.clone())
+            OpTree::<U128>::extend_u(0, fib_4.clone()), OpTree::<U128>::extend_u(0, fib_3.clone())
         );
         let example = OpTree::and(
             OpTree::and(
-                OpTree::<U8>::extract(0, OpTree::eq(0, fib_3.clone(), c)),
-                OpTree::<U8>::extract(0, OpTree::eq(0, fib_4.clone(), d))
+                OpTree::<U8>::truncate(0, OpTree::eq(0, fib_3.clone(), c)),
+                OpTree::<U8>::truncate(0, OpTree::eq(0, fib_4.clone(), d))
             ),
-            OpTree::<U8>::extract(0, OpTree::eq(0, fib_5.clone(), e))
+            OpTree::<U8>::truncate(0, OpTree::eq(0, fib_5.clone(), e))
         );
 
         println!();
@@ -4515,20 +4520,20 @@ mod tests {
         let d = OpTree::<U64>::const_(3u64);
         let e = OpTree::<U128>::const_(5u128);
         let fib_3 = OpTree::add(0,
-            OpTree::<U32>::extend_u(b.clone()), OpTree::<U32>::extend_u(a.clone())
+            OpTree::<U32>::extend_u(0, b.clone()), OpTree::<U32>::extend_u(0, a.clone())
         );
         let fib_4 = OpTree::add(0,
-            OpTree::<U64>::extend_u(fib_3.clone()), OpTree::<U64>::extend_u(b.clone())
+            OpTree::<U64>::extend_u(0, fib_3.clone()), OpTree::<U64>::extend_u(0, b.clone())
         );
         let fib_5 = OpTree::add(0,
-            OpTree::<U128>::extend_u(fib_4.clone()), OpTree::<U128>::extend_u(fib_3.clone())
+            OpTree::<U128>::extend_u(0, fib_4.clone()), OpTree::<U128>::extend_u(0, fib_3.clone())
         );
         let example = OpTree::and(
             OpTree::and(
-                OpTree::<U8>::extract(0, OpTree::eq(0, fib_3.clone(), c)),
-                OpTree::<U8>::extract(0, OpTree::eq(0, fib_4.clone(), d))
+                OpTree::<U8>::truncate(0, OpTree::eq(0, fib_3.clone(), c)),
+                OpTree::<U8>::truncate(0, OpTree::eq(0, fib_4.clone(), d))
             ),
-            OpTree::<U8>::extract(0, OpTree::eq(0, fib_5.clone(), e))
+            OpTree::<U8>::truncate(0, OpTree::eq(0, fib_5.clone(), e))
         );
 
         println!();
@@ -4557,24 +4562,24 @@ mod tests {
         let f = OpTree::<U8>::imm(6u8);
         let g = OpTree::<U8>::imm(7u8);
         let h = OpTree::<U8>::imm(8u8);
-        let big = OpTree::<U32>::extend_u(a);
+        let big = OpTree::<U32>::extend_u(0, a);
         let i = OpTree::add(0,
             big.clone(),
             OpTree::add(0,
                 big.clone(),
                 OpTree::add(0,
-                    OpTree::<U32>::extend_u(b),
+                    OpTree::<U32>::extend_u(0, b),
                     OpTree::add(0,
-                        OpTree::<U32>::extend_u(c),
+                        OpTree::<U32>::extend_u(0, c),
                         OpTree::add(0,
-                            OpTree::<U32>::extend_u(d),
+                            OpTree::<U32>::extend_u(0, d),
                             OpTree::add(0,
-                                OpTree::<U32>::extend_u(e),
+                                OpTree::<U32>::extend_u(0, e),
                                 OpTree::add(0,
-                                    OpTree::<U32>::extend_u(f),
+                                    OpTree::<U32>::extend_u(0, f),
                                     OpTree::add(0,
-                                        OpTree::<U32>::extend_u(g),
-                                        OpTree::<U32>::extend_u(h)
+                                        OpTree::<U32>::extend_u(0, g),
+                                        OpTree::<U32>::extend_u(0, h)
                                     )
                                 )
                             )

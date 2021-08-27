@@ -1112,7 +1112,7 @@ for_secret_t! {
             pub fn from_lanes(lanes: [__lane_t; __lanes]) -> Self {
                 // into iter here to avoid cloning
                 let mut lanes = IntoIterator::into_iter(lanes);
-                let mut x = Self(OpTree::extend_u(lanes.next().unwrap().0));
+                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().0));
                 for i in 1..__lanes {
                     x = x.replace(i, lanes.next().unwrap())
                 }
@@ -1620,7 +1620,7 @@ for_secret_t_2! {
     __if(__t_2 == "u" && __npw2 > __npw2_2) {
         impl From<__secret_t_2> for __secret_t {
             fn from(v: __secret_t_2) -> __secret_t {
-                Self(OpTree::extend_u(v.0))
+                Self(OpTree::extend_u(0, v.0))
             }
         }
     }
@@ -1629,7 +1629,7 @@ for_secret_t_2! {
     __if(__t == "i" && __t_2 == "i" && __npw2 > __npw2_2) {
         impl From<__secret_t_2> for __secret_t {
             fn from(v: __secret_t_2) -> __secret_t {
-                Self(OpTree::extend_s(v.0))
+                Self(OpTree::extend_s(0, v.0))
             }
         }
     }
@@ -1638,7 +1638,7 @@ for_secret_t_2! {
     __if((__t == "u" || __t == "i") && __t == __t_2 && __npw2 < __npw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
             fn from_cast(v: __secret_t_2) -> __secret_t {
-                Self(OpTree::extract(0, v.0))
+                Self(OpTree::truncate(0, v.0))
             }
         }
     }
@@ -1657,7 +1657,7 @@ for_secret_t_2! {
             && __t == __t_2 && __lane_npw2 == __lane_npw2_2 && __lnpw2 > __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
             fn from(v: __secret_t_2) -> __secret_t {
-                Self(OpTree::extend_u(v.0))
+                Self(OpTree::extend_u(0, v.0))
             }
         }
     }
@@ -1667,7 +1667,7 @@ for_secret_t_2! {
             && __t == __t_2 && __lane_npw2 == __lane_npw2_2 && __lnpw2 < __lnpw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
             fn from_cast(v: __secret_t_2) -> __secret_t {
-                Self(OpTree::extract(0, v.0))
+                Self(OpTree::truncate(0, v.0))
             }
         }
     }
@@ -1677,28 +1677,7 @@ for_secret_t_2! {
             && __lane_npw2 > __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
             fn from(v: __secret_t_2) -> __secret_t {
-                let mut lanes = [0xff; __size];
-                for i in 0..__lanes_2 {
-                    // this works because i can be at most 64, < u8
-                    let off = i*__lane_size;
-                    lanes[off] = u8::try_from(i).unwrap();
-                    lanes[off + 1 .. off + __lane_size_2]
-                        .fill(0x00);
-                }
-
-                // drop down to OpTree to avoid extra type parameter
-                let extended = OpTree::extend_u(v.0);
-                Self(
-                    OpTree::shuffle(
-                        u8::try_from(
-                            ((__lanes * (__size/__size_2)) as usize)
-                                .trailing_zeros()
-                        ).unwrap(),
-                        OpTree::const_(lanes),
-                        extended.clone(),
-                        extended
-                    )
-                )
+                Self(OpTree::extend_u(__lnpw2, v.0))
             }
         }
     }
@@ -1708,50 +1687,7 @@ for_secret_t_2! {
             && __lane_npw2 > __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
             fn from(v: __secret_t_2) -> __secret_t {
-                let mut lanes = [0xff; __size];
-                for i in 0..__lanes_2 {
-                    // this works because i can be at most 64, < u8
-                    let off = i*__lane_size
-                        + (__lane_size-__lane_size_2);
-                    lanes[off] = u8::try_from(i).unwrap();
-                    lanes[off + 1 .. off + __lane_size_2]
-                        .fill(0x00);
-                }
-
-                // drop down to OpTree to avoid extra type parameter
-                let extended = OpTree::extend_u(v.0);
-                let shift = 8*(__lane_size-__lane_size_2);
-                Self(
-                    OpTree::shr_s(
-                        __lnpw2,
-                        OpTree::shuffle(
-                            u8::try_from(
-                                ((__lanes * (__size/__size_2)) as usize)
-                                    .trailing_zeros()
-                            ).unwrap(),
-                            OpTree::const_(lanes),
-                            extended.clone(),
-                            extended
-                        ),
-                        // a bit of an annoying workaround for type limitations
-                        {
-                            let mut bytes = [0; __size];
-                            for i in 0..__lanes {
-                                #[allow(unconditional_panic)]
-                                if shift > 128 {
-                                    bytes[i*__lane_size .. i*__lane_size+2]
-                                        .copy_from_slice(
-                                            &u16::try_from(shift).unwrap()
-                                                .to_le_bytes()
-                                        );
-                                } else {
-                                    bytes[i*__lane_size] = u8::try_from(shift).unwrap();
-                                }
-                            }
-                            OpTree::const_(bytes)
-                        }
-                    )
-                )
+                Self(OpTree::extend_s(__lnpw2, v.0))
             }
         }
     }
@@ -1761,27 +1697,7 @@ for_secret_t_2! {
             && __lane_npw2 < __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
             fn from_cast(v: __secret_t_2) -> __secret_t {
-                let mut lanes = [0; __size_2];
-                for i in 0..__lanes_2 {
-                    // this works because i can be at most 64, < u8
-                    lanes[i*__lane_size]
-                        = u8::try_from(i*(__size_2/__size)).unwrap();
-                }
-
-                // drop down to OpTree to avoid extra type parameter
-                Self(
-                    OpTree::extract(0,
-                        OpTree::shuffle(
-                            u8::try_from(
-                                ((__lanes * (__size_2/__size)) as usize)
-                                    .trailing_zeros()
-                            ).unwrap(),
-                            OpTree::const_(lanes),
-                            v.0.clone(),
-                            v.0
-                        )
-                    )
-                )
+                Self(OpTree::truncate(__lnpw2, v.0))
             }
         }
     }

@@ -75,48 +75,82 @@ trait Bytes: Sized {
         Some(Self::from_le_bytes(bytes))
     }
 
-    // Common conversion operations
-    fn extend_u<T>(t: T) -> Self
+    // common conversion operations
+    fn extend_u<T>(lnpw2: u8, t: T) -> Self
     where
         T: Bytes,
     {
-        let mut bytes = Self::ZERO.to_le_bytes();
+        let from_lane_size = size_of::<T>() >> lnpw2;
+        let to_lane_size = size_of::<Self>() >> lnpw2;
 
-        bytes.as_mut()[..size_of::<T>()]
-            .copy_from_slice(t.to_le_bytes().as_ref());
+        let from_bytes = t.to_le_bytes();
+        let from_bytes = from_bytes.as_ref();
+        let mut to_bytes = Self::ZERO.to_le_bytes();
 
-        Self::from_le_bytes(bytes)
+        for i in 0 .. 1 << lnpw2 {
+            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
+                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
+        }
+
+        Self::from_le_bytes(to_bytes)
     }
 
-    fn extend_s<T>(t: T) -> Self
+    fn extend_s<T>(lnpw2: u8, t: T) -> Self
     where
         T: Bytes,
     {
-        let t = t.to_le_bytes();
-        let mut bytes = if (*t.as_ref().last().unwrap() as i8) < 0 {
-            Self::ONES.to_le_bytes()
-        } else {
-            Self::ZERO.to_le_bytes()
-        };
+        let from_lane_size = size_of::<T>() >> lnpw2;
+        let to_lane_size = size_of::<Self>() >> lnpw2;
 
-        bytes.as_mut()[..size_of::<T>()]
-            .copy_from_slice(t.as_ref());
+        let from_bytes = t.to_le_bytes();
+        let from_bytes = from_bytes.as_ref();
+        let mut to_bytes = Self::ZERO.to_le_bytes();
 
-        Self::from_le_bytes(bytes)
+        for i in 0 .. 1 << lnpw2 {
+            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
+                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
+            let sign = if to_bytes.as_ref()[i*to_lane_size+from_lane_size-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
+            to_bytes.as_mut()[i*to_lane_size+from_lane_size .. (i+1)*to_lane_size]
+                .fill(sign);
+        }
+
+        Self::from_le_bytes(to_bytes)
     }
 
+    fn truncate<T>(lnpw2: u8, t: T) -> Self
+    where
+        T: Bytes,
+    {
+        let from_lane_size = size_of::<T>() >> lnpw2;
+        let to_lane_size = size_of::<Self>() >> lnpw2;
+
+        let from_bytes = t.to_le_bytes();
+        let from_bytes = from_bytes.as_ref();
+        let mut to_bytes = Self::ZERO.to_le_bytes();
+
+        for i in 0 .. 1 << lnpw2 {
+            to_bytes.as_mut()[i*to_lane_size .. (i+1)*to_lane_size]
+                .copy_from_slice(&from_bytes[i*from_lane_size .. i*from_lane_size+to_lane_size]);
+        }
+
+        Self::from_le_bytes(to_bytes)
+    }
+
+    // splat
     fn splat<T>(t: T) -> Self
     where
         T: Bytes + Copy,
     {
-        let mut bytes = Self::ZERO.to_ne_bytes();
+        let from_bytes = t.to_ne_bytes();
+        let from_bytes = from_bytes.as_ref();
+        let mut to_bytes = Self::ZERO.to_ne_bytes();
 
         for i in (0..size_of::<Self>()).step_by(size_of::<T>()) {
-            bytes.as_mut()[i..i+size_of::<T>()]
-                .copy_from_slice(t.to_ne_bytes().as_ref());
+            to_bytes.as_mut()[i..i+size_of::<T>()]
+                .copy_from_slice(from_bytes);
         }
 
-        Self::from_ne_bytes(bytes)
+        Self::from_ne_bytes(to_bytes)
     }
 }
 
@@ -1104,100 +1138,72 @@ pub fn exec<'a>(
 
             //// conversion instructions ////
 
-            // extend_const_u
-            0x03 if __lane_npw2 >= 3 => {
-                // must be aligned to u64
-                const WORDS: usize = size_of::<L>() / 8;
-
-                // we need to check the bounds on this
-                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
-                    Err(Error::OutOfBounds)?;
-                }
-
-                // load from instruction stream
-                let mut bytes = [0u8; 8*WORDS];
-                for i in 0..WORDS {
-                    let word = unsafe { *pc };
-                    pc = unsafe { pc.add(1) };
-                    bytes[i*8..(i+1)*8].copy_from_slice(&word.to_le_bytes());
-                }
-                let rb = <L>::from_le_bytes(bytes);
-
-                // cast if needed
-                *s.reg_mut::<U>(d)? = <U>::extend_u(rb);
-            }
-
-            // extend_const_s
-            0x04 if __lane_npw2 >= 3 => {
-                // must be aligned to u64
-                const WORDS: usize = size_of::<L>() / 8;
-
-                // we need to check the bounds on this
-                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
-                    Err(Error::OutOfBounds)?;
-                }
-
-                // load from instruction stream
-                let mut bytes = [0u8; 8*WORDS];
-                for i in 0..WORDS {
-                    let word = unsafe { *pc };
-                    pc = unsafe { pc.add(1) };
-                    bytes[i*8..(i+1)*8].copy_from_slice(&word.to_le_bytes());
-                }
-                let rb = <L>::from_le_bytes(bytes);
-
-                // cast if needed
-                *s.reg_mut::<U>(d)? = <U>::extend_s(rb);
-            }
-
-            // splat_const
-            0x05 if __lane_npw2 >= 3 => {
-                // must be aligned to u64
-                const WORDS: usize = size_of::<L>() / 8;
-
-                // we need to check the bounds on this
-                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < WORDS as isize {
-                    Err(Error::OutOfBounds)?;
-                }
-
-                // load from instruction stream
-                let mut bytes = [0u8; 8*WORDS];
-                for i in 0..WORDS {
-                    let word = unsafe { *pc };
-                    pc = unsafe { pc.add(1) };
-                    bytes[i*8..(i+1)*8].copy_from_slice(&word.to_le_bytes());
-                }
-                let rb = <L>::from_le_bytes(bytes);
-
-                // cast if needed
-                *s.reg_mut::<U>(d)? = <U>::splat(rb);
-            }
-
             // extend_u
-            0x06 => {
+            0x03 => {
                 let ra = s.reg::<L>(a)?;
-                *s.reg_mut::<U>(d)? = <U>::extend_u(*ra);
+                *s.reg_mut::<U>(d)? = <U>::extend_u(b as u8, *ra);
             }
 
             // extend_s
-            0x07 => {
+            0x04 => {
                 let ra = s.reg::<L>(a)?;
-                *s.reg_mut::<U>(d)? = <U>::extend_s(*ra);
+                *s.reg_mut::<U>(d)? = <U>::extend_s(b as u8, *ra);
+            }
+
+            // truncate
+            0x05 => {
+                let ra = s.reg::<U>(a)?;
+                *s.reg_mut::<L>(d)? = <L>::truncate(b as u8, *ra);
             }
 
             // splat
-            0x08 => {
+            0x06 => {
                 let ra = s.reg::<L>(a)?;
                 *s.reg_mut::<U>(d)? = <U>::splat(*ra);
             }
 
-            // splat_c
-            // TODO should this be handled differently?
-            0x09 if __lane_npw2 <= 2 => {
-                *s.reg_mut::<U>(d)? = <U>::splat(ab as L);
+            // splat_const
+            0x07 => {
+                // small const encoded in low 32-bits of instruction
+                let mut bytes = [0u8; __lane_size];
+                let len = min(4, __lane_size);
+                bytes[..len].copy_from_slice(&ab.to_le_bytes()[..len]);
+                // sign extend
+                let sign = if bytes[len-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
+                bytes[len..].fill(sign);
+
+                // splat the result
+                let rc = <L>::from_le_bytes(bytes);
+                *s.reg_mut::<U>(d)? = <U>::splat(rc);
             }
-            0x09 if __lane_npw2 > 2 => {
-                *s.reg_mut::<U>(d)? = <U>::splat(<L>::extend_s(ab));
+
+            // splat_long_const
+            0x08 => {
+                // b encodes size of const here, must be u64 aligned
+                if b < 3 {
+                    Err(Error::InvalidOpcode(ins))?;
+                }
+                let words = (1 << b) / 8;
+
+                // we need to check the bounds on this
+                if unsafe { bytecode.as_ptr_range().end.offset_from(pc) } < words as isize {
+                    Err(Error::OutOfBounds)?;
+                }
+
+                // load from instruction stream
+                let mut bytes = [0u8; __lane_size];
+                for i in 0..words {
+                    let word = unsafe { *pc };
+                    pc = unsafe { pc.add(1) };
+                    bytes[i*8..(i+1)*8].copy_from_slice(&word.to_le_bytes());
+                }
+                // sign extend
+                let sign = if bytes[8*words-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
+                bytes[8*words..].fill(sign);
+
+                // splat the result
+                let rc = <L>::from_le_bytes(bytes);
+                *s.reg_mut::<U>(d)? = <U>::splat(rc);
             }
 
 
@@ -1563,10 +1569,10 @@ mod tests {
     #[test]
     fn exec_alignment() {
         let example = OpTree::add(0,
-            OpTree::<U16>::extend_s(
+            OpTree::<U16>::extend_s(0,
                 OpTree::<U8>::imm(2u8)
             ),
-            OpTree::<U16>::extract(0,
+            OpTree::<U16>::truncate(0,
                 OpTree::<U32>::imm(1u32),
             ),
         );
@@ -1680,20 +1686,20 @@ mod tests {
         let d = OpTree::<U64>::imm(3u64);
         let e = OpTree::<U128>::const_(5u128);
         let fib_3 = OpTree::add(0,
-            OpTree::<U32>::extend_u(b.clone()), OpTree::<U32>::extend_u(a.clone())
+            OpTree::<U32>::extend_u(0, b.clone()), OpTree::<U32>::extend_u(0, a.clone())
         );
         let fib_4 = OpTree::add(0,
-            OpTree::<U64>::extend_u(fib_3.clone()), OpTree::<U64>::extend_u(b.clone())
+            OpTree::<U64>::extend_u(0, fib_3.clone()), OpTree::<U64>::extend_u(0, b.clone())
         );
         let fib_5 = OpTree::add(0,
-            OpTree::<U128>::extend_u(fib_4.clone()), OpTree::<U128>::extend_u(fib_3.clone())
+            OpTree::<U128>::extend_u(0, fib_4.clone()), OpTree::<U128>::extend_u(0, fib_3.clone())
         );
         let example = OpTree::and(
             OpTree::and(
-                OpTree::<U8>::extract(0, OpTree::eq(0, fib_3.clone(), c)),
-                OpTree::<U8>::extract(0, OpTree::eq(0, fib_4.clone(), d))
+                OpTree::<U8>::truncate(0, OpTree::eq(0, fib_3.clone(), c)),
+                OpTree::<U8>::truncate(0, OpTree::eq(0, fib_4.clone(), d))
             ),
-            OpTree::<U8>::extract(0, OpTree::eq(0, fib_5.clone(), e))
+            OpTree::<U8>::truncate(0, OpTree::eq(0, fib_5.clone(), e))
         );
 
         println!();
