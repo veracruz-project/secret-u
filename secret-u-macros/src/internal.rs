@@ -228,6 +228,11 @@ pub fn for_secret_t_2(input: TokenStream) -> TokenStream {
     output
 }
 
+// quick macro to get configurable limb type
+pub fn engine_limb_t(_input: TokenStream) -> TokenStream {
+    TokenStream::from(ident!("u{}", 8 << LIMB_NPW2))
+}
+
 /// Build the type mapping to the given npw2, either a primitive type (u16)
 /// for limb type ([u16;4]) depending on LIMB_NPW2 for the cutoff
 fn engine_t(npw2: u8) -> TokenTree {
@@ -294,6 +299,57 @@ pub fn engine_for_t(input: TokenStream) -> TokenStream {
 
     let mut output = Vec::new();
     for (_, _, map) in engine_map() {
+        let tokens = input.clone();
+        let tokens = token_replace(tokens, &map);
+        let tokens = token_if(tokens);
+        output.push(tokens);
+    }
+    let output = output.into_iter().collect();
+
+    if cfg!(feature = "debug-internal-proc-macros") {
+        println!("proc-macro engine_for_t => {}", output);
+    }
+
+    output
+}
+
+// core generator for the engine, different since we don't have different views
+// of the underlying bits, limited to at most a slice of limb size
+fn engine_gen_map<'a>() -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> + 'a {
+    (0 ..= min(LIMB_NPW2+1, MAX_NPW2)).map(move |npw2| {
+        (0 ..= min(MAX_LNPW2, npw2)).map(move |lnpw2| {
+            (npw2, lnpw2, HashMap::from_iter([
+                (format!("__t"),         engine_t(npw2)),
+                (format!("__lane_t"),    engine_t(npw2-lnpw2)),
+                (format!("__short"),     ident!("{}", npw2 <  LIMB_NPW2)),
+                (format!("__long"),      ident!("{}", npw2 >= LIMB_NPW2)),
+
+                (format!("__prim_t"),    ident!("u{}", 8 << npw2-lnpw2)),
+                (format!("__primi_t"),   ident!("i{}", 8 << npw2-lnpw2)),
+                (format!("__limb_t"),    ident!("u{}", 8 << LIMB_NPW2)),
+                (format!("__limbi_t"),   ident!("i{}", 8 << LIMB_NPW2)),
+                (format!("__limb2_t"),   ident!("u{}", 2*8 << LIMB_NPW2)), // double width for mul
+
+                (format!("__npw2"),      lit!(Literal::u8_unsuffixed(npw2))),
+                (format!("__lnpw2"),     lit!(Literal::u8_unsuffixed(lnpw2))),
+                (format!("__size"),      lit!(Literal::usize_unsuffixed(1 << npw2))),
+                (format!("__has_lanes"), ident!("{}", lnpw2 > 0)),
+                (format!("__lane_npw2"), lit!(Literal::u8_unsuffixed(npw2-lnpw2))),
+                (format!("__lane_size"), lit!(Literal::usize_unsuffixed(1 << (npw2-lnpw2)))),
+                (format!("__lanes"),     lit!(Literal::usize_unsuffixed(1 << lnpw2))),
+            ]))
+        })
+    })
+        .flatten()
+}
+
+pub fn engine_gen(input: TokenStream) -> TokenStream {
+    if cfg!(featurefor_t = "debug-internal-proc-macros") {
+        println!("proc-macro engine_for_t <= {}", input);
+    }
+
+    let mut output = Vec::new();
+    for (_, _, map) in engine_gen_map() {
         let tokens = input.clone();
         let tokens = token_replace(tokens, &map);
         let tokens = token_if(tokens);

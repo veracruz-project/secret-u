@@ -174,6 +174,12 @@ pub fn for_secret_t_2(input: TokenStream) -> TokenStream {
     internal::for_secret_t_2(input)
 }
 
+/// Quick macro to get the engine's underlying limb type
+#[proc_macro]
+pub fn engine_limb_t(input: TokenStream) -> TokenStream {
+    internal::engine_limb_t(input)
+}
+
 /// Internally used engine macro for generating types
 ///
 /// Internal macro-like variables:
@@ -199,6 +205,12 @@ pub fn for_secret_t_2(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn engine_for_t(input: TokenStream) -> TokenStream {
     internal::engine_for_t(input)
+}
+
+/// TODO doc
+#[proc_macro]
+pub fn engine_gen(input: TokenStream) -> TokenStream {
+    internal::engine_gen(input)
 }
 
 /// Internally used engine macro for generating match statements

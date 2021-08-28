@@ -2,7 +2,6 @@
 
 use crate::error::Error;
 use std::mem::size_of;
-use std::mem::align_of;
 use std::mem::transmute;
 use std::slice;
 use std::slice::SliceIndex;
@@ -18,6 +17,10 @@ use std::cell::Cell;
 
 use secret_u_macros::engine_for_t;
 use secret_u_macros::engine_match;
+use secret_u_macros::engine_limb_t;
+
+#[allow(non_camel_case_types)]
+type __limb_t = engine_limb_t!();
 
 
 /// Trait to help with treating as generic byte arrays,
@@ -250,6 +253,154 @@ engine_for_t! {
             }
         }
     }
+}
+
+/// Trait to help with treating as generic byte arrays,
+/// little-endian is required when order is important, but
+/// fortunately order is usually not important.
+///
+/// Normally we'd want to treat types as limb arrays where
+/// possible, but treating types as byte array is useful for
+/// generic conversion operations
+///
+/// Also some useful constants:
+/// true  = ones = 0xffffff...
+/// false = zero = 0x000000...
+///
+/// This pattern comes from the SIMD world, don't blame me!
+///
+trait Bytes_ {
+    fn zero(d: &mut Self);
+    fn ones(d: &mut Self);
+
+    fn to_ne_bytes(d: &mut Self, a: &Self);
+    fn from_ne_bytes(d: &mut Self, a: &Self);
+
+    fn to_le_bytes(d: &mut Self, a: &Self);
+    fn from_le_bytes(d: &mut Self, a: &Self);
+
+    // extract/replace
+    fn extract<T>(d: &mut T, a: &Self, i: u16) -> Result<(), Error>;
+//    where
+//        T: Bytes_
+//    {
+//        let bytes = self.to_le_bytes();
+//        let i = i as usize;
+//        bytes.as_ref()
+//            .get(i*size_of::<T>() .. (i+1)*size_of::<T>())
+//            .map(|slice| {
+//                T::from_le_bytes(
+//                    <T as Bytes>::Bytes::try_from(slice).ok().unwrap()
+//                )
+//            })
+//    }
+
+    fn replace<T>(d: &mut Self, a: &T, i: u16) -> Result<(), Error>;
+//    where
+//        T: Bytes
+//    {
+//        let mut bytes = self.to_le_bytes();
+//        let i = i as usize;
+//
+//        bytes.as_mut()
+//            .get_mut(i*size_of::<T>() .. (i+1)*size_of::<T>())?
+//            .copy_from_slice(t.to_le_bytes().as_ref());
+//
+//        Some(Self::from_le_bytes(bytes))
+//    }
+
+    // common conversion operations
+    fn extend_u<T>(d: &mut Self, a: &T, lnpw2: u8);
+//    where
+//        T: Bytes,
+//    {
+//        let from_lane_size = size_of::<T>() >> lnpw2;
+//        let to_lane_size = size_of::<Self>() >> lnpw2;
+//
+//        let from_bytes = t.to_le_bytes();
+//        let from_bytes = from_bytes.as_ref();
+//        let mut to_bytes = Self::ZERO.to_le_bytes();
+//
+//        for i in 0 .. 1 << lnpw2 {
+//            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
+//                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
+//        }
+//
+//        Self::from_le_bytes(to_bytes)
+//    }
+
+    fn extend_s<T>(d: &mut Self, a: &T, lnpw2: u8);
+//    where
+//        T: Bytes,
+//    {
+//        let from_lane_size = size_of::<T>() >> lnpw2;
+//        let to_lane_size = size_of::<Self>() >> lnpw2;
+//
+//        let from_bytes = t.to_le_bytes();
+//        let from_bytes = from_bytes.as_ref();
+//        let mut to_bytes = Self::ZERO.to_le_bytes();
+//
+//        for i in 0 .. 1 << lnpw2 {
+//            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
+//                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
+//            let sign = if to_bytes.as_ref()[i*to_lane_size+from_lane_size-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
+//            to_bytes.as_mut()[i*to_lane_size+from_lane_size .. (i+1)*to_lane_size]
+//                .fill(sign);
+//        }
+//
+//        Self::from_le_bytes(to_bytes)
+//    }
+
+    fn truncate<T>(d: &mut Self, a: &T, lnpw2: u8);
+//    fn truncate<T>(lnpw2: u8, t: T) -> Self
+//    where
+//        T: Bytes,
+//    {
+//        let from_lane_size = size_of::<T>() >> lnpw2;
+//        let to_lane_size = size_of::<Self>() >> lnpw2;
+//
+//        let from_bytes = t.to_le_bytes();
+//        let from_bytes = from_bytes.as_ref();
+//        let mut to_bytes = Self::ZERO.to_le_bytes();
+//
+//        for i in 0 .. 1 << lnpw2 {
+//            to_bytes.as_mut()[i*to_lane_size .. (i+1)*to_lane_size]
+//                .copy_from_slice(&from_bytes[i*from_lane_size .. i*from_lane_size+to_lane_size]);
+//        }
+//
+//        Self::from_le_bytes(to_bytes)
+//    }
+
+    // splat
+    fn splat<T>(d: &mut Self, a: &T);
+//    fn splat<T>(t: T) -> Self
+//    where
+//        T: Bytes + Copy,
+//    {
+//        let from_bytes = t.to_ne_bytes();
+//        let from_bytes = from_bytes.as_ref();
+//        let mut to_bytes = Self::ZERO.to_ne_bytes();
+//
+//        for i in (0..size_of::<Self>()).step_by(size_of::<T>()) {
+//            to_bytes.as_mut()[i..i+size_of::<T>()]
+//                .copy_from_slice(from_bytes);
+//        }
+//
+//        Self::from_ne_bytes(to_bytes)
+//    }
+
+    // TODO just provide immediate operation?
+    // quick signed casting
+//    fn cast_s<T>(t: T) -> Self
+//    where
+//        T: Bytes + Copy,
+//    {
+//        if size_of::<T>() > size_of::<Self>() {
+//            Self::truncate(0, t)
+//        } else {
+//            Self::extend_s(0, t)
+//        }
+//    }
 }
 
 
@@ -999,39 +1150,97 @@ impl AsMut<[u8]> for State<'_> {
 impl State<'_> {
     // accessors
     fn reg<'a, T: 'a>(&'a self, idx: u16) -> Result<&'a T, Error> {
-        self.slice(usize::from(idx))
-    }
-
-    fn reg_mut<'a, T: 'a>(&'a mut self, idx: u16) -> Result<&'a mut T, Error> {
-        self.slice_mut(usize::from(idx))
-    }
-
-    fn slice<'a, T: 'a, I: SliceIndex<[T]>>(
-        &'a self,
-        idx: I
-    ) -> Result<&'a <I as SliceIndex<[T]>>::Output, Error> {
-        if self.align >= align_of::<T>() {
+        if self.align >= size_of::<T>() {
             let ptr = self.state.as_ptr().cast();
             let len = self.state.len() / size_of::<T>();
             let slice = unsafe { slice::from_raw_parts(ptr, len) };
-            slice.get(idx).ok_or(Error::OutOfBounds)
+            slice.get(usize::from(idx)).ok_or(Error::OutOfBounds)
         } else {
             Err(Error::Unaligned)
         }
     }
 
-    fn slice_mut<'a, T: 'a, I: SliceIndex<[T]>>(
-        &'a mut self,
-        idx: I
-    ) -> Result<&'a mut <I as SliceIndex<[T]>>::Output, Error> {
-        if self.align >= align_of::<T>() {
+    fn reg_mut<'a, T: 'a>(&'a mut self, idx: u16) -> Result<&'a mut T, Error> {
+        if self.align >= size_of::<T>() {
             let ptr = self.state.as_mut_ptr().cast();
             let len = self.state.len() / size_of::<T>();
             let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
-            slice.get_mut(idx).ok_or(Error::OutOfBounds)
+            slice.get_mut(usize::from(idx)).ok_or(Error::OutOfBounds)
         } else {
             Err(Error::Unaligned)
         }
+    }
+
+    fn short_reg<'a, T: 'a>(&'a self, idx: u16) -> Result<&'a T, Error> {
+        if self.align >= size_of::<T>() {
+            let ptr = self.state.as_ptr().cast();
+            let len = self.state.len() / size_of::<T>();
+            let slice = unsafe { slice::from_raw_parts(ptr, len) };
+            slice.get(usize::from(idx)).ok_or(Error::OutOfBounds)
+        } else {
+            Err(Error::Unaligned)
+        }
+    }
+
+    fn short_reg_mut<'a, T: 'a>(&'a mut self, idx: u16) -> Result<&'a mut T, Error> {
+        if self.align >= size_of::<T>() {
+            let ptr = self.state.as_mut_ptr().cast();
+            let len = self.state.len() / size_of::<T>();
+            let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
+            slice.get_mut(usize::from(idx)).ok_or(Error::OutOfBounds)
+        } else {
+            Err(Error::Unaligned)
+        }
+    }
+
+    fn long_reg<'a>(&'a self, idx: u16, npw2: u8) -> Result<&'a [__limb_t], Error> {
+        let size = 1 << npw2;
+        let limbs = size / size_of::<__limb_t>();
+        if self.align >= size {
+            let ptr = self.state.as_ptr().cast();
+            let len = self.state.len() / size_of::<__limb_t>();
+            let slice = unsafe { slice::from_raw_parts(ptr, len) };
+            slice.get(
+                usize::from(idx)*limbs .. (usize::from(idx)+1)*limbs
+            ).ok_or(Error::OutOfBounds)
+        } else {
+            Err(Error::Unaligned)
+        }
+    }
+
+    fn long_reg_mut<'a>(&'a mut self, idx: u16, npw2: u8) -> Result<&'a mut [__limb_t], Error> {
+        let size = 1 << npw2;
+        let limbs = size / size_of::<__limb_t>();
+        if self.align >= size {
+            let ptr = self.state.as_mut_ptr().cast();
+            let len = self.state.len() / size_of::<__limb_t>();
+            let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
+            slice.get_mut(
+                usize::from(idx)*limbs .. (usize::from(idx)+1)*limbs
+            ).ok_or(Error::OutOfBounds)
+        } else {
+            Err(Error::Unaligned)
+        }
+    }
+
+    fn slice<'a, I: SliceIndex<[u8]>>(
+        &'a self,
+        idx: I
+    ) -> Result<&'a <I as SliceIndex<[u8]>>::Output, Error> {
+        let ptr = self.state.as_ptr().cast();
+        let len = self.state.len();
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        slice.get(idx).ok_or(Error::OutOfBounds)
+    }
+
+    fn slice_mut<'a, I: SliceIndex<[u8]>>(
+        &'a mut self,
+        idx: I
+    ) -> Result<&'a mut <I as SliceIndex<[u8]>>::Output, Error> {
+        let ptr = self.state.as_mut_ptr().cast();
+        let len = self.state.len();
+        let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
+        slice.get_mut(idx).ok_or(Error::OutOfBounds)
     }
 }
 
@@ -1039,7 +1248,7 @@ impl<'a> State<'a> {
     // needed due to ownership rules
     fn ret(mut self, ret_size: usize) -> Result<&'a [u8], Error> {
         // zero memory outside of register to avoid leaking info
-        self.slice_mut::<u8, _>(ret_size..)?.fill(0x00);
+        self.slice_mut(ret_size..)?.fill(0x00);
 
         #[cfg(feature="debug-trace")]
         {
