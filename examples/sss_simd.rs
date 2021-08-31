@@ -7,6 +7,7 @@ use secret_u::table::shuffle_table as bitslice_table;
 
 use secret_u::*;
 use std::iter;
+use std::convert::TryFrom;
 
 // lookup tables for log and exp of polynomials in GF(256)
 
@@ -183,22 +184,21 @@ fn shares_reconstruct<S: AsRef<[SecretU8]>>(shares: &[S]) -> Vec<SecretU8> {
         let ys: Vec<SecretU8x32> = shares.iter()
             .map(|v| {
                 let slice = &v.as_ref()[i..];
-                if slice.len() > 32 {
-                    SecretU8x32::from_slice(slice)
-                } else {
-                    SecretU8x32::from_slice(
-                        &slice.iter()
+                SecretU8x32::from_lanes(
+                    <_>::try_from(
+                        slice.iter()
                             .chain(iter::repeat(&SecretU8::zero()))
                             .take(32)
                             .cloned()
                             .collect::<Vec<_>>()
-                    )
-                }
+                    ).ok().unwrap()
+                )
             })
             .collect();
         secret.append(
-            &mut gf256_interpolate(&xs, &ys)
-                .to_vec()
+            &mut IntoIterator::into_iter(
+                gf256_interpolate(&xs, &ys).to_lanes()
+            ).collect()
         );
     }
 

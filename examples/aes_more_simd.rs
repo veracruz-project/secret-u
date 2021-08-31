@@ -5,6 +5,7 @@
 //! https://github.com/kokke/tiny-AES-c
 
 use secret_u::*;
+use std::convert::TryFrom;
 
 #[cfg(feature="example-bitslice-tables")]
 use secret_u::table::bitslice_table;
@@ -96,12 +97,12 @@ impl Aes {
                 let x1 = SecretU8x16::from_cast(x1).reverse_lanes();
                 let x2 = SecretU8x16::from_cast(x2).reverse_lanes();
                 let x3 = SecretU8x16::from_cast(x3).reverse_lanes();
-                let x = SecretU8x64::from_cast(SecretU128x4::from_lanes(
+                let x = SecretU8x64::from_cast(SecretU128x4::from_lanes([
                     SecretU128::from_cast(x0),
                     SecretU128::from_cast(x1),
                     SecretU128::from_cast(x2),
                     SecretU128::from_cast(x3),
-                ));
+                ]));
 
                 self_.cipher(x)
             }
@@ -135,12 +136,12 @@ impl Aes {
 
         // The first round key is the key itself.
         for i in 0..self.words {
-            round_key.push(SecretU8x4::from_lanes(
+            round_key.push(SecretU8x4::from_lanes([
                 key[4*i+0].clone(),
                 key[4*i+1].clone(),
                 key[4*i+2].clone(),
                 key[4*i+3].clone(),
-            ));
+            ]));
         }
 
         // All other round keys are found from the previous round keys.
@@ -163,7 +164,7 @@ impl Aes {
                 // Function Subword()
                 temp = SecretU8x4::from_cast(SBOX(SecretU8x64::from(temp)));
 
-                temp ^= SecretU8x4::const_lanes(RCON[i/self.words], 0, 0, 0);
+                temp ^= SecretU8x4::const_lanes([RCON[i/self.words], 0, 0, 0]);
             }
 
             if key.len() == 32 && i % self.words == 4 {
@@ -178,12 +179,12 @@ impl Aes {
         // convert to U8x16s for easier computation later
         let mut round_key = round_key.chunks_exact(4)
             .map(|c| {
-                SecretU8x16::from_cast(SecretU32x4::from_lanes(
+                SecretU8x16::from_cast(SecretU32x4::from_lanes([
                     SecretU32::from_cast(c[0].clone()),
                     SecretU32::from_cast(c[1].clone()),
                     SecretU32::from_cast(c[2].clone()),
                     SecretU32::from_cast(c[3].clone())
-                ))
+                ]))
             })
             .collect::<Vec<_>>();
 
@@ -222,8 +223,10 @@ impl Aes {
         ];
 
         // do 4 in parallel
-        SecretU8x64::const_slice(
-            &(0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
+        SecretU8x64::const_lanes(
+            <_>::try_from(
+                (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
+            ).ok().unwrap()
         ).shuffle(state.clone(), state)
     }
 
@@ -247,8 +250,10 @@ impl Aes {
              8,  8,  8,  8,
             12, 12, 12, 12,
         ];
-        let sum = SecretU8x64::const_slice(
-            &(0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
+        let sum = SecretU8x64::const_lanes(
+            <_>::try_from(
+                (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
+            ).ok().unwrap()
         ).shuffle(sum.clone(), sum);
 
         let rot = SecretU8x64::from_cast(
@@ -349,7 +354,7 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         .map(|b| SecretU8::new(b))
         .collect::<Vec<_>>();
     let iv = std::fs::read(iv).unwrap();
-    let iv = SecretU8x16::new_slice(&iv);
+    let iv = SecretU8x16::new_lanes(<_>::try_from(iv).ok().unwrap());
 
     let mut in_file = std::fs::File::open(in_path).unwrap();
     let mut out_file = std::fs::File::create(out_path).unwrap();
@@ -358,7 +363,7 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         let mut block = [0; 64];
         let diff = in_file.read(&mut block).unwrap();
         if diff == 64 {
-            let mut block_s = [SecretU8x64::new_slice(&block)];
+            let mut block_s = [SecretU8x64::new_lanes(block)];
             state.encrypt_aligned(&mut block_s);
             block.copy_from_slice(&block_s[0].declassify_le_bytes());
         } else {
@@ -443,7 +448,7 @@ fn main() {
     let key = AES128_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_slice(&IV);
+    let iv = SecretU8x16::new_lanes(IV);
     let mut buf = AES128_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
@@ -462,7 +467,7 @@ fn main() {
     let key = AES192_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_slice(&IV);
+    let iv = SecretU8x16::new_lanes(IV);
     let mut buf = AES192_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
@@ -481,7 +486,7 @@ fn main() {
     let key = AES256_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_slice(&IV);
+    let iv = SecretU8x16::new_lanes(IV);
     let mut buf = AES256_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
