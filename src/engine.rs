@@ -152,6 +152,18 @@ trait Bytes: Sized {
 
         Self::from_ne_bytes(to_bytes)
     }
+
+    // quick signed casting
+    fn cast_s<T>(t: T) -> Self
+    where
+        T: Bytes + Copy,
+    {
+        if size_of::<T>() > size_of::<Self>() {
+            Self::truncate(0, t)
+        } else {
+            Self::extend_s(0, t)
+        }
+    }
 }
 
 engine_for_t! {
@@ -1165,16 +1177,9 @@ pub fn exec<'a>(
             // splat_const
             0x07 => {
                 // small const encoded in low 32-bits of instruction
-                let mut bytes = [0u8; __lane_size];
-                let len = min(4, __lane_size);
-                bytes[..len].copy_from_slice(&ab.to_le_bytes()[..len]);
-                // sign extend
-                let sign = if bytes[len-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
-                bytes[len..].fill(sign);
-
-                // splat the result
-                let rc = <L>::from_le_bytes(bytes);
-                *s.reg_mut::<U>(d)? = <U>::splat(rc);
+                // sign extend and splat
+                let c = <L>::cast_s(ab);
+                *s.reg_mut::<U>(d)? = <U>::splat(c);
             }
 
             // splat_long_const
@@ -1201,29 +1206,29 @@ pub fn exec<'a>(
                 let sign = if bytes[8*words-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
                 bytes[8*words..].fill(sign);
 
-                // splat the result
-                let rc = <L>::from_le_bytes(bytes);
-                *s.reg_mut::<U>(d)? = <U>::splat(rc);
+                // splat
+                let c = <L>::from_le_bytes(bytes);
+                *s.reg_mut::<U>(d)? = <U>::splat(c);
             }
 
 
             //// special instructions ////
 
             // extract (le)
-            0x0a => {
+            0x09 => {
                 let ra = s.reg::<U>(a)?;
                 *s.reg_mut::<L>(d)? = ra.extract(b).unwrap();
             }
 
             // replace (le)
-            0x0b => {
+            0x0a => {
                 let rd = s.reg::<U>(d)?;
                 let ra = s.reg::<L>(a)?;
                 *s.reg_mut::<U>(d)? = rd.replace(b, *ra).unwrap();
             }
 
             // select
-            0x0c => {
+            0x0b => {
                 let rd = s.reg::<U>(d)?;
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
@@ -1237,7 +1242,7 @@ pub fn exec<'a>(
             }
 
             // shuffle
-            0x0d => {
+            0x0c => {
                 let rd = s.reg::<U>(d)?;
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
@@ -1261,47 +1266,60 @@ pub fn exec<'a>(
 
             //// comparison instructions ////
 
-            // none
-            0x0f => {
-                let ra = s.reg::<U>(a)?;
-                // note these apply to whole word!
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: U| x == <U>::ZERO);
-            }
-
-            // all
-            0x10 => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: U| {
-                    x.xfold(|p, x: L| p && x != <L>::ZERO, true)
-                });
-            }
-
             // eq
-            0x11 => {
+            0x0d => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x == y);
             }
 
+            // eq_c
+            0x0e => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x == c);
+            }
+
             // ne
-            0x12 => {
+            0x0f => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x != y);
             }
 
+            // ne_c
+            0x10 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x != c);
+            }
+
             // lt_u
-            0x13 => {
+            0x11 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vlt_u(y));
             }
 
+            // lt_u_c
+            0x12 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vlt_u(c));
+            }
+
             // lt_s
-            0x14 => {
+            0x13 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vlt_s(y));
+            }
+
+            // lt_s_c
+            0x14 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vlt_s(c));
             }
 
             // gt_u
@@ -1311,190 +1329,337 @@ pub fn exec<'a>(
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vgt_u(y));
             }
 
-            // gt_s
+            // gt_u_c
             0x16 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vgt_u(c));
+            }
+
+            // gt_s
+            0x17 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vgt_s(y));
             }
 
+            // gt_s_c
+            0x18 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vgt_s(c));
+            }
+
             // le_u
-            0x17 => {
+            0x19 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vle_u(y));
             }
 
+            // le_u_c
+            0x1a => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vle_u(c));
+            }
+
             // le_s
-            0x18 => {
+            0x1b => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vle_s(y));
             }
 
+            // le_s_c
+            0x1c => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vle_s(c));
+            }
+
             // ge_u
-            0x19 => {
+            0x1d => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vge_u(y));
             }
 
+            // ge_u_c
+            0x1e => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vge_u(c));
+            }
+
             // ge_s
-            0x1a => {
+            0x1f => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vge_s(y));
             }
 
             // min_u
-            0x1b => {
+            0x21 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmin_u(y));
             }
 
+            // min_u_c
+            0x22 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmin_u(c));
+            }
+
             // min_s
-            0x1c => {
+            0x23 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmin_s(y));
             }
 
+            // min_s_c
+            0x24 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmin_s(c));
+            }
+
             // max_u
-            0x1d => {
+            0x25 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmax_u(y));
             }
 
+            // max_u_c
+            0x26 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmax_u(c));
+            }
+
             // max_s
-            0x1e => {
+            0x27 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmax_s(y));
+            }
+
+            // max_s_c
+            0x28 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmax_s(c));
             }
 
 
             //// integer instructions ////
 
             // neg
-            0x1f => {
+            0x29 => {
                 let ra = s.reg::<U>(a)?;
                 *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vneg());
             }
 
             // abs
-            0x20 => {
+            0x2a => {
                 let ra = s.reg::<U>(a)?;
                 *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vabs());
             }
 
             // not
-            0x21 => {
+            0x2b => {
                 let ra = s.reg::<U>(a)?;
                 *s.reg_mut::<U>(d)? = ra.vnot();
             }
 
             // clz
-            0x22 => {
+            0x2c => {
                 let ra = s.reg::<U>(a)?;
                 *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vclz());
             }
 
             // ctz
-            0x23 => {
+            0x2d => {
                 let ra = s.reg::<U>(a)?;
                 *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vctz());
             }
 
             // popcnt
-            0x24 => {
+            0x2e => {
                 let ra = s.reg::<U>(a)?;
                 *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vpopcnt());
             }
 
             // add
-            0x25 => {
+            0x2f => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vadd(y));
             }
 
+            // add_c
+            0x30 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vadd(c));
+            }
+
             // sub
-            0x26 => {
+            0x31 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vsub(y));
             }
 
+            // sub_c
+            0x32 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vsub(c));
+            }
+
             // mul
-            0x27 => {
+            0x33 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmul(y));
             }
 
+            // mul_c
+            0x34 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmul(c));
+            }
+
             // and
-            0x28 => {
+            0x35 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.vand(*rb);
             }
 
+            // and_c
+            0x36 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vand(c));
+            }
+
             // andnot
-            0x29 => {
+            0x37 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.vandnot(*rb);
             }
 
+            // andnot_c
+            0x38 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vandnot(c));
+            }
+
             // or
-            0x2a => {
+            0x39 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.vor(*rb);
             }
 
+            // or_c
+            0x3a => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vor(c));
+            }
+
             // xor
-            0x2b => {
+            0x3b => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.vxor(*rb);
             }
 
+            // xor_c
+            0x3c => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vxor(c));
+            }
+
             // shl
-            0x2c => {
+            0x3d => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshl(y));
             }
 
+            // shl_c
+            0x3e => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vshl(c));
+            }
+
             // shr_u
-            0x2d => {
+            0x3f => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshr_u(y));
             }
 
+            // shr_u_c
+            0x40 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vshr_u(c));
+            }
+
             // shr_s
-            0x2e => {
+            0x41 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshr_s(y));
             }
 
+            // shr_s_c
+            0x42 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vshr_s(c));
+            }
+
             // rotl
-            0x2f => {
+            0x43 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vrotl(y));
             }
 
+            // rotl_c
+            0x44 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vrotl(c));
+            }
+
             // rotr
-            0x30 => {
+            0x45 => {
                 let ra = s.reg::<U>(a)?;
                 let rb = s.reg::<U>(b)?;
                 *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vrotr(y));
+            }
+
+            // rotr_c
+            0x46 => {
+                let ra = s.reg::<U>(a)?;
+                let c = <L>::cast_s(b);
+                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vrotr(c));
             }
         }
     }
@@ -1782,10 +1947,6 @@ mod tests {
         ins_select_f   { U32.select(0; [0,0,0,0], [2,0,0,0], [3,0,0,0]) => [3,0,0,0] }
         ins_select_par { U32.select(2; [1,0,1,0], [2,3,4,5], [6,7,8,9]) => [2,7,4,9] }
         ins_shuffle    { U32.shuffle(2; [7,2,0xff,0], [5,6,7,8], [9,10,11,12]) => [12,7,0,5] }
-
-        ins_none { U32.none(  [0,0,1,0]) => [0x00,0x00,0x00,0x00] }
-        ins_any  { U32.all(0; [0,0,1,0]) => [0xff,0xff,0xff,0xff] }
-        ins_all  { U32.all(2; [0,0,1,0]) => [0x00,0x00,0x00,0x00] }
 
         ins_eq     { U32.eq(0; [1,2,3,0xff], [1,3,3,0]) => [0x00,0x00,0x00,0x00] }
         ins_eq_par { U32.eq(2; [1,2,3,0xff], [1,3,3,0]) => [0xff,0x00,0xff,0x00] }

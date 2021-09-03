@@ -56,111 +56,159 @@ use secret_u_macros::for_secret_t;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 pub enum OpCode {
-    Arg             = 0x01,
-    Ret             = 0x02,
+    Arg         = 0x01,
+    Ret         = 0x02,
 
-    ExtendU         = 0x03,
-    ExtendS         = 0x04,
-    Truncate        = 0x05,
-    Splat           = 0x06,
-    SplatConst      = 0x07,
-    SplatLongConst  = 0x08,
+    ExtendU     = 0x03,
+    ExtendS     = 0x04,
+    Truncate    = 0x05,
+    Splat       = 0x06,
+    SplatC      = 0x07,
+    SplatLongC  = 0x08,
 
-    Extract         = 0x0a,
-    Replace         = 0x0b,
-    Select          = 0x0c,
-    Shuffle         = 0x0d,
+    Extract     = 0x09,
+    Replace     = 0x0a,
+    Select      = 0x0b,
+    Shuffle     = 0x0c,
 
-    None            = 0x0f,
-    All             = 0x10,
-    Eq              = 0x11,
-    Ne              = 0x12,
-    LtU             = 0x13,
-    LtS             = 0x14,
-    GtU             = 0x15,
-    GtS             = 0x16,
-    LeU             = 0x17,
-    LeS             = 0x18,
-    GeU             = 0x19,
-    GeS             = 0x1a,
-    MinU            = 0x1b,
-    MinS            = 0x1c,
-    MaxU            = 0x1d,
-    MaxS            = 0x1e,
+    Eq          = 0x0d,
+    EqC         = 0x0e,
+    Ne          = 0x0f,
+    NeC         = 0x10,
+    LtU         = 0x11,
+    LtUC        = 0x12,
+    LtS         = 0x13,
+    LtSC        = 0x14,
+    GtU         = 0x15,
+    GtUC        = 0x16,
+    GtS         = 0x17,
+    GtSC        = 0x18,
+    LeU         = 0x19,
+    LeUC        = 0x1a,
+    LeS         = 0x1b,
+    LeSC        = 0x1c,
+    GeU         = 0x1d,
+    GeUC        = 0x1e,
+    GeS         = 0x1f,
+    GeSC        = 0x20,
+    MinU        = 0x21,
+    MinUC       = 0x22,
+    MinS        = 0x23,
+    MinSC       = 0x24,
+    MaxU        = 0x25,
+    MaxUC       = 0x26,
+    MaxS        = 0x27,
+    MaxSC       = 0x28,
 
-    Neg             = 0x1f,
-    Abs             = 0x20,
-    Not             = 0x21,
-    Clz             = 0x22,
-    Ctz             = 0x23,
-    Popcnt          = 0x24,
-    Add             = 0x25,
-    Sub             = 0x26,
-    Mul             = 0x27,
-    And             = 0x28,
-    Andnot          = 0x29,
-    Or              = 0x2a,
-    Xor             = 0x2b,
-    Shl             = 0x2c,
-    ShrU            = 0x2d,
-    ShrS            = 0x2e,
-    Rotl            = 0x2f,
-    Rotr            = 0x30,
+    Neg         = 0x29,
+    Abs         = 0x2a,
+    Not         = 0x2b,
+    Clz         = 0x2c,
+    Ctz         = 0x2d,
+    Popcnt      = 0x2e,
+    Add         = 0x2f,
+    AddC        = 0x30,
+    Sub         = 0x31,
+    SubC        = 0x32,
+    Mul         = 0x33,
+    MulC        = 0x34,
+    And         = 0x35,
+    AndC        = 0x36,
+    Andnot      = 0x37,
+    AndnotC     = 0x38,
+    Or          = 0x39,
+    OrC         = 0x3a,
+    Xor         = 0x3b,
+    XorC        = 0x3c,
+    Shl         = 0x3d,
+    ShlC        = 0x3e,
+    ShrU        = 0x3f,
+    ShrUC       = 0x40,
+    ShrS        = 0x41,
+    ShrSC       = 0x42,
+    Rotl        = 0x43,
+    RotlC       = 0x44,
+    Rotr        = 0x45,
+    RotrC       = 0x46,
 }
 
 impl fmt::Display for OpCode {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let name = match self {
-            OpCode::Arg             => "arg",
-            OpCode::Ret             => "ret",
+            OpCode::Arg         => "arg",
+            OpCode::Ret         => "ret",
 
-            OpCode::ExtendU         => "extend_u",
-            OpCode::ExtendS         => "extend_s",
-            OpCode::Truncate        => "truncate",
-            OpCode::Splat           => "splat",
-            OpCode::SplatConst      => "splat",
-            OpCode::SplatLongConst  => "splat",
+            OpCode::ExtendU     => "extend_u",
+            OpCode::ExtendS     => "extend_s",
+            OpCode::Truncate    => "truncate",
+            OpCode::Splat       => "splat",
+            OpCode::SplatC      => "splat",
+            OpCode::SplatLongC  => "splat",
 
-            OpCode::Extract         => "extract",
-            OpCode::Replace         => "replace",
-            OpCode::Select          => "select",
-            OpCode::Shuffle         => "shuffle",
+            OpCode::Extract     => "extract",
+            OpCode::Replace     => "replace",
+            OpCode::Select      => "select",
+            OpCode::Shuffle     => "shuffle",
 
-            OpCode::None            => "none",
-            OpCode::All             => "all",
-            OpCode::Eq              => "eq",
-            OpCode::Ne              => "ne",
-            OpCode::LtU             => "lt_u",
-            OpCode::LtS             => "lt_s",
-            OpCode::GtU             => "gt_u",
-            OpCode::GtS             => "gt_s",
-            OpCode::LeU             => "le_u",
-            OpCode::LeS             => "le_s",
-            OpCode::GeU             => "ge_u",
-            OpCode::GeS             => "ge_s",
-            OpCode::MinU            => "min_u",
-            OpCode::MinS            => "min_s",
-            OpCode::MaxU            => "max_u",
-            OpCode::MaxS            => "max_s",
+            OpCode::Eq          => "eq",
+            OpCode::EqC         => "eq",
+            OpCode::Ne          => "ne",
+            OpCode::NeC         => "ne",
+            OpCode::LtU         => "lt_u",
+            OpCode::LtUC        => "lt_u",
+            OpCode::LtS         => "lt_s",
+            OpCode::LtSC        => "lt_s",
+            OpCode::GtU         => "gt_u",
+            OpCode::GtUC        => "gt_u",
+            OpCode::GtS         => "gt_s",
+            OpCode::GtSC        => "gt_s",
+            OpCode::LeU         => "le_u",
+            OpCode::LeUC        => "le_u",
+            OpCode::LeS         => "le_s",
+            OpCode::LeSC        => "le_s",
+            OpCode::GeU         => "ge_u",
+            OpCode::GeUC        => "ge_u",
+            OpCode::GeS         => "ge_s",
+            OpCode::GeSC        => "ge_s",
+            OpCode::MinU        => "min_u",
+            OpCode::MinUC       => "min_u",
+            OpCode::MinS        => "min_s",
+            OpCode::MinSC       => "min_s",
+            OpCode::MaxU        => "max_u",
+            OpCode::MaxUC       => "max_u",
+            OpCode::MaxS        => "max_s",
+            OpCode::MaxSC       => "max_s",
 
-            OpCode::Neg             => "neg",
-            OpCode::Abs             => "abs",
-            OpCode::Not             => "not",
-            OpCode::Clz             => "clz",
-            OpCode::Ctz             => "ctz",
-            OpCode::Popcnt          => "popcnt",
-            OpCode::Add             => "add",
-            OpCode::Sub             => "sub",
-            OpCode::Mul             => "mul",
-            OpCode::And             => "and",
-            OpCode::Andnot          => "andnot",
-            OpCode::Or              => "or",
-            OpCode::Xor             => "xor",
-            OpCode::Shl             => "shl",
-            OpCode::ShrU            => "shr_u",
-            OpCode::ShrS            => "shr_s",
-            OpCode::Rotl            => "rotl",
-            OpCode::Rotr            => "rotr",
+            OpCode::Neg         => "neg",
+            OpCode::Abs         => "abs",
+            OpCode::Not         => "not",
+            OpCode::Clz         => "clz",
+            OpCode::Ctz         => "ctz",
+            OpCode::Popcnt      => "popcnt",
+            OpCode::Add         => "add",
+            OpCode::AddC        => "add",
+            OpCode::Sub         => "sub",
+            OpCode::SubC        => "sub",
+            OpCode::Mul         => "mul",
+            OpCode::MulC        => "mul",
+            OpCode::And         => "and",
+            OpCode::AndC        => "and",
+            OpCode::Andnot      => "andnot",
+            OpCode::AndnotC     => "andnot",
+            OpCode::Or          => "or",
+            OpCode::OrC         => "or",
+            OpCode::Xor         => "xor",
+            OpCode::XorC        => "xor",
+            OpCode::Shl         => "shl",
+            OpCode::ShlC        => "shl",
+            OpCode::ShrU        => "shr_u",
+            OpCode::ShrUC       => "shr_u",
+            OpCode::ShrS        => "shr_s",
+            OpCode::ShrSC       => "shr_s",
+            OpCode::Rotl        => "rotl",
+            OpCode::RotlC       => "rotl",
+            OpCode::Rotr        => "rotr",
+            OpCode::RotrC       => "rotr",
         };
         write!(fmt, "{}", name)
     }
@@ -276,49 +324,73 @@ impl TryFrom<u64> for OpIns {
             0x04 => OpCode::ExtendS,
             0x05 => OpCode::Truncate,
             0x06 => OpCode::Splat,
-            0x07 => OpCode::SplatConst,
-            0x08 => OpCode::SplatLongConst,
+            0x07 => OpCode::SplatC,
+            0x08 => OpCode::SplatLongC,
 
-            0x0a => OpCode::Extract,
-            0x0b => OpCode::Replace,
-            0x0c => OpCode::Select,
-            0x0d => OpCode::Shuffle,
+            0x09 => OpCode::Extract,
+            0x0a => OpCode::Replace,
+            0x0b => OpCode::Select,
+            0x0c => OpCode::Shuffle,
 
-            0x0f => OpCode::None,
-            0x10 => OpCode::All,
-            0x11 => OpCode::Eq,
-            0x12 => OpCode::Ne,
-            0x13 => OpCode::LtU,
-            0x14 => OpCode::LtS,
+            0x0d => OpCode::Eq,
+            0x0e => OpCode::EqC,
+            0x0f => OpCode::Ne,
+            0x10 => OpCode::NeC,
+            0x11 => OpCode::LtU,
+            0x12 => OpCode::LtUC,
+            0x13 => OpCode::LtS,
+            0x14 => OpCode::LtSC,
             0x15 => OpCode::GtU,
-            0x16 => OpCode::GtS,
-            0x17 => OpCode::LeU,
-            0x18 => OpCode::LeS,
-            0x19 => OpCode::GeU,
-            0x1a => OpCode::GeS,
-            0x1b => OpCode::MinU,
-            0x1c => OpCode::MinS,
-            0x1d => OpCode::MaxU,
-            0x1e => OpCode::MaxS,
+            0x16 => OpCode::GtUC,
+            0x17 => OpCode::GtS,
+            0x18 => OpCode::GtSC,
+            0x19 => OpCode::LeU,
+            0x1a => OpCode::LeUC,
+            0x1b => OpCode::LeS,
+            0x1c => OpCode::LeSC,
+            0x1d => OpCode::GeU,
+            0x1e => OpCode::GeUC,
+            0x1f => OpCode::GeS,
+            0x20 => OpCode::GeSC,
+            0x21 => OpCode::MinU,
+            0x22 => OpCode::MinUC,
+            0x23 => OpCode::MinS,
+            0x24 => OpCode::MinSC,
+            0x25 => OpCode::MaxU,
+            0x26 => OpCode::MaxUC,
+            0x27 => OpCode::MaxS,
+            0x28 => OpCode::MaxSC,
 
-            0x1f => OpCode::Neg,
-            0x21 => OpCode::Abs,
-            0x20 => OpCode::Not,
-            0x22 => OpCode::Clz,
-            0x23 => OpCode::Ctz,
-            0x24 => OpCode::Popcnt,
-            0x25 => OpCode::Add,
-            0x26 => OpCode::Sub,
-            0x27 => OpCode::Mul,
-            0x28 => OpCode::And,
-            0x29 => OpCode::Andnot,
-            0x2a => OpCode::Or,
-            0x2b => OpCode::Xor,
-            0x2c => OpCode::Shl,
-            0x2d => OpCode::ShrU,
-            0x2e => OpCode::ShrS,
-            0x2f => OpCode::Rotl,
-            0x30 => OpCode::Rotr,
+            0x29 => OpCode::Neg,
+            0x2a => OpCode::Abs,
+            0x2b => OpCode::Not,
+            0x2c => OpCode::Clz,
+            0x2d => OpCode::Ctz,
+            0x2e => OpCode::Popcnt,
+            0x2f => OpCode::Add,
+            0x30 => OpCode::AddC,
+            0x31 => OpCode::Sub,
+            0x32 => OpCode::SubC,
+            0x33 => OpCode::Mul,
+            0x34 => OpCode::MulC,
+            0x35 => OpCode::And,
+            0x36 => OpCode::AndC,
+            0x37 => OpCode::Andnot,
+            0x38 => OpCode::AndnotC,
+            0x39 => OpCode::Or,
+            0x3a => OpCode::OrC,
+            0x3b => OpCode::Xor,
+            0x3c => OpCode::XorC,
+            0x3d => OpCode::Shl,
+            0x3e => OpCode::ShlC,
+            0x3f => OpCode::ShrU,
+            0x40 => OpCode::ShrUC,
+            0x41 => OpCode::ShrS,
+            0x42 => OpCode::ShrSC,
+            0x43 => OpCode::Rotl,
+            0x44 => OpCode::RotlC,
+            0x45 => OpCode::Rotr,
+            0x46 => OpCode::RotrC,
 
             _ => Err(Error::InvalidOpcode(ins))?,
         };
@@ -390,14 +462,14 @@ impl fmt::Display for OpIns {
                 )
             }
 
-            OpCode::SplatConst if self.lnpw2() == 0 => {
+            OpCode::SplatC if self.lnpw2() == 0 => {
                 write!(fmt, "{}.move r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.d()
                 )
             }
 
-            OpCode::SplatConst => {
+            OpCode::SplatC => {
                 write!(fmt, "{}.{} r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
@@ -405,14 +477,14 @@ impl fmt::Display for OpIns {
                 )
             }
 
-            OpCode::SplatLongConst if self.lnpw2() == 0 => {
+            OpCode::SplatLongC if self.lnpw2() == 0 => {
                 write!(fmt, "{}.move r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.d()
                 )
             }
 
-            OpCode::SplatLongConst => {
+            OpCode::SplatLongC => {
                 write!(fmt, "{}.{} r{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
@@ -423,8 +495,6 @@ impl fmt::Display for OpIns {
             // unops
             OpCode::Arg
                 | OpCode::Ret
-                | OpCode::None
-                | OpCode::All
                 | OpCode::Neg
                 | OpCode::Abs
                 | OpCode::Not
@@ -478,6 +548,47 @@ impl fmt::Display for OpIns {
                     self.b()
                 )
             }
+
+            // binops with consts
+            OpCode::EqC
+                | OpCode::NeC
+                | OpCode::LtUC
+                | OpCode::LtSC
+                | OpCode::GtUC
+                | OpCode::GtSC
+                | OpCode::LeUC
+                | OpCode::LeSC
+                | OpCode::GeUC
+                | OpCode::GeSC
+                | OpCode::MinUC
+                | OpCode::MinSC
+                | OpCode::MaxUC
+                | OpCode::MaxSC
+                | OpCode::AddC
+                | OpCode::SubC
+                | OpCode::MulC
+                | OpCode::AndC
+                | OpCode::AndnotC
+                | OpCode::OrC
+                | OpCode::XorC
+                | OpCode::ShlC
+                | OpCode::ShrUC
+                | OpCode::ShrSC
+                | OpCode::RotlC
+                | OpCode::RotrC
+                => {
+                write!(fmt, "{}.{} r{}, r{}, 0x{:0w$x}",
+                    prefix(self.npw2(), self.lnpw2()),
+                    self.opcode(),
+                    self.d(),
+                    self.a(),
+                    self.b()
+                        & 1u16.checked_shl(8*(1 << self.lane_npw2()))
+                            .map(|mask| mask-1)
+                            .unwrap_or(u16::MAX),
+                    w=2*min(2, 1 << self.lane_npw2())
+                )
+            }
         }
     }
 }
@@ -515,10 +626,13 @@ pub fn disas<W: io::Write>(
         let ins = bytecode[i];
         i += 1;
 
+        // note we decode splat immediates here, these are long and may require
+        // decoding multiple u64s from the instruction stream, so not a good fit
+        // for OpIns::display
         match OpIns::try_from(ins) {
             Ok(ins) => {
                 match ins.opcode() {
-                    OpCode::SplatConst => {
+                    OpCode::SplatC => {
                         write!(out, "    {:016x} {}, 0x", u64::from(ins), ins)?;
                         writeln!(out, "{:0w$x}",
                             ins.ab()
@@ -528,7 +642,7 @@ pub fn disas<W: io::Write>(
                             w=2*min(4, 1 << ins.lane_npw2())
                         )?;
                     }
-                    OpCode::SplatLongConst => {
+                    OpCode::SplatLongC => {
                         write!(out, "    {:016x} {}, 0x", u64::from(ins), ins)?;
                         // fetch from instruction stream
                         for j in (0 .. (1 << ins.b_npw2())/8).rev() {
@@ -778,8 +892,6 @@ pub enum OpKind<T: OpU> {
     Truncate(u8, RefCell<Rc<dyn DynOpNode>>),
     Splat(RefCell<Rc<dyn DynOpNode>>),
 
-    None(RefCell<Rc<OpNode<T>>>),
-    All(u8, RefCell<Rc<OpNode<T>>>),
     Eq(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     Ne(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     LtU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
@@ -1323,21 +1435,6 @@ impl<T: OpU> OpTree<T> {
         let flags = a.flags();
         let depth = a.depth();
         Self::from_kind(OpKind::Splat(RefCell::new(a)), flags, depth)
-    }
-
-    pub fn none(a: Self) -> Self {
-        let a = a.node();
-        let flags = a.flags();
-        let depth = a.depth();
-        Self::from_kind(OpKind::None(RefCell::new(a)), flags, depth)
-    }
-
-    pub fn all(lnpw2: u8, a: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
-        let a = a.node();
-        let flags = a.flags();
-        let depth = a.depth();
-        Self::from_kind(OpKind::All(lnpw2, RefCell::new(a)), flags, depth)
     }
 
     pub fn eq(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -1885,6 +1982,12 @@ pub trait DynOpNode: Debug {
     /// checks if expression is const and is ones
     fn is_const_ones(&self) -> bool;
 
+    /// checks if expression is compressable into a u16
+    fn is_const_u16(&self, lnpw2: Option<u8>) -> bool;
+
+    /// checks if expression is compressable into a u16
+    fn get_const_u16(&self, lnpw2: Option<u8>) -> Option<(u8, u16)>;
+
     /// Increment tree-internal reference count
     fn inc_refs(&self) -> u32;
 
@@ -2048,6 +2151,39 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
     }
 
+    fn is_const_u16(&self, lnpw2: Option<u8>) -> bool {
+        self.get_const_u16(lnpw2).is_some()
+    }
+
+    fn get_const_u16(&self, lnpw2: Option<u8>) -> Option<(u8, u16)> {
+        match (self.is_const(), &self.kind, lnpw2) {
+            (true, OpKind::Const(v), Some(lnpw2)) => {
+                if v.is_extend_splat(0, T::NPW2-lnpw2) {
+                    Some((lnpw2, i16::from(v.to_le_bytes().as_ref()[0] as i8) as u16))
+                } else if v.is_extend_splat(1, T::NPW2-lnpw2) {
+                    Some((lnpw2, u16::from_le_bytes(
+                        <_>::try_from(&v.to_le_bytes().as_ref()[..2]).unwrap()
+                    )))
+                } else {
+                    None
+                }
+            }
+            (true, OpKind::Const(v), None) => {
+                for lnpw2 in (0..=T::NPW2).rev() {
+                    if v.is_extend_splat(0, T::NPW2-lnpw2) {
+                        return Some((lnpw2, i16::from(v.to_le_bytes().as_ref()[0] as i8) as u16));
+                    } else if v.is_extend_splat(1, T::NPW2-lnpw2) {
+                        return Some((lnpw2, u16::from_le_bytes(
+                            <_>::try_from(&v.to_le_bytes().as_ref()[..2]).unwrap()
+                        )));
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn inc_refs(&self) -> u32 {
         let refs = self.refs.get() + 1;
         self.refs.set(refs);
@@ -2104,12 +2240,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.borrow().disas_pass1();
             }
 
-            OpKind::None(a) => {
-                a.borrow().disas_pass1();
-            }
-            OpKind::All(_, a) => {
-                a.borrow().disas_pass1();
-            }
             OpKind::Eq(_, a, b) => {
                 a.borrow().disas_pass1();
                 b.borrow().disas_pass1();
@@ -2306,14 +2436,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?
             ),
 
-            OpKind::None(a) => format!("({}.none {})",
-                prefix(T::NPW2, 0),
-                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
-            ),
-            OpKind::All(lnpw2, a) => format!("({}.all {})",
-                prefix(T::NPW2, *lnpw2),
-                a.borrow().disas_pass2(names, arbitrary_names, stmts)?
-            ),
             OpKind::Eq(lnpw2, a, b) => format!("({}.eq {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
@@ -2523,12 +2645,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.borrow().check_refs();
             }
 
-            OpKind::None(a) => {
-                a.borrow().check_refs();
-            }
-            OpKind::All(_, a) => {
-                a.borrow().check_refs();
-            }
             OpKind::Eq(_, a, b) => {
                 a.borrow().check_refs();
                 b.borrow().check_refs();
@@ -2728,38 +2844,20 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.fold_consts().map(|x| *a = x);
             }
 
-            OpKind::None(a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-            }
-            OpKind::All(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-            }
             OpKind::Eq(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
-                #[cfg(feature="opt-simple-reductions")]
-                match (&a.kind, &b.kind) {
-                    _ if *x == 0 && a.is_const_zero() => {
-                        return Some(Rc::new(OpNode::new(
-                            OpKind::None(
-                                RefCell::new(b.clone())
-                            ),
-                            self.flags, self.depth
-                        )));
-                    }
-                    _ if *x == 0 && b.is_const_zero() => {
-                        return Some(Rc::new(OpNode::new(
-                            OpKind::None(
-                                RefCell::new(a.clone())
-                            ),
-                            self.flags, self.depth
-                        )));
-                    }
-                    _ => {}
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Eq(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
                 }
             }
             OpKind::Ne(x, a, b) => {
@@ -2767,98 +2865,208 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
-                #[cfg(feature="opt-simple-reductions")]
-                match (&a.kind, &b.kind) {
-                    _ if *x == 0 && a.is_const_zero() => {
-                        return Some(Rc::new(OpNode::new(
-                            OpKind::All(0,
-                                RefCell::new(b.clone())
-                            ),
-                            self.flags, self.depth
-                        )));
-                    }
-                    _ if *x == 0 && b.is_const_zero() => {
-                        return Some(Rc::new(OpNode::new(
-                            OpKind::All(0,
-                                RefCell::new(a.clone())
-                            ),
-                            self.flags, self.depth
-                        )));
-                    }
-                    _ => {}
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Ne(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
                 }
             }
-            OpKind::LtU(_, a, b) => {
+            OpKind::LtU(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::GtU(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::LtS(_, a, b) => {
+            OpKind::LtS(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::GtS(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::GtU(_, a, b) => {
+            OpKind::GtU(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::LtU(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::GtS(_, a, b) => {
+            OpKind::GtS(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::LtS(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::LeU(_, a, b) => {
+            OpKind::LeU(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::GeU(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::LeS(_, a, b) => {
+            OpKind::LeS(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::GeS(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::GeU(_, a, b) => {
+            OpKind::GeU(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::LeU(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::GeS(_, a, b) => {
+            OpKind::GeS(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::LeS(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::MinU(_, a, b) => {
+            OpKind::MinU(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::MinU(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::MinS(_, a, b) => {
+            OpKind::MinS(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::MinS(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::MaxU(_, a, b) => {
+            OpKind::MaxU(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::MaxU(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
-            OpKind::MaxS(_, a, b) => {
+            OpKind::MaxS(x, a, b) => {
                 let mut a = a.borrow_mut();
                 let mut b = b.borrow_mut();
                 a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
                 b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::MaxS(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
 
             OpKind::Neg(_, a) => {
@@ -2878,22 +3086,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 match &a.kind {
                     OpKind::Not(a) => {
                         return Some(a.borrow().clone())
-                    }
-                    OpKind::None(a)  => {
-                        return Some(Rc::new(OpNode::new(
-                            OpKind::All(0,
-                                RefCell::new(a.borrow().clone())
-                            ),
-                            self.flags, self.depth
-                        )));
-                    }
-                    OpKind::All(0, a) => {
-                        return Some(Rc::new(OpNode::new(
-                            OpKind::None(
-                                RefCell::new(a.borrow().clone())
-                            ),
-                            self.flags, self.depth
-                        )));
                     }
                     OpKind::Eq(y, a, b) => {
                         return Some(Rc::new(OpNode::new(
@@ -3033,6 +3225,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     }
                     _ => {}
                 }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Add(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
             OpKind::Sub(x, a, b) => {
                 let mut a = a.borrow_mut();
@@ -3067,6 +3269,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     return Some(b.clone());
                 } else if *x == 0 && b.is_const_one() {
                     return Some(a.clone());
+                }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Mul(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
                 }
             }
             OpKind::And(a, b) => {
@@ -3113,6 +3325,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                         )));
                     }
                     _ => {}
+                }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(None) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::And(
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
                 }
             }
             OpKind::Andnot(a, b) => {
@@ -3167,6 +3389,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     }
                     _ => {}
                 }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(None) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Or(
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
             OpKind::Xor(a, b) => {
                 let mut a = a.borrow_mut();
@@ -3179,6 +3411,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 } else if b.is_const_zero() {
                     return Some(a.clone());
                 }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(None) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Xor(
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
             OpKind::Shl(x, a, b) => {
                 let mut a = a.borrow_mut();
@@ -3188,6 +3430,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
+                }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Shl(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
                 }
             }
             OpKind::ShrU(x, a, b) => {
@@ -3199,6 +3451,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
                 }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::ShrU(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
             OpKind::ShrS(x, a, b) => {
                 let mut a = a.borrow_mut();
@@ -3208,6 +3470,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
+                }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::ShrS(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
                 }
             }
             OpKind::Rotl(x, a, b) => {
@@ -3219,6 +3491,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
                 }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Rotl(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
             }
             OpKind::Rotr(x, a, b) => {
                 let mut a = a.borrow_mut();
@@ -3228,6 +3510,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
+                }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Rotr(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
                 }
             }
         }
@@ -3325,12 +3617,6 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.borrow().compile_pass1(state);
             }
 
-            OpKind::None(a) => {
-                a.borrow().compile_pass1(state);
-            }
-            OpKind::All(_, a) => {
-                a.borrow().compile_pass1(state);
-            }
             OpKind::Eq(_, a, b) => {
                 a.borrow().compile_pass1(state);
                 b.borrow().compile_pass1(state);
@@ -3485,13 +3771,13 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     buf.resize(4, if buf[buf.len()-1] & 0x80 == 0x80 { 0xff } else { 0x00 });
 
                     state.bytecode.push(u64::from(OpIns::with_ab(
-                        T::NPW2, T::NPW2-splat_npw2, OpCode::SplatConst, slot,
+                        T::NPW2, T::NPW2-splat_npw2, OpCode::SplatC, slot,
                         u32::from_le_bytes(<_>::try_from(&buf[..]).unwrap())
                     )));
                 } else {
                     // does not fit, just follows in instruction stream
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, T::NPW2-splat_npw2, OpCode::SplatLongConst, slot,
+                        T::NPW2, T::NPW2-splat_npw2, OpCode::SplatLongC, slot,
                         0, u16::from(extend_npw2), 
                     )));
 
@@ -3695,28 +3981,19 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 (slot, T::NPW2)
             }
 
-            OpKind::None(a) => {
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Eq(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
+                let b = b.borrow();
                 let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
+                b.dec_refs();
                 if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
-                    T::NPW2, 0, OpCode::None, slot, a_slot, 0
-                )));
-                self.slot.set(Some(slot));
-                (slot, T::NPW2)
-            }
-            OpKind::All(lnpw2, a) => {
-                let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
-                let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-
-                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
-                state.bytecode.push(u64::from(OpIns::new(
-                    T::NPW2, *lnpw2, OpCode::All, slot, a_slot, 0
+                    T::NPW2, *lnpw2, OpCode::EqC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3740,6 +4017,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Ne(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::NeC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::Ne(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -3755,6 +4049,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Ne, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::LtU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LtUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3778,6 +4089,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::LtS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LtSC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::LtS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -3793,6 +4121,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LtS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::GtU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GtUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3816,6 +4161,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::GtS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GtSC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::GtS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -3831,6 +4193,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GtS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::LeU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LeUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3854,6 +4233,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::LeS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::LeSC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::LeS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -3869,6 +4265,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LeS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::GeU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GeUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3892,6 +4305,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::GeS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::GeSC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::GeS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -3907,6 +4337,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GeS, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::MinU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MinUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -3930,6 +4377,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::MinS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MinSC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::MinS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -3949,6 +4413,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::MaxU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MaxUC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::MaxU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -3964,6 +4445,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MaxU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::MaxS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MaxSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4065,6 +4563,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Add(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::AddC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::Add(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -4080,6 +4595,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Add, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Sub(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::SubC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4103,6 +4635,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Mul(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::MulC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::Mul(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -4118,6 +4667,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Mul, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::And(a, b) if b.borrow().is_const_u16(None) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, lnpw2, OpCode::AndC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4141,6 +4707,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Andnot(a, b) if b.borrow().is_const_u16(None) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, lnpw2, OpCode::AndnotC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::Andnot(a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -4156,6 +4739,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::Andnot, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Or(a, b) if b.borrow().is_const_u16(None) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, lnpw2, OpCode::OrC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4179,6 +4779,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Xor(a, b) if b.borrow().is_const_u16(None) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, lnpw2, OpCode::XorC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::Xor(a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -4194,6 +4811,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::Xor, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Shl(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::ShlC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4217,6 +4851,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::ShrU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::ShrUC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::ShrU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -4232,6 +4883,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::ShrU, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::ShrS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::ShrSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4255,6 +4923,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
             }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Rotl(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::RotlC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
             OpKind::Rotl(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
@@ -4270,6 +4955,23 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Rotl, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (slot, T::NPW2)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Rotr(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::RotrC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
                 (slot, T::NPW2)
@@ -4483,6 +5185,36 @@ mod tests {
     }
 
     #[test]
+    fn constant_immediates() {
+        let a_imm   = OpTree::<U32>::imm(3u32);
+        let a_const = OpTree::<U32>::const_(3u32);
+        let b = OpTree::<U32>::const_(4u32);
+        let c = OpTree::<U32>::const_(5u32);
+        let example = OpTree::eq(0,
+            OpTree::add(0,
+                OpTree::mul(0, b.clone(), b),
+                OpTree::mul(0, a_imm, a_const)
+            ),
+            OpTree::mul(0, c.clone(), c)
+        );
+
+        println!();
+        println!("input:");
+        example.disas(io::stdout()).unwrap();
+        let (bytecode, stack) = example.compile(true);
+        println!("  bytecode:");
+        disas(&bytecode, io::stdout()).unwrap();
+        print!("  stack:");
+        for i in 0..stack.len() {
+            print!(" {:02x}", stack[i]);
+        }
+        println!();
+
+        assert_eq!(bytecode.len(), 5);
+        assert_eq!(stack.len(), 8);
+    }
+
+    #[test]
     fn constant_folding() {
         let a = OpTree::<U32>::const_(3u32);
         let b = OpTree::<U32>::const_(4u32);
@@ -4637,7 +5369,7 @@ mod tests {
         }
         println!();
 
-        assert_eq!(bytecode.len(), 14);
+        assert_eq!(bytecode.len(), 10);
         assert_eq!(stack.len(), 48);
     }
 }

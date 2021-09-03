@@ -838,19 +838,53 @@ for_secret_t! {
                 Self(OpTree::ones())
             }
 
+            /// Apply an operation horizontally, reducing the input to a single lane
+            ///
+            /// Note that this runs in log2(number of lanes)
+            pub fn reduce<F>(mut self, f: F) -> SecretBool
+            where
+                F: Fn(Self, Self) -> Self
+            {
+                // note this doesn't need to go through OpTree, but it means
+                // one less type parameter
+                for i in 0..__lnpw2 {
+                    let shift: u32 = 8 << (i + __lane_npw2);
+                    let b = Self(OpTree::shr_u(0,
+                        self.0.clone(),
+                        // a bit of an annoying workaround for type limitations
+                        {
+                            let mut bytes = [0; __size];
+                            #[allow(unconditional_panic)]
+                            if shift > 128 {
+                                bytes[0..2].copy_from_slice(
+                                    &u16::try_from(shift).unwrap()
+                                        .to_le_bytes()
+                                );
+                            } else {
+                                bytes[0] = u8::try_from(shift).unwrap();
+                            }
+                            OpTree::const_(bytes)
+                        }
+                    ));
+                    self = f(self, b);
+                }
+                self.extract(0)
+            }
+
+
             /// Find if no lanes are true
             pub fn none(self) -> SecretBool {
-                SecretBool::defer(Rc::new(OpTree::none(self.0)))
+                SecretBool::defer(Rc::new(OpTree::eq(0, self.0, OpTree::zero())))
             }
 
             /// Find if any lanes are true
             pub fn any(self) -> SecretBool {
-                SecretBool::defer(Rc::new(OpTree::all(0, self.0)))
+                SecretBool::defer(Rc::new(OpTree::ne(0, self.0, OpTree::zero())))
             }
 
             /// Find if all lanes are true
             pub fn all(self) -> SecretBool {
-                SecretBool::defer(Rc::new(OpTree::all(__lnpw2, self.0)))
+                self.reduce(|a, b| a & b)
             }
 
             /// Select operation for constant-time conditionals
@@ -1892,7 +1926,7 @@ mod tests {
         println!();
 
         let a = SecretU8x64::new_lanes([
-            0,   1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+             0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
             16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
             32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
             48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
@@ -1909,6 +1943,37 @@ mod tests {
         let v = x.declassify();
         println!("{}", v);
         assert_eq!(v, 120);
+    }
+
+    #[test]
+    fn int_any_all_none() {
+        println!();
+
+        let a = SecretU8x16::new_lanes([0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15]);
+        let b = SecretU8x16::new_lanes([1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16]);
+        let c = SecretU8x16::new_lanes([0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0]);
+        let a_mask = a.ne(SecretU8x16::const_splat(0));
+        let b_mask = b.ne(SecretU8x16::const_splat(0));
+        let c_mask = c.ne(SecretU8x16::const_splat(0));
+        let (a_none, a_any, a_all) = (a_mask.clone().none(), a_mask.clone().any(), a_mask.clone().all());
+        let (b_none, b_any, b_all) = (b_mask.clone().none(), b_mask.clone().any(), b_mask.clone().all());
+        let (c_none, c_any, c_all) = (c_mask.clone().none(), c_mask.clone().any(), c_mask.clone().all());
+        let x = SecretM8x16::from_lanes([
+            a_none,               a_any,                a_all,                SecretBool::false_(),
+            b_none,               b_any,                b_all,                SecretBool::false_(),
+            c_none,               c_any,                c_all,                SecretBool::false_(),
+            SecretBool::false_(), SecretBool::false_(), SecretBool::false_(), SecretBool::false_(),
+        ]);
+
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify_lanes();
+        println!("{:?}", v);
+        assert_eq!(v, [
+            false, true,  false, false,
+            false, true,  true,  false,
+            true,  false, false, false,
+            false, false, false, false,
+        ]);
     }
 
     #[test]
