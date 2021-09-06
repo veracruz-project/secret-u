@@ -1,0 +1,16 @@
+[package]
+name = "secret-u-test-engine"
+description = "Crate containing the best-effort test engine for constant time crypto"
+authors = ["Christopher Haster <christopher.haster@arm.com>"]
+version = "0.1.0"
+edition = "2018"
+
+[features]
+# show VM execution
+debug-trace = []
+# show total number of instructions executed after each exec
+debug-cycle-count = []
+
+[dependencies]
+secret-u-macros = {path = "../secret-u-macros", default-features=false}
+secret-u-opcode = {path = "../secret-u-opcode"}

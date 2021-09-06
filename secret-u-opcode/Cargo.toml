@@ -1,0 +1,9 @@
+[package]
+name = "secret-u-opcode"
+description = "Crate containing common instruction/error definitions"
+authors = ["Christopher Haster <christopher.haster@arm.com>"]
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+thiserror = "1.0.25"

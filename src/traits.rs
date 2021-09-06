@@ -1,6 +1,6 @@
 //! Traits implemented by secret types
 
-use crate::error::Error;
+use secret_u_opcode::Error;
 use std::borrow::Cow;
 
 

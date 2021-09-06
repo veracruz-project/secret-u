@@ -40,9 +40,9 @@ debug-ast = []
 # show bytecode output by compilation
 debug-bytecode = []
 # show VM execution
-debug-trace = []
+debug-trace = ["secret-u-test-engine/debug-trace"]
 # show total number of instructions executed after each exec
-debug-cycle-count = []
+debug-cycle-count = ["secret-u-test-engine/debug-cycle-count"]
 # show proc macro generation
 debug-proc-macros = ["secret-u-macros/debug-proc-macros"]
 # show _internal_ proc macro generation
@@ -62,7 +62,8 @@ example-bitslice-tables = []
 
 
 [dependencies]
-secret-u-macros = { path = "secret-u-macros", default-features = false }
-thiserror = "1.0.25"
+secret-u-macros = {path="secret-u-macros", default-features=false}
+secret-u-opcode = {path="secret-u-opcode"}
+secret-u-test-engine = {path="secret-u-test-engine"}
 paste = "1.0.5"
 aligned-utils = "1.0.2"

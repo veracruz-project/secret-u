@@ -1,8 +1,5 @@
 //! Definitions of secret integers
 
-use crate::opcode::*;
-use crate::traits::*;
-use crate::error::Error;
 use std::rc::Rc;
 use std::convert::TryFrom;
 use std::borrow::Cow;
@@ -27,6 +24,10 @@ use std::ops::Shl;
 use std::ops::ShlAssign;
 use std::ops::Shr;
 use std::ops::ShrAssign;
+
+use crate::error::*;
+use crate::optree::*;
+use crate::traits::*;
 
 use secret_u_macros::for_secret_t;
 use secret_u_macros::for_secret_t_2;

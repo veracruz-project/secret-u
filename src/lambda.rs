@@ -3,7 +3,6 @@
 pub use paste::paste;
 pub use aligned_utils::bytes::AlignedBytes;
 
-
 // proc_macros provided by secret_u_macros
 pub use secret_u_macros::lazy_compile;
 
@@ -31,7 +30,7 @@ macro_rules! compile_object {
     ($($move:ident)? |$($($a:ident)+: $t:ty),*| -> $r:ty {$($block:tt)*}) => {{
         $crate::lambda::paste! {
             use $crate::traits::Tree;
-            use $crate::opcode::OpTree;
+            use $crate::optree::OpTree;
             use std::io;
             use std::cell::RefCell;
 
