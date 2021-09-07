@@ -1,13 +1,12 @@
 //! local vm for executing bytecode
 
 use std::mem::size_of;
-use std::mem::transmute;
 use std::slice;
-use std::slice::SliceIndex;
 use std::convert::TryFrom;
 use std::cmp::min;
 use std::cmp::max;
 use std::cmp::Ordering;
+use std::cell::UnsafeCell;
 
 use secret_u_opcode::Error;
 
@@ -16,1102 +15,1395 @@ use secret_u_opcode::OpIns;
 #[cfg(feature="debug-cycle-count")]
 use std::cell::Cell;
 
-use secret_u_macros::engine_for_t;
-use secret_u_macros::engine_match;
 use secret_u_macros::engine_limb_t;
+use secret_u_macros::engine_limbi_t;
+use secret_u_macros::engine_limb2_t;
+use secret_u_macros::engine_for_short_t;
+use secret_u_macros::engine_match;
 
+#[allow(non_upper_case_globals)]
+const __limb_size: usize = size_of::<__limb_t>();
 #[allow(non_camel_case_types)]
 type __limb_t = engine_limb_t!();
+#[allow(non_camel_case_types)]
+type __limbi_t = engine_limbi_t!();
+#[allow(non_camel_case_types)]
+type __limb2_t = engine_limb2_t!();
 
 
-/// Trait to help with treating as generic byte arrays,
-/// little-endian is required when order is important, but
-/// fortunately order is usually not important.
-///
-/// Also some useful constants:
-/// true  = ones = 0xffffff...
-/// false = zero = 0x000000...
-///
-/// This pattern comes from the SIMD world, don't blame me!
-///
-trait Bytes: Sized {
-    const ONES: Self;
-    const ZERO: Self;
+/// Generalized VM operations
+trait VType {
+    // size in bytes
+    fn vsize(&self) -> usize;
 
-    type Bytes: AsRef<[u8]> + AsMut<[u8]> + for<'a> TryFrom<&'a [u8]>;
+    // native-endian reference building
+    unsafe fn vref(a: &[u8]) -> &Self;
+    unsafe fn vref_mut(a: &mut [u8]) -> &mut Self;
 
-    fn to_ne_bytes(self) -> Self::Bytes;
-    fn from_ne_bytes(bytes: Self::Bytes) -> Self;
+    fn vraw_bytes(&self) -> &[u8];
+    fn vraw_bytes_mut(&mut self) -> &mut [u8];
 
-    fn to_le_bytes(self) -> Self::Bytes;
-    fn from_le_bytes(bytes: Self::Bytes) -> Self;
+    // zero and ones, truthy constants
+    fn vzero(&mut self);
+    fn vones(&mut self);
+    fn vis_zero(&self) -> bool;
 
-    fn to_le(self) -> Self;
-    fn from_le(self) -> Self;
+    // copy
+    fn vcopy(&mut self, b: &Self);
+
+    // to/from other integer types for convenience
+    fn vfrom_u32(&mut self, a: u32);
+    fn vto_u32(&self) -> u32;
+    fn vtry_to_u32(&self) -> Option<u32>;
+    fn vfrom_i32(&mut self, a: i32);
+    fn vfrom_i16(&mut self, a: i16);
+
+    // little-endian byte access
+    fn vget_byte(&self, i: usize) -> Option<&u8>;
+    fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8>;
+
+    fn vbyte(&self, i: usize) -> &u8 {
+        self.vget_byte(i).unwrap()
+    }
+
+    fn vbyte_mut(&mut self, i: usize) -> &mut u8 {
+        self.vget_byte_mut(i).unwrap()
+    }
+
+    // to/from little-endian
+    fn vfrom_le_bytes(&mut self, a: &[u8]) {
+        for i in 0..self.vsize() {
+            *self.vbyte_mut(i) = a[i];
+        }
+    }
+
+    fn vto_le_bytes(d: &mut [u8], a: &Self) {
+        for i in 0..d.len() {
+            d[i] = *a.vbyte(i);
+        }
+    }
 
     // extract/replace
-    fn extract<T>(self, i: u16) -> Option<T>
+    fn vextract<T>(&mut self, a: &T, i: usize) -> bool
     where
-        T: Bytes
+        T: VType + ?Sized
     {
-        let bytes = self.to_le_bytes();
-        let i = i as usize;
-        bytes.as_ref()
-            .get(i*size_of::<T>() .. (i+1)*size_of::<T>())
-            .map(|slice| {
-                T::from_le_bytes(
-                    <T as Bytes>::Bytes::try_from(slice).ok().unwrap()
-                )
-            })
-    }
-
-    fn replace<T>(self, i: u16, t: T) -> Option<Self>
-    where
-        T: Bytes
-    {
-        let mut bytes = self.to_le_bytes();
-        let i = i as usize;
-
-        bytes.as_mut()
-            .get_mut(i*size_of::<T>() .. (i+1)*size_of::<T>())?
-            .copy_from_slice(t.to_le_bytes().as_ref());
-
-        Some(Self::from_le_bytes(bytes))
-    }
-
-    // common conversion operations
-    fn extend_u<T>(lnpw2: u8, t: T) -> Self
-    where
-        T: Bytes,
-    {
-        let from_lane_size = size_of::<T>() >> lnpw2;
-        let to_lane_size = size_of::<Self>() >> lnpw2;
-
-        let from_bytes = t.to_le_bytes();
-        let from_bytes = from_bytes.as_ref();
-        let mut to_bytes = Self::ZERO.to_le_bytes();
-
-        for i in 0 .. 1 << lnpw2 {
-            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
-                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
-        }
-
-        Self::from_le_bytes(to_bytes)
-    }
-
-    fn extend_s<T>(lnpw2: u8, t: T) -> Self
-    where
-        T: Bytes,
-    {
-        let from_lane_size = size_of::<T>() >> lnpw2;
-        let to_lane_size = size_of::<Self>() >> lnpw2;
-
-        let from_bytes = t.to_le_bytes();
-        let from_bytes = from_bytes.as_ref();
-        let mut to_bytes = Self::ZERO.to_le_bytes();
-
-        for i in 0 .. 1 << lnpw2 {
-            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
-                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
-            let sign = if to_bytes.as_ref()[i*to_lane_size+from_lane_size-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
-            to_bytes.as_mut()[i*to_lane_size+from_lane_size .. (i+1)*to_lane_size]
-                .fill(sign);
-        }
-
-        Self::from_le_bytes(to_bytes)
-    }
-
-    fn truncate<T>(lnpw2: u8, t: T) -> Self
-    where
-        T: Bytes,
-    {
-        let from_lane_size = size_of::<T>() >> lnpw2;
-        let to_lane_size = size_of::<Self>() >> lnpw2;
-
-        let from_bytes = t.to_le_bytes();
-        let from_bytes = from_bytes.as_ref();
-        let mut to_bytes = Self::ZERO.to_le_bytes();
-
-        for i in 0 .. 1 << lnpw2 {
-            to_bytes.as_mut()[i*to_lane_size .. (i+1)*to_lane_size]
-                .copy_from_slice(&from_bytes[i*from_lane_size .. i*from_lane_size+to_lane_size]);
-        }
-
-        Self::from_le_bytes(to_bytes)
-    }
-
-    // splat
-    fn splat<T>(t: T) -> Self
-    where
-        T: Bytes + Copy,
-    {
-        let from_bytes = t.to_ne_bytes();
-        let from_bytes = from_bytes.as_ref();
-        let mut to_bytes = Self::ZERO.to_ne_bytes();
-
-        for i in (0..size_of::<Self>()).step_by(size_of::<T>()) {
-            to_bytes.as_mut()[i..i+size_of::<T>()]
-                .copy_from_slice(from_bytes);
-        }
-
-        Self::from_ne_bytes(to_bytes)
-    }
-
-    // quick signed casting
-    fn cast_s<T>(t: T) -> Self
-    where
-        T: Bytes + Copy,
-    {
-        if size_of::<T>() > size_of::<Self>() {
-            Self::truncate(0, t)
+        if i*self.vsize() < a.vsize() {
+            for j in 0..self.vsize() {
+                *self.vbyte_mut(j) = *a.vbyte(i*self.vsize() + j);
+            }
+            true
         } else {
-            Self::extend_s(0, t)
-        }
-    }
-}
-
-engine_for_t! {
-    __if(!__has_lanes && __has_prim) {
-        impl Bytes for U {
-            const ONES: Self = Self::MAX;
-            const ZERO: Self = 0;
-
-            type Bytes = [u8; __size];
-
-            #[inline]
-            fn to_ne_bytes(self) -> Self::Bytes {
-                Self::to_ne_bytes(self)
-            }
-
-            #[inline]
-            fn from_ne_bytes(bytes: Self::Bytes) -> Self {
-                Self::from_ne_bytes(bytes)
-            }
-
-            #[inline]
-            fn to_le_bytes(self) -> Self::Bytes {
-                Self::to_le_bytes(self)
-            }
-
-            #[inline]
-            fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                Self::from_le_bytes(bytes)
-            }
-
-            #[inline]
-            fn to_le(self) -> Self {
-                Self::to_le(self)
-            }
-
-            #[inline]
-            fn from_le(self) -> Self {
-                Self::from_le(self)
-            }
+            false
         }
     }
 
-    __if(!__has_lanes && __has_limbs) {
-        impl Bytes for U {
-            const ONES: Self = [<__limb_t>::MAX; __limbs];
-            const ZERO: Self = [0; __limbs];
-
-            type Bytes = [u8; __size];
-
-            #[inline]
-            fn to_ne_bytes(self) -> Self::Bytes {
-                unsafe { transmute(self) }
+    fn vreplace<T>(&mut self, a: &T, i: usize) -> bool
+    where
+        T: VType + ?Sized
+    {
+        if i*a.vsize() < self.vsize() {
+            for j in 0..a.vsize() {
+                *self.vbyte_mut(i*a.vsize() + j) = *a.vbyte(j);
             }
-
-            #[inline]
-            fn from_ne_bytes(bytes: Self::Bytes) -> Self {
-                unsafe { transmute(bytes) }
-            }
-
-            #[inline]
-            fn to_le_bytes(self) -> Self::Bytes {
-                self.to_le().to_ne_bytes()
-            }
-
-            #[inline]
-            fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                Self::from_ne_bytes(bytes).from_le()
-            }
-
-            #[inline]
-            fn to_le(mut self) -> Self {
-                for i in 0..__limbs {
-                    self[i] = self[i].to_le();
-                }
-                self
-            }
-
-            #[inline]
-            fn from_le(mut self) -> Self {
-                for i in 0..__limbs {
-                    self[i] = self[i].from_le();
-                }
-                self
-            }
+            true
+        } else {
+            false
         }
     }
-}
-
-/// Trait to help with treating as generic byte arrays,
-/// little-endian is required when order is important, but
-/// fortunately order is usually not important.
-///
-/// Normally we'd want to treat types as limb arrays where
-/// possible, but treating types as byte array is useful for
-/// generic conversion operations
-///
-/// Also some useful constants:
-/// true  = ones = 0xffffff...
-/// false = zero = 0x000000...
-///
-/// This pattern comes from the SIMD world, don't blame me!
-///
-trait Bytes_ {
-    fn zero(d: &mut Self);
-    fn ones(d: &mut Self);
-
-    fn to_ne_bytes(d: &mut Self, a: &Self);
-    fn from_ne_bytes(d: &mut Self, a: &Self);
-
-    fn to_le_bytes(d: &mut Self, a: &Self);
-    fn from_le_bytes(d: &mut Self, a: &Self);
-
-    // extract/replace
-    fn extract<T>(d: &mut T, a: &Self, i: u16) -> Result<(), Error>;
-//    where
-//        T: Bytes_
-//    {
-//        let bytes = self.to_le_bytes();
-//        let i = i as usize;
-//        bytes.as_ref()
-//            .get(i*size_of::<T>() .. (i+1)*size_of::<T>())
-//            .map(|slice| {
-//                T::from_le_bytes(
-//                    <T as Bytes>::Bytes::try_from(slice).ok().unwrap()
-//                )
-//            })
-//    }
-
-    fn replace<T>(d: &mut Self, a: &T, i: u16) -> Result<(), Error>;
-//    where
-//        T: Bytes
-//    {
-//        let mut bytes = self.to_le_bytes();
-//        let i = i as usize;
-//
-//        bytes.as_mut()
-//            .get_mut(i*size_of::<T>() .. (i+1)*size_of::<T>())?
-//            .copy_from_slice(t.to_le_bytes().as_ref());
-//
-//        Some(Self::from_le_bytes(bytes))
-//    }
 
     // common conversion operations
-    fn extend_u<T>(d: &mut Self, a: &T, lnpw2: u8);
-//    where
-//        T: Bytes,
-//    {
-//        let from_lane_size = size_of::<T>() >> lnpw2;
-//        let to_lane_size = size_of::<Self>() >> lnpw2;
-//
-//        let from_bytes = t.to_le_bytes();
-//        let from_bytes = from_bytes.as_ref();
-//        let mut to_bytes = Self::ZERO.to_le_bytes();
-//
-//        for i in 0 .. 1 << lnpw2 {
-//            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
-//                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
-//        }
-//
-//        Self::from_le_bytes(to_bytes)
-//    }
+    fn vextend_u<T>(&mut self, a: &T, lnpw2: u8)
+    where
+        T: VType + ?Sized
+    {
+        let from_lane_size = a.vsize() >> lnpw2;
+        let to_lane_size = self.vsize() >> lnpw2;
 
-    fn extend_s<T>(d: &mut Self, a: &T, lnpw2: u8);
-//    where
-//        T: Bytes,
-//    {
-//        let from_lane_size = size_of::<T>() >> lnpw2;
-//        let to_lane_size = size_of::<Self>() >> lnpw2;
-//
-//        let from_bytes = t.to_le_bytes();
-//        let from_bytes = from_bytes.as_ref();
-//        let mut to_bytes = Self::ZERO.to_le_bytes();
-//
-//        for i in 0 .. 1 << lnpw2 {
-//            to_bytes.as_mut()[i*to_lane_size .. i*to_lane_size+from_lane_size]
-//                .copy_from_slice(&from_bytes[i*from_lane_size .. (i+1)*from_lane_size]);
-//            let sign = if to_bytes.as_ref()[i*to_lane_size+from_lane_size-1] & 0x80 == 0x80 { 0xff } else { 0x00 };
-//            to_bytes.as_mut()[i*to_lane_size+from_lane_size .. (i+1)*to_lane_size]
-//                .fill(sign);
-//        }
-//
-//        Self::from_le_bytes(to_bytes)
-//    }
+        self.vzero();
 
-    fn truncate<T>(d: &mut Self, a: &T, lnpw2: u8);
-//    fn truncate<T>(lnpw2: u8, t: T) -> Self
-//    where
-//        T: Bytes,
-//    {
-//        let from_lane_size = size_of::<T>() >> lnpw2;
-//        let to_lane_size = size_of::<Self>() >> lnpw2;
-//
-//        let from_bytes = t.to_le_bytes();
-//        let from_bytes = from_bytes.as_ref();
-//        let mut to_bytes = Self::ZERO.to_le_bytes();
-//
-//        for i in 0 .. 1 << lnpw2 {
-//            to_bytes.as_mut()[i*to_lane_size .. (i+1)*to_lane_size]
-//                .copy_from_slice(&from_bytes[i*from_lane_size .. i*from_lane_size+to_lane_size]);
-//        }
-//
-//        Self::from_le_bytes(to_bytes)
-//    }
-
-    // splat
-    fn splat<T>(d: &mut Self, a: &T);
-//    fn splat<T>(t: T) -> Self
-//    where
-//        T: Bytes + Copy,
-//    {
-//        let from_bytes = t.to_ne_bytes();
-//        let from_bytes = from_bytes.as_ref();
-//        let mut to_bytes = Self::ZERO.to_ne_bytes();
-//
-//        for i in (0..size_of::<Self>()).step_by(size_of::<T>()) {
-//            to_bytes.as_mut()[i..i+size_of::<T>()]
-//                .copy_from_slice(from_bytes);
-//        }
-//
-//        Self::from_ne_bytes(to_bytes)
-//    }
-
-    // TODO just provide immediate operation?
-    // quick signed casting
-//    fn cast_s<T>(t: T) -> Self
-//    where
-//        T: Bytes + Copy,
-//    {
-//        if size_of::<T>() > size_of::<Self>() {
-//            Self::truncate(0, t)
-//        } else {
-//            Self::extend_s(0, t)
-//        }
-//    }
-}
-
-
-/// Helper for converting into indices (u32)
-trait IntoUsize: Sized {
-    /// Cheap cast to u32
-    fn wrapping_into_u32(self) -> u32;
-
-    /// Cast to u32 with overflow checking
-    fn try_into_u32(self) -> Option<u32>;
-
-    /// Cheap cast from u32
-    fn wrapping_from_u32(size: u32) -> Self;
-
-    /// Cast from u32 with overflow checking
-    fn try_from_u32(size: u32) -> Option<Self>;
-}
-
-engine_for_t! {
-    __if(!__has_lanes && __has_prim) {
-        impl IntoUsize for U {
-            fn wrapping_into_u32(self) -> u32 {
-                self as u32
-            }
-
-            fn try_into_u32(self) -> Option<u32> {
-                u32::try_from(self).ok()
-            }
-
-            fn wrapping_from_u32(size: u32) -> Self {
-                size as Self
-            }
-
-            fn try_from_u32(size: u32) -> Option<Self> {
-                Self::try_from(size).ok()
+        for i in 0 .. 1 << lnpw2 {
+            for j in 0..from_lane_size {
+                *self.vbyte_mut(i*to_lane_size+j) = *a.vbyte(i*from_lane_size+j);
             }
         }
     }
 
-    __if(!__has_lanes && __has_limbs) {
-        impl IntoUsize for U {
-            fn wrapping_into_u32(self) -> u32 {
-                self[0] as u32
+    fn vextend_s<T>(&mut self, a: &T, lnpw2: u8)
+    where
+        T: VType + ?Sized
+    {
+        let from_lane_size = a.vsize() >> lnpw2;
+        let to_lane_size = self.vsize() >> lnpw2;
+
+        for i in 0 .. 1 << lnpw2 {
+            for j in 0..from_lane_size {
+                *self.vbyte_mut(i*to_lane_size+j) = *a.vbyte(i*from_lane_size+j);
             }
 
-            fn try_into_u32(self) -> Option<u32> {
-                if self[1..].iter().all(|x| *x == 0) {
-                    u32::try_from(self[0]).ok()
-                } else {
-                    None
-                }
-            }
-
-            fn wrapping_from_u32(size: u32) -> Self {
-                let mut words = [0; __limbs];
-                words[0] = size as __limb_t;
-                words
-            }
-
-            fn try_from_u32(size: u32) -> Option<Self> {
-                let mut words = [0; __limbs];
-                words[0] = <__limb_t>::try_from(size).ok()?;
-                Some(words)
-            }
-        }
-    }
-}
-
-
-/// Trait to help perform multi-lane operations
-///
-/// Note we do make a big assumption here, that we can free transmute
-/// between native-endian types of different sizes. This should be
-/// true for little-endian and big-endian platforms, but is it true
-/// for _all_ platforms?
-///
-/// The order of iteration does NOT matter and must not be relied on
-///
-trait Lanes<T: Sized>: Sized {
-    fn xmap<F: FnMut(T) -> T>(self, f: F) -> Self;
-    fn xfilter<F: FnMut(T) -> bool>(self, f: F) -> Self;
-    fn xfold<A, F: FnMut(A, T) -> A>(self, f: F, init: A) -> A;
-
-    // higher order operations, is this the best way to do this? not
-    // sure of a better way...
-    fn xmap2<F: FnMut(T, T) -> T>(self, b: Self, f: F) -> Self;
-    fn xfilter2<F: FnMut(T, T) -> bool>(self, b: Self, f: F) -> Self;
-    fn xfold2<A, F: FnMut(A, T, T) -> A>(self, b: Self, f: F, init: A) -> A;
-
-    fn xmap3<F: FnMut(T, T, T) -> T>(self, b: Self, c: Self, f: F) -> Self;
-    fn xfilter3<F: FnMut(T, T, T) -> bool>(self, b: Self, c: Self, f: F) -> Self;
-    fn xfold3<A, F: FnMut(A, T, T, T) -> A>(self, b: Self, c: Self, f: F, init: A) -> A;
-}
-
-engine_for_t! {
-    __if(__has_lanes) {
-        impl Lanes<L> for U {
-            #[inline]
-            fn xmap<F: FnMut(L) -> L>(self, mut f: F) -> Self {
-                let mut xs: [L; __lanes] = unsafe { transmute(self) };
-                for i in 0..__lanes {
-                    xs[i] = f(xs[i]);
-                }
-                unsafe { transmute(xs) }
-            }
-
-            #[inline]
-            fn xfilter<F: FnMut(L) -> bool>(self, mut f: F) -> Self {
-                let mut xs: [L; __lanes] = unsafe { transmute(self) };
-                for i in 0..__lanes {
-                    xs[i] = if f(xs[i]) { <L>::ONES } else { <L>::ZERO };
-                }
-                unsafe { transmute(xs) }
-            }
-
-            #[inline]
-            fn xfold<A, F: FnMut(A, L) -> A>(self, mut f: F, mut a: A) -> A {
-                let xs: [L; __lanes] = unsafe { transmute(self) };
-                for i in 0..__lanes {
-                    a = f(a, xs[i]);
-                }
-                a
-            }
-
-            #[inline]
-            fn xmap2<F: FnMut(L, L) -> L>(self, b: U, mut f: F) -> U {
-                let mut xs: [L; __lanes] = unsafe { transmute(self) };
-                let     ys: [L; __lanes] = unsafe { transmute(b)    };
-                for i in 0..__lanes {
-                    xs[i] = f(xs[i], ys[i]);
-                }
-                unsafe { transmute(xs) }
-            }
-            #[inline]
-            fn xfilter2<F: FnMut(L, L) -> bool>(self, b: U, mut f: F) -> U {
-                let mut xs: [L; __lanes] = unsafe { transmute(self) };
-                let     ys: [L; __lanes] = unsafe { transmute(b)    };
-                for i in 0..__lanes {
-                    xs[i] = if f(xs[i], ys[i]) { <L>::ONES } else { <L>::ZERO };
-                }
-                unsafe { transmute(xs) }
-            }
-            #[inline]
-            fn xfold2<A, F: FnMut(A, L, L) -> A>(self, b: U, mut f: F, mut a: A) -> A {
-                let xs: [L; __lanes] = unsafe { transmute(self) };
-                let ys: [L; __lanes] = unsafe { transmute(b)    };
-                for i in 0..__lanes {
-                    a = f(a, xs[i], ys[i]);
-                }
-                a
-            }
-
-            #[inline]
-            fn xmap3<F: FnMut(L, L, L) -> L>(self, b: U, c: U, mut f: F) -> U {
-                let mut xs: [L; __lanes] = unsafe { transmute(self) };
-                let     ys: [L; __lanes] = unsafe { transmute(b)    };
-                let     zs: [L; __lanes] = unsafe { transmute(c)    };
-                for i in 0..__lanes {
-                    xs[i] = f(xs[i], ys[i], zs[i]);
-                }
-                unsafe { transmute(xs) }
-            }
-            #[inline]
-            fn xfilter3<F: FnMut(L, L, L) -> bool>(self, b: U, c: U, mut f: F) -> U {
-                let mut xs: [L; __lanes] = unsafe { transmute(self) };
-                let     ys: [L; __lanes] = unsafe { transmute(b)    };
-                let     zs: [L; __lanes] = unsafe { transmute(c)    };
-                for i in 0..__lanes {
-                    xs[i] = if f(xs[i], ys[i], zs[i]) { <L>::ONES } else { <L>::ZERO };
-                }
-                unsafe { transmute(xs) }
-            }
-            #[inline]
-            fn xfold3<A, F: FnMut(A, L, L, L) -> A>(self, b: U, c: U, mut f: F, mut a: A) -> A {
-                let xs: [L; __lanes] = unsafe { transmute(self) };
-                let ys: [L; __lanes] = unsafe { transmute(b)    };
-                let zs: [L; __lanes] = unsafe { transmute(c)    };
-                for i in 0..__lanes {
-                    a = f(a, xs[i], ys[i], zs[i]);
-                }
-                a
+            let sign = if a.vbyte(i*from_lane_size+from_lane_size-1) & 0x80 == 0x80 {
+                0xff
+            } else {
+                0x00
+            };
+            for j in from_lane_size..to_lane_size {
+                *self.vbyte_mut(i*to_lane_size+j) = sign;
             }
         }
     }
 
-    __if(!__has_lanes) {
-        impl Lanes<L> for U {
-            #[inline]
-            fn xmap<F: FnMut(L) -> L>(self, mut f: F) -> Self {
-                f(self)
-            }
+    fn vtruncate<T>(&mut self, a: &T, lnpw2: u8)
+    where
+        T: VType + ?Sized
+    {
+        let from_lane_size = a.vsize() >> lnpw2;
+        let to_lane_size = self.vsize() >> lnpw2;
 
-            #[inline]
-            fn xfilter<F: FnMut(L) -> bool>(self, mut f: F) -> Self {
-                if f(self) { <L>::ONES } else { <L>::ZERO }
-            }
-
-            #[inline]
-            fn xfold<A, F: FnMut(A, L) -> A>(self, mut f: F, a: A) -> A {
-                f(a, self)
-            }
-
-            #[inline]
-            fn xmap2<F: FnMut(L, L) -> L>(self, b: U, mut f: F) -> Self {
-                f(self, b)
-            }
-            #[inline]
-            fn xfilter2<F: FnMut(L, L) -> bool>(self, b: U, mut f: F) -> Self {
-                if f(self, b) { <L>::ONES } else { <L>::ZERO }
-            }
-            #[inline]
-            fn xfold2<A, F: FnMut(A, L, L) -> A>(self, b: U, mut f: F, a: A) -> A {
-                f(a, self, b)
-            }
-
-            #[inline]
-            fn xmap3<F: FnMut(L, L, L) -> L>(self, b: U, c: U, mut f: F) -> Self {
-                f(self, b, c)
-            }
-            #[inline]
-            fn xfilter3<F: FnMut(L, L, L) -> bool>(self, b: U, c: U, mut f: F) -> Self {
-                if f(self, b, c) { <L>::ONES } else { <L>::ZERO }
-            }
-            #[inline]
-            fn xfold3<A, F: FnMut(A, L, L, L) -> A>(self, b: U, c: U, mut f: F, a: A) -> A {
-                f(a, self, b, c)
-            }
-        }
-    }
-}
-
-
-/// Primitive implementation of VM operations
-trait Vop: Eq {
-    fn vlt_u(self, b: Self) -> bool;
-    fn vlt_s(self, b: Self) -> bool;
-    fn vgt_u(self, b: Self) -> bool;
-    fn vgt_s(self, b: Self) -> bool;
-    fn vle_u(self, b: Self) -> bool;
-    fn vle_s(self, b: Self) -> bool;
-    fn vge_u(self, b: Self) -> bool;
-    fn vge_s(self, b: Self) -> bool;
-
-    fn vmin_u(self, b: Self) -> Self;
-    fn vmin_s(self, b: Self) -> Self;
-    fn vmax_u(self, b: Self) -> Self;
-    fn vmax_s(self, b: Self) -> Self;
-
-    fn vneg(self) -> Self;
-    fn vabs(self) -> Self;
-    fn vnot(self) -> Self;
-    fn vclz(self) -> Self;
-    fn vctz(self) -> Self;
-    fn vpopcnt(self) -> Self;
-
-    fn vadd(self, b: Self) -> Self;
-    fn vsub(self, b: Self) -> Self;
-    fn vmul(self, b: Self) -> Self;
-    fn vand(self, b: Self) -> Self;
-    fn vandnot(self, b: Self) -> Self;
-    fn vor(self, b: Self) -> Self;
-    fn vxor(self, b: Self) -> Self;
-    fn vshl(self, b: Self) -> Self;
-    fn vshr_u(self, b: Self) -> Self;
-    fn vshr_s(self, b: Self) -> Self;
-    fn vrotl(self, b: Self) -> Self;
-    fn vrotr(self, b: Self) -> Self;
-}
-
-engine_for_t! {
-    __if(!__has_lanes && __has_prim) {
-        impl Vop for U {
-            fn vlt_u(self, other: Self) -> bool {
-                self < other
-            }
-
-            fn vlt_s(self, other: Self) -> bool {
-                (self as __prim_i) < (other as __prim_i)
-            }
-
-            fn vgt_u(self, other: Self) -> bool {
-                self > other
-            }
-
-            fn vgt_s(self, other: Self) -> bool {
-                (self as __prim_i) > (other as __prim_i)
-            }
-
-            fn vle_u(self, other: Self) -> bool {
-                self <= other
-            }
-
-            fn vle_s(self, other: Self) -> bool {
-                (self as __prim_i) <= (other as __prim_i)
-            }
-
-            fn vge_u(self, other: Self) -> bool {
-                self >= other
-            }
-
-            fn vge_s(self, other: Self) -> bool {
-                (self as __prim_i) >= (other as __prim_i)
-            }
-
-            fn vmin_u(self, other: Self) -> Self {
-                min(self, other)
-            }
-
-            fn vmin_s(self, other: Self) -> Self {
-                min(self as __prim_i, other as __prim_i) as __prim_t
-            }
-
-            fn vmax_u(self, other: Self) -> Self {
-                max(self, other)
-            }
-
-            fn vmax_s(self, other: Self) -> Self {
-                max(self as __prim_i, other as __prim_i) as __prim_t
-            }
-
-            fn vneg(self) -> Self {
-                (-(self as __prim_i)) as __prim_t
-            }
-
-            fn vabs(self) -> Self {
-                (self as __prim_i).abs() as __prim_t
-            }
-
-            fn vnot(self) -> Self {
-                !self
-            }
-
-            fn vclz(self) -> Self {
-                self.leading_zeros() as __prim_t
-            }
-
-            fn vctz(self) -> Self {
-                self.trailing_zeros() as __prim_t
-            }
-
-            fn vpopcnt(self) -> Self {
-                self.count_ones() as __prim_t
-            }
-
-            fn vadd(self, other: Self) -> Self {
-                self.wrapping_add(other)
-            }
-
-            fn vsub(self, other: Self) -> Self {
-                self.wrapping_sub(other)
-            }
-
-            fn vmul(self, other: Self) -> Self {
-                self.wrapping_mul(other)
-            }
-
-            fn vand(self, other: Self) -> Self {
-                self & other
-            }
-
-            fn vandnot(self, other: Self) -> Self {
-                self & !other
-            }
-
-            fn vor(self, other: Self) -> Self {
-                self | other
-            }
-
-            fn vxor(self, other: Self) -> Self {
-                self ^ other
-            }
-
-            fn vshl(self, other: Self) -> Self {
-                self.wrapping_shl(other as u32)
-            }
-
-            fn vshr_u(self, other: Self) -> Self {
-                self.wrapping_shr(other as u32)
-            }
-
-            fn vshr_s(self, other: Self) -> Self {
-                (self as __prim_i).wrapping_shr(other as u32) as __prim_t
-            }
-
-            fn vrotl(self, other: Self) -> Self {
-                self.rotate_left(other as u32)
-            }
-
-            fn vrotr(self, other: Self) -> Self {
-                self.rotate_right(other as u32)
+        for i in 0 .. 1 << lnpw2 {
+            for j in 0..to_lane_size {
+                *self.vbyte_mut(i*to_lane_size+j) = *a.vbyte(i*from_lane_size+j);
             }
         }
     }
 
-    __if(!__has_lanes && __has_limbs) {
-        impl Vop for U {
-            fn vlt_u(self, other: Self) -> bool {
-                let mut lt = false;
-                for i in 0..__limbs {
-                    lt = match self[i].cmp(&other[i]) {
-                        Ordering::Less    => true,
-                        Ordering::Greater => false,
-                        Ordering::Equal   => lt,
-                    }
+    fn vsplat<T>(&mut self, a: &T)
+    where
+        T: VType + ?Sized
+    {
+        for i in 0 .. self.vsize()/a.vsize() {
+            for j in 0..a.vsize() {
+                *self.vbyte_mut(i*a.vsize() + j) = *a.vbyte(j);
+            }
+        }
+    }
+
+    // vm operations
+    fn veq(&self, b: &Self) -> bool;
+    fn vne(&self, b: &Self) -> bool;
+    fn vlt_u(&self, b: &Self) -> bool;
+    fn vlt_s(&self, b: &Self) -> bool;
+    fn vgt_u(&self, b: &Self) -> bool;
+    fn vgt_s(&self, b: &Self) -> bool;
+    fn vle_u(&self, b: &Self) -> bool;
+    fn vle_s(&self, b: &Self) -> bool;
+    fn vge_u(&self, b: &Self) -> bool;
+    fn vge_s(&self, b: &Self) -> bool;
+
+    fn veq_i16(&self, b: i16) -> bool;
+    fn vne_i16(&self, b: i16) -> bool;
+    fn vlt_u_i16(&self, b: i16) -> bool;
+    fn vlt_s_i16(&self, b: i16) -> bool;
+    fn vgt_u_i16(&self, b: i16) -> bool;
+    fn vgt_s_i16(&self, b: i16) -> bool;
+    fn vle_u_i16(&self, b: i16) -> bool;
+    fn vle_s_i16(&self, b: i16) -> bool;
+    fn vge_u_i16(&self, b: i16) -> bool;
+    fn vge_s_i16(&self, b: i16) -> bool;
+
+    fn vmin_u(&mut self, a: &Self, b: &Self);
+    fn vmin_s(&mut self, a: &Self, b: &Self);
+    fn vmax_u(&mut self, a: &Self, b: &Self);
+    fn vmax_s(&mut self, a: &Self, b: &Self);
+
+    fn vmin_u_i16(&mut self, a: &Self, b: i16);
+    fn vmin_s_i16(&mut self, a: &Self, b: i16);
+    fn vmax_u_i16(&mut self, a: &Self, b: i16);
+    fn vmax_s_i16(&mut self, a: &Self, b: i16);
+
+    fn vneg(&mut self, a: &Self);
+    fn vabs(&mut self, a: &Self);
+    fn vnot(&mut self, a: &Self);
+    fn vclz(&mut self, a: &Self);
+    fn vctz(&mut self, a: &Self);
+    fn vpopcnt(&mut self, a: &Self);
+
+    fn vadd(&mut self, a: &Self, b: &Self);
+    fn vsub(&mut self, a: &Self, b: &Self);
+    fn vmul(&mut self, a: &Self, b: &Self);
+    fn vand(&mut self, a: &Self, b: &Self);
+    fn vandnot(&mut self, a: &Self, b: &Self);
+    fn vor(&mut self, a: &Self, b: &Self);
+    fn vxor(&mut self, a: &Self, b: &Self);
+    fn vshl(&mut self, a: &Self, b: &Self);
+    fn vshr_u(&mut self, a: &Self, b: &Self);
+    fn vshr_s(&mut self, a: &Self, b: &Self);
+    fn vrotl(&mut self, a: &Self, b: &Self);
+    fn vrotr(&mut self, a: &Self, b: &Self);
+
+    fn vadd_i16(&mut self, a: &Self, b: i16);
+    fn vsub_i16(&mut self, a: &Self, b: i16);
+    fn vmul_i16(&mut self, a: &Self, b: i16);
+    fn vand_i16(&mut self, a: &Self, b: i16);
+    fn vandnot_i16(&mut self, a: &Self, b: i16);
+    fn vor_i16(&mut self, a: &Self, b: i16);
+    fn vxor_i16(&mut self, a: &Self, b: i16);
+    fn vshl_i16(&mut self, a: &Self, b: i16);
+    fn vshr_u_i16(&mut self, a: &Self, b: i16);
+    fn vshr_s_i16(&mut self, a: &Self, b: i16);
+    fn vrotl_i16(&mut self, a: &Self, b: i16);
+    fn vrotr_i16(&mut self, a: &Self, b: i16);
+
+    // multi-lane operations
+    //
+    // note, no garauntee is made about the order of these functions
+    //
+    // also note, this only works because the underlying types have the same
+    // native byte layout
+    fn xmap<T, F>(&mut self, a: &Self, lnpw2: u8, mut f: F)
+    where
+        F: FnMut(&mut T, &T),
+        T: VType + ?Sized
+    {
+        let lane_size = self.vsize() >> lnpw2;
+        let bytes   = self.vraw_bytes_mut();
+        let a_bytes = a.vraw_bytes();
+        for i in 0 .. 1 << lnpw2 {
+            let slice   = &mut bytes[i*lane_size .. (i+1)*lane_size];
+            let a_slice = &a_bytes[i*lane_size .. (i+1)*lane_size];
+            unsafe { f(T::vref_mut(slice), T::vref(a_slice)) };
+        }
+    }
+
+    fn xmap2<T, F>(&mut self, a: &Self, b: &Self, lnpw2: u8, mut f: F)
+    where
+        F: FnMut(&mut T, &T, &T),
+        T: VType + ?Sized
+    {
+        let lane_size = self.vsize() >> lnpw2;
+        let bytes   = self.vraw_bytes_mut();
+        let a_bytes = a.vraw_bytes();
+        let b_bytes = b.vraw_bytes();
+        for i in 0 .. 1 << lnpw2 {
+            let slice   = &mut bytes[i*lane_size .. (i+1)*lane_size];
+            let a_slice = &a_bytes[i*lane_size .. (i+1)*lane_size];
+            let b_slice = &b_bytes[i*lane_size .. (i+1)*lane_size];
+            unsafe { f(T::vref_mut(slice), T::vref(a_slice), T::vref(b_slice)) };
+        }
+    }
+
+    fn xmap3<T, F>(&mut self, a: &Self, b: &Self, c: &Self, lnpw2: u8, mut f: F)
+    where
+        F: FnMut(&mut T, &T, &T, &T),
+        T: VType + ?Sized
+    {
+        let lane_size = self.vsize() >> lnpw2;
+        let bytes   = self.vraw_bytes_mut();
+        let a_bytes = a.vraw_bytes();
+        let b_bytes = b.vraw_bytes();
+        let c_bytes = c.vraw_bytes();
+        for i in 0 .. 1 << lnpw2 {
+            let slice   = &mut bytes[i*lane_size .. (i+1)*lane_size];
+            let a_slice = &a_bytes[i*lane_size .. (i+1)*lane_size];
+            let b_slice = &b_bytes[i*lane_size .. (i+1)*lane_size];
+            let c_slice = &c_bytes[i*lane_size .. (i+1)*lane_size];
+            unsafe { f(T::vref_mut(slice), T::vref(a_slice), T::vref(b_slice), T::vref(c_slice)) };
+        }
+    }
+
+    fn xfilter<T, F>(&mut self, a: &Self, lnpw2: u8, mut f: F)
+    where
+        F: FnMut(&T) -> bool,
+        T: VType + ?Sized
+    {
+        self.xmap(a, lnpw2, |d, x| {
+            if f(x) {
+                T::vones(d)
+            } else {
+                T::vzero(d)
+            }
+        })
+    }
+
+    fn xfilter2<T, F>(&mut self, a: &Self, b: &Self, lnpw2: u8, mut f: F)
+    where
+        F: FnMut(&T, &T) -> bool,
+        T: VType + ?Sized
+    {
+        self.xmap2(a, b, lnpw2, |d, x, y| {
+            if f(x, y) {
+                T::vones(d)
+            } else {
+                T::vzero(d)
+            }
+        })
+    }
+
+    fn xfilter3<T, F>(&mut self, a: &Self, b: &Self, c: &Self, lnpw2: u8, mut f: F)
+    where
+        F: FnMut(&T, &T, &T) -> bool,
+        T: VType + ?Sized
+    {
+        self.xmap3(a, b, c, lnpw2, |d, x, y, z| {
+            if f(x, y, z) {
+                T::vones(d)
+            } else {
+                T::vzero(d)
+            }
+        })
+    }
+}
+
+engine_for_short_t! {
+    impl VType for __prim_t {
+        fn vsize(&self) -> usize {
+            __size
+        }
+
+        unsafe fn vref(a: &[u8]) -> &Self {
+            &*(a.as_ptr() as *const Self)
+        }
+
+        unsafe fn vref_mut(a: &mut [u8]) -> &mut Self {
+            &mut *(a.as_mut_ptr() as *mut Self)
+        }
+
+        fn vraw_bytes(&self) -> &[u8] {
+            unsafe { &*(self as *const __prim_t as *const [u8; __size]) }
+        }
+
+        fn vraw_bytes_mut(&mut self) -> &mut [u8] {
+            unsafe { &mut *(self as *mut __prim_t as *mut [u8; __size]) }
+        }
+
+        fn vzero(&mut self) {
+            *self = 0;
+        }
+
+        fn vones(&mut self) {
+            *self = __prim_t::MAX;
+        }
+
+        fn vis_zero(&self) -> bool {
+            *self == 0
+        }
+
+        fn vcopy(&mut self, b: &Self) {
+            *self = *b;
+        }
+
+        fn vfrom_u32(&mut self, a: u32) {
+            *self = a as Self;
+        }
+
+        fn vfrom_i32(&mut self, a: i32) {
+            *self = a as Self;
+        }
+
+        fn vfrom_i16(&mut self, a: i16) {
+            *self = a as Self;
+        }
+
+        fn vto_u32(&self) -> u32 {
+            *self as u32
+        }
+
+        fn vtry_to_u32(&self) -> Option<u32> {
+            u32::try_from(*self).ok()
+        }
+
+        #[cfg(target_endian="little")]
+        fn vget_byte(&self, i: usize) -> Option<&u8> {
+            self.vraw_bytes().get(i)
+        }
+
+        #[cfg(target_endian="big")]
+        fn vget_byte(&self, i: usize) -> Option<&u8> {
+            self.vraw_bytes().get(self.vsize()-1 - i)
+        }
+
+        #[cfg(target_endian="little")]
+        fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8> {
+            self.vraw_bytes_mut().get_mut(i)
+        }
+
+        #[cfg(target_endian="big")]
+        fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8> {
+            self.vraw_bytes_mut().get_mut(self.vsize()-1 - i)
+        }
+
+        fn veq(&self, b: &Self) -> bool {
+            *self == *b
+        }
+
+        fn vne(&self, b: &Self) -> bool {
+            *self != *b
+        }
+
+        fn vlt_u(&self, b: &Self) -> bool {
+            *self < *b
+        }
+
+        fn vlt_s(&self, b: &Self) -> bool {
+            (*self as __primi_t) < (*b as __primi_t)
+        }
+
+        fn vgt_u(&self, b: &Self) -> bool {
+            *self > *b
+        }
+
+        fn vgt_s(&self, b: &Self) -> bool {
+            (*self as __primi_t) > (*b as __primi_t)
+        }
+
+        fn vle_u(&self, b: &Self) -> bool {
+            *self <= *b
+        }
+
+        fn vle_s(&self, b: &Self) -> bool {
+            (*self as __primi_t) <= (*b as __primi_t)
+        }
+
+        fn vge_u(&self, b: &Self) -> bool {
+            *self >= *b
+        }
+
+        fn vge_s(&self, b: &Self) -> bool {
+            (*self as __primi_t) >= (*b as __primi_t)
+        }
+
+        fn veq_i16(&self, b: i16) -> bool {
+            *self == b as Self
+        }
+
+        fn vne_i16(&self, b: i16) -> bool {
+            *self != b as Self
+        }
+
+        fn vlt_u_i16(&self, b: i16) -> bool {
+            *self < b as Self
+        }
+
+        fn vlt_s_i16(&self, b: i16) -> bool {
+            (*self as __primi_t) < (b as __primi_t)
+        }
+
+        fn vgt_u_i16(&self, b: i16) -> bool {
+            *self > b as Self
+        }
+
+        fn vgt_s_i16(&self, b: i16) -> bool {
+            (*self as __primi_t) > (b as __primi_t)
+        }
+
+        fn vle_u_i16(&self, b: i16) -> bool {
+            *self <= b as Self
+        }
+
+        fn vle_s_i16(&self, b: i16) -> bool {
+            (*self as __primi_t) <= (b as __primi_t)
+        }
+
+        fn vge_u_i16(&self, b: i16) -> bool {
+            *self >= b as Self
+        }
+
+        fn vge_s_i16(&self, b: i16) -> bool {
+            (*self as __primi_t) >= (b as __primi_t)
+        }
+
+        fn vmin_u(&mut self, a: &Self, b: &Self) {
+            *self = min(*a, *b);
+        }
+
+        fn vmin_s(&mut self, a: &Self, b: &Self) {
+            *self = min(*a as __primi_t, *b as __primi_t) as __prim_t;
+        }
+
+        fn vmax_u(&mut self, a: &Self, b: &Self) {
+            *self = max(*a, *b)
+        }
+
+        fn vmax_s(&mut self, a: &Self, b: &Self) {
+            *self = max(*a as __primi_t, *b as __primi_t) as __prim_t
+        }
+
+        fn vmin_u_i16(&mut self, a: &Self, b: i16) {
+            *self = min(*a, b as Self);
+        }
+
+        fn vmin_s_i16(&mut self, a: &Self, b: i16) {
+            *self = min(*a as __primi_t, b as __primi_t) as __prim_t;
+        }
+
+        fn vmax_u_i16(&mut self, a: &Self, b: i16) {
+            *self = max(*a, b as Self)
+        }
+
+        fn vmax_s_i16(&mut self, a: &Self, b: i16) {
+            *self = max(*a as __primi_t, b as __primi_t) as __prim_t
+        }
+
+        fn vneg(&mut self, a: &Self) {
+            *self = (-(*a as __primi_t)) as __prim_t;
+        }
+
+        fn vabs(&mut self, a: &Self) {
+            *self = (*a as __primi_t).abs() as __prim_t;
+        }
+
+        fn vnot(&mut self, a: &Self) {
+            *self = !*a;
+        }
+
+        fn vclz(&mut self, a: &Self) {
+            *self = a.leading_zeros() as __prim_t;
+        }
+
+        fn vctz(&mut self, a: &Self) {
+            *self = a.trailing_zeros() as __prim_t;
+        }
+
+        fn vpopcnt(&mut self, a: &Self) {
+            *self = a.count_ones() as __prim_t;
+        }
+
+        fn vadd(&mut self, a: &Self, b: &Self) {
+            *self = a.wrapping_add(*b);
+        }
+
+        fn vsub(&mut self, a: &Self, b: &Self) {
+            *self = a.wrapping_sub(*b);
+        }
+
+        fn vmul(&mut self, a: &Self, b: &Self) {
+            *self = a.wrapping_mul(*b);
+        }
+
+        fn vand(&mut self, a: &Self, b: &Self) {
+            *self = *a & *b;
+        }
+
+        fn vandnot(&mut self, a: &Self, b: &Self) {
+            *self = *a & !*b;
+        }
+
+        fn vor(&mut self, a: &Self, b: &Self) {
+            *self = *a | *b;
+        }
+
+        fn vxor(&mut self, a: &Self, b: &Self) {
+            *self = *a ^ *b;
+        }
+
+        fn vshl(&mut self, a: &Self, b: &Self) {
+            *self = a.wrapping_shl(*b as u32);
+        }
+
+        fn vshr_u(&mut self, a: &Self, b: &Self) {
+            *self = a.wrapping_shr(*b as u32);
+        }
+
+        fn vshr_s(&mut self, a: &Self, b: &Self) {
+            *self = (*a as __primi_t).wrapping_shr(*b as u32) as __prim_t;
+        }
+
+        fn vrotl(&mut self, a: &Self, b: &Self) {
+            *self = a.rotate_left(*b as u32);
+        }
+
+        fn vrotr(&mut self, a: &Self, b: &Self) {
+            *self = a.rotate_right(*b as u32);
+        }
+
+        fn vadd_i16(&mut self, a: &Self, b: i16) {
+            *self = a.wrapping_add(b as Self);
+        }
+
+        fn vsub_i16(&mut self, a: &Self, b: i16) {
+            *self = a.wrapping_sub(b as Self);
+        }
+
+        fn vmul_i16(&mut self, a: &Self, b: i16) {
+            *self = a.wrapping_mul(b as Self);
+        }
+
+        fn vand_i16(&mut self, a: &Self, b: i16) {
+            *self = *a & (b as Self);
+        }
+
+        fn vandnot_i16(&mut self, a: &Self, b: i16) {
+            *self = *a & !(b as Self);
+        }
+
+        fn vor_i16(&mut self, a: &Self, b: i16) {
+            *self = *a | (b as Self);
+        }
+
+        fn vxor_i16(&mut self, a: &Self, b: i16) {
+            *self = *a ^ (b as Self);
+        }
+
+        fn vshl_i16(&mut self, a: &Self, b: i16) {
+            *self = a.wrapping_shl(b as u32);
+        }
+
+        fn vshr_u_i16(&mut self, a: &Self, b: i16) {
+            *self = a.wrapping_shr(b as u32);
+        }
+
+        fn vshr_s_i16(&mut self, a: &Self, b: i16) {
+            *self = (*a as __primi_t).wrapping_shr(b as u32) as __prim_t;
+        }
+
+        fn vrotl_i16(&mut self, a: &Self, b: i16) {
+            *self = a.rotate_left(b as u32);
+        }
+
+        fn vrotr_i16(&mut self, a: &Self, b: i16) {
+            *self = a.rotate_right(b as u32);
+        }
+    }
+}
+
+impl VType for [__limb_t] {
+    fn vsize(&self) -> usize {
+        self.len() * __limb_size
+    }
+
+    unsafe fn vref(a: &[u8]) -> &Self {
+        slice::from_raw_parts(
+            a.as_ptr() as *const __limb_t,
+            a.len() / __limb_size
+        )
+    }
+
+    unsafe fn vref_mut(a: &mut [u8]) -> &mut Self {
+        slice::from_raw_parts_mut(
+            a.as_mut_ptr() as *mut __limb_t,
+            a.len() / __limb_size
+        )
+    }
+
+    fn vraw_bytes(&self) -> &[u8] {
+        unsafe {
+            slice::from_raw_parts(
+                self.as_ptr() as *const u8,
+                self.len() * __limb_size
+            )
+        }
+    }
+
+    fn vraw_bytes_mut(&mut self) -> &mut [u8] {
+        unsafe {
+            slice::from_raw_parts_mut(
+                self.as_mut_ptr() as *mut u8,
+                self.len() * __limb_size
+            )
+        }
+    }
+
+    fn vzero(&mut self) {
+        for i in 0..self.len() {
+            self[i] = 0;
+        }
+    }
+
+    fn vones(&mut self) {
+        for i in 0..self.len() {
+            self[i] = __limb_t::MAX;
+        }
+    }
+
+    fn vis_zero(&self) -> bool {
+        let mut is_zero = true;
+        for i in 0..self.len() {
+            is_zero = is_zero && self[i] == 0
+        }
+
+        is_zero
+    }
+
+    fn vcopy(&mut self, b: &Self) {
+        for i in 0..self.len() {
+            self[i] = b[i];
+        }
+    }
+
+    fn vfrom_u32(&mut self, a: u32) {
+        self[0] = __limb_t::from(a);
+        for i in 1..self.len() {
+            self[i] = 0;
+        }
+    }
+
+    fn vto_u32(&self) -> u32 {
+        self[0] as u32
+    }
+
+    fn vtry_to_u32(&self) -> Option<u32> {
+        let mut is_zero = true;
+        for i in 1..self.len() {
+            is_zero = is_zero && self[i] == 0;
+        }
+
+        if is_zero {
+            u32::try_from(self[0]).ok()
+        } else {
+            None
+        }
+    }
+
+    fn vfrom_i32(&mut self, a: i32) {
+        self[0] = a as __limb_t;
+        for i in 1..self.len() {
+            self[i] = if a < 0 { __limb_t::MAX } else { 0 };
+        }
+    }
+
+    fn vfrom_i16(&mut self, a: i16) {
+        self.vfrom_i32(a as i32);
+    }
+
+    fn vget_byte(&self, i: usize) -> Option<&u8> {
+        self.get(i / __limb_size).and_then(|x| x.vget_byte(i % __limb_size))
+    }
+
+    fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8> {
+        self.get_mut(i / __limb_size).and_then(|x| x.vget_byte_mut(i % __limb_size))
+    }
+
+    fn veq(&self, b: &Self) -> bool {
+        let mut eq = true;
+        for i in 0..self.len() {
+            eq = eq && self[i] == b[i];
+        }
+        eq
+    }
+    
+    fn vne(&self, b: &Self) -> bool {
+        let mut ne = false;
+        for i in 0..self.len() {
+            ne = ne || self[i] != b[i];
+        }
+        ne
+    }
+
+    fn vlt_u(&self, b: &Self) -> bool {
+        let mut lt = false;
+        for i in 0..self.len() {
+            lt = match self[i].cmp(&b[i]) {
+                Ordering::Less    => true,
+                Ordering::Greater => false,
+                Ordering::Equal   => lt,
+            }
+        }
+        lt
+    }
+
+    fn vlt_s(&self, b: &Self) -> bool {
+        let lt = self.vlt_u(b);
+        // the only difference from lt_u is when sign-bits mismatch
+        match ((self[self.len()-1] as __limbi_t) < 0, (b[self.len()-1] as __limbi_t) < 0) {
+            (true, false) => true,
+            (false, true) => false,
+            _             => lt
+        }
+    }
+
+    fn vgt_u(&self, b: &Self) -> bool {
+        let mut gt = false;
+        for i in 0..self.len() {
+            gt = match self[i].cmp(&b[i]) {
+                Ordering::Less    => false,
+                Ordering::Greater => true,
+                Ordering::Equal   => gt,
+            }
+        }
+        gt
+    }
+
+    fn vgt_s(&self, b: &Self) -> bool {
+        let gt = self.vgt_u(b);
+        // the only difference from gt_u is when sign-bits mismatch
+        match ((self[self.len()-1] as __limbi_t) < 0, (b[self.len()-1] as __limbi_t) < 0) {
+            (true, false) => false,
+            (false, true) => true,
+            _             => gt
+        }
+    }
+
+    fn vle_u(&self, b: &Self) -> bool {
+        !self.vgt_u(b)
+    }
+
+    fn vle_s(&self, b: &Self) -> bool {
+        !self.vgt_s(b)
+    }
+
+    fn vge_u(&self, b: &Self) -> bool {
+        !self.vlt_u(b)
+    }
+
+    fn vge_s(&self, b: &Self) -> bool {
+        !self.vlt_s(b)
+    }
+
+    fn veq_i16(&self, b: i16) -> bool {
+        let mut eq = true;
+        for i in 0..self.len() {
+            eq = eq && self[i] == if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
+            }
+        }
+        eq
+    }
+    
+    fn vne_i16(&self, b: i16) -> bool {
+        let mut ne = false;
+        for i in 0..self.len() {
+            ne = ne || self[i] != if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
+            }
+        }
+        ne
+    }
+
+    fn vlt_u_i16(&self, b: i16) -> bool {
+        let mut lt = false;
+        for i in 0..self.len() {
+            lt = match self[i].cmp(&if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
+            }) {
+                Ordering::Less    => true,
+                Ordering::Greater => false,
+                Ordering::Equal   => lt,
+            }
+        }
+        lt
+    }
+
+    fn vlt_s_i16(&self, b: i16) -> bool {
+        let lt = self.vlt_u_i16(b);
+        // the only difference from lt_u is when sign-bits mismatch
+        match ((self[self.len()-1] as __limbi_t) < 0, b < 0) {
+            (true, false) => true,
+            (false, true) => false,
+            _             => lt
+        }
+    }
+
+    fn vgt_u_i16(&self, b: i16) -> bool {
+        let mut gt = false;
+        for i in 0..self.len() {
+            gt = match self[i].cmp(&if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
+            }) {
+                Ordering::Less    => false,
+                Ordering::Greater => true,
+                Ordering::Equal   => gt,
+            }
+        }
+        gt
+    }
+
+    fn vgt_s_i16(&self, b: i16) -> bool {
+        let gt = self.vgt_u_i16(b);
+        // the only difference from gt_u is when sign-bits mismatch
+        match ((self[self.len()-1] as __limbi_t) < 0, b < 0) {
+            (true, false) => false,
+            (false, true) => true,
+            _             => gt
+        }
+    }
+
+    fn vle_u_i16(&self, b: i16) -> bool {
+        !self.vgt_u_i16(b)
+    }
+
+    fn vle_s_i16(&self, b: i16) -> bool {
+        !self.vgt_s_i16(b)
+    }
+
+    fn vge_u_i16(&self, b: i16) -> bool {
+        !self.vlt_u_i16(b)
+    }
+
+    fn vge_s_i16(&self, b: i16) -> bool {
+        !self.vlt_s_i16(b)
+    }
+
+    fn vmin_u(&mut self, a: &Self, b: &Self) {
+        if a.vlt_u(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.copy_from_slice(b);
+        }
+    }
+
+    fn vmin_s(&mut self, a: &Self, b: &Self) {
+        if a.vlt_s(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.copy_from_slice(b);
+        }
+    }
+
+    fn vmax_u(&mut self, a: &Self, b: &Self) {
+        if a.vgt_u(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.copy_from_slice(b);
+        }
+    }
+
+    fn vmax_s(&mut self, a: &Self, b: &Self) {
+        if a.vgt_s(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.copy_from_slice(b);
+        }
+    }
+
+    fn vmin_u_i16(&mut self, a: &Self, b: i16) {
+        if a.vlt_u_i16(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.vfrom_i16(b);
+        }
+    }
+
+    fn vmin_s_i16(&mut self, a: &Self, b: i16) {
+        if a.vlt_s_i16(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.vfrom_i16(b);
+        }
+    }
+
+    fn vmax_u_i16(&mut self, a: &Self, b: i16) {
+        if a.vgt_u_i16(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.vfrom_i16(b);
+        }
+    }
+
+    fn vmax_s_i16(&mut self, a: &Self, b: i16) {
+        if a.vgt_s_i16(b) {
+            self.copy_from_slice(a);
+        } else {
+            self.vfrom_i16(b);
+        }
+    }
+
+    fn vneg(&mut self, a: &Self) {
+        let mut overflow = false;
+        for i in 0..self.len() {
+            let (v, o1) = (!a[i]).overflowing_add(if i == 0 { 1 } else { 0 });
+            let (v, o2) = v.overflowing_add(__limb_t::from(overflow));
+            self[i] = v;
+            overflow = o1 || o2;
+        }
+    }
+
+    fn vabs(&mut self, a: &Self) {
+        if (a[a.len()-1] as __limbi_t) < 0 {
+            self.vneg(a);
+        } else {
+            self.copy_from_slice(a);
+        }
+    }
+
+    fn vnot(&mut self, a: &Self) {
+        for i in 0..self.len() {
+            self[i] = !a[i];
+        }
+    }
+
+    fn vclz(&mut self, a: &Self) {
+        let mut sum = 0;
+        for i in 0..a.len() {
+            sum = if a[i] == 0 { sum } else { 0 }
+                + a[i].leading_zeros();
+        }
+        self.vfrom_u32(sum);
+    }
+
+    fn vctz(&mut self, a: &Self) {
+        let mut sum = 0;
+        let mut done = false;
+        for i in 0..a.len() {
+            sum += if !done { a[i].trailing_zeros() } else { 0 };
+            done |= a[i] == 0;
+        }
+        self.vfrom_u32(sum);
+    }
+
+    fn vpopcnt(&mut self, a: &Self) {
+        let mut sum = 0;
+        for i in 0..a.len() {
+            sum += a[i].count_ones();
+        }
+        self.vfrom_u32(sum);
+    }
+
+    fn vadd(&mut self, a: &Self, b: &Self) {
+        let mut overflow = false;
+        for i in 0..self.len() {
+            let (v, o1) = a[i].overflowing_add(b[i]);
+            let (v, o2) = v.overflowing_add(__limb_t::from(overflow));
+            self[i] = v;
+            overflow = o1 || o2;
+        }
+    }
+
+    fn vsub(&mut self, a: &Self, b: &Self) {
+        let mut overflow = false;
+        for i in 0..self.len() {
+            let (v, o1) = a[i].overflowing_sub(b[i]);
+            let (v, o2) = v.overflowing_sub(__limb_t::from(overflow));
+            self[i] = v;
+            overflow = o1 || o2;
+        }
+    }
+
+    fn vmul(&mut self, a: &Self, b: &Self) {
+        // simple long multiplication based on wikipedia
+        // https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication
+        self.vzero();
+        for i in 0..a.len() {
+            let mut overflow: __limb2_t = 0;
+            for j in 0..b.len() {
+                if i+j < self.len() {
+                    let v = <__limb2_t>::from(self[i+j])
+                        + (<__limb2_t>::from(a[i]) * <__limb2_t>::from(b[j]))
+                        + overflow;
+                    self[i+j] = v as __limb_t;
+                    overflow = v >> (8*__limb_size);
                 }
-                lt
             }
+        }
+    }
 
-            fn vlt_s(self, other: Self) -> bool {
-                let lt = self.vlt_u(other);
-                // the only difference from lt_u is when sign-bits mismatch
-                match ((self[__limbs-1] as __limb_i) < 0, (other[__limbs-1] as __limb_i) < 0) {
-                    (true, false) => true,
-                    (false, true) => false,
-                    _             => lt
-                }
-            }
+    fn vand(&mut self, a: &Self, b: &Self) {
+        for i in 0..self.len() {
+            self[i] = a[i] & b[i];
+        }
+    }
 
-            fn vgt_u(self, other: Self) -> bool {
-                let mut gt = false;
-                for i in 0..__limbs {
-                    gt = match self[i].cmp(&other[i]) {
-                        Ordering::Less    => false,
-                        Ordering::Greater => true,
-                        Ordering::Equal   => gt,
-                    }
-                }
-                gt
-            }
+    fn vandnot(&mut self, a: &Self, b: &Self) {
+        for i in 0..self.len() {
+            self[i] = a[i] & !b[i];
+        }
+    }
 
-            fn vgt_s(self, other: Self) -> bool {
-                let gt = self.vgt_u(other);
-                // the only difference from gt_u is when sign-bits mismatch
-                match ((self[__limbs-1] as __limb_i) < 0, (other[__limbs-1] as __limb_i) < 0) {
-                    (true, false) => false,
-                    (false, true) => true,
-                    _             => gt
-                }
-            }
+    fn vor(&mut self, a: &Self, b: &Self) {
+        for i in 0..self.len() {
+            self[i] = a[i] | b[i];
+        }
+    }
 
-            fn vle_u(self, other: Self) -> bool {
-                !self.vgt_u(other)
-            }
+    fn vxor(&mut self, a: &Self, b: &Self) {
+        for i in 0..self.len() {
+            self[i] = a[i] ^ b[i];
+        }
+    }
 
-            fn vle_s(self, other: Self) -> bool {
-                !self.vgt_s(other)
-            }
+    fn vshl(&mut self, a: &Self, b: &Self) {
+        let b = b.vto_u32() % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
 
-            fn vge_u(self, other: Self) -> bool {
-                !self.vlt_u(other)
-            }
+        for i in 0..self.len() {
+            self[i]
+                = (i.checked_sub(sh_hi)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    << sh_lo)
+                | (i.checked_sub(sh_hi+1)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    .checked_shr(width - sh_lo)
+                    .unwrap_or(0));
+        }
+    }
 
-            fn vge_s(self, other: Self) -> bool {
-                !self.vlt_s(other)
-            }
+    fn vshr_u(&mut self, a: &Self, b: &Self) {
+        let b = b.vto_u32() % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
 
-            fn vmin_u(self, other: Self) -> Self {
-                if self.vlt_u(other) {
-                    self
+        for i in 0..self.len() {
+            self[i]
+                = (i.checked_add(sh_hi)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    >> sh_lo)
+                | (i.checked_add(sh_hi+1)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    .checked_shl(width - sh_lo)
+                    .unwrap_or(0));
+        }
+    }
+
+    fn vshr_s(&mut self, a: &Self, b: &Self) {
+        let b = b.vto_u32() % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
+        let sign = if (a[a.len()-1] as __limbi_t) < 0 { 0 } else { __limb_t::MAX };
+
+        for i in 0..self.len() {
+            self[i]
+                = (((*i.checked_add(sh_hi)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&sign)
+                    as __limbi_t) >> sh_lo) as __limb_t)
+                | (i.checked_add(sh_hi+1)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&sign)
+                    .checked_shl(width - sh_lo)
+                    .unwrap_or(0));
+        }
+    }
+
+    fn vrotl(&mut self, a: &Self, b: &Self) {
+        let b = b.vto_u32() % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
+
+        for i in 0..self.len() {
+            self[i]
+                = (a[i.wrapping_sub(sh_hi  ) % a.len()]
+                    << sh_lo)
+                | (a[i.wrapping_sub(sh_hi+1) % a.len()]
+                    .checked_shr(width - sh_lo).unwrap_or(0));
+        }
+    }
+
+    fn vrotr(&mut self, a: &Self, b: &Self) {
+        let b = b.vto_u32() % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
+
+        for i in 0..self.len() {
+            self[i]
+                = (a[i.wrapping_add(sh_hi) % a.len()]
+                    >> sh_lo)
+                | (a[i.wrapping_add(sh_hi+1) % a.len()]
+                    .checked_shl(width - sh_lo).unwrap_or(0));
+        }
+    }
+
+    fn vadd_i16(&mut self, a: &Self, b: i16) {
+        let mut overflow = false;
+        for i in 0..self.len() {
+            let (v, o1) = a[i].overflowing_add(
+                if i == 0 {
+                    b as __limb_t
+                } else if b < 0 {
+                    __limb_t::MAX
                 } else {
-                    other
+                    0
                 }
-            }
+            );
+            let (v, o2) = v.overflowing_add(__limb_t::from(overflow));
+            self[i] = v;
+            overflow = o1 || o2;
+        }
+    }
 
-            fn vmin_s(self, other: Self) -> Self {
-                if self.vlt_s(other) {
-                    self
+    fn vsub_i16(&mut self, a: &Self, b: i16) {
+        let mut overflow = false;
+        for i in 0..self.len() {
+            let (v, o1) = a[i].overflowing_sub(
+                if i == 0 {
+                    b as __limb_t
+                } else if b < 0 {
+                    __limb_t::MAX
                 } else {
-                    other
+                    0
+                }
+            );
+            let (v, o2) = v.overflowing_sub(__limb_t::from(overflow));
+            self[i] = v;
+            overflow = o1 || o2;
+        }
+    }
+
+    fn vmul_i16(&mut self, a: &Self, b: i16) {
+        // simple long multiplication based on wikipedia
+        // https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication
+        self.vzero();
+        for i in 0..a.len() {
+            let mut overflow: __limb2_t = 0;
+            for j in 0..self.len() {
+                if i+j < self.len() {
+                    let v = <__limb2_t>::from(self[i+j])
+                        + (<__limb2_t>::from(a[i]) * <__limb2_t>::from(
+                            if j == 0 {
+                                b as __limb_t
+                            } else if b < 0 {
+                                __limb_t::MAX
+                            } else {
+                                0
+                            }
+                        ))
+                        + overflow;
+                    self[i+j] = v as __limb_t;
+                    overflow = v >> (8*__limb_size);
                 }
             }
+        }
+    }
 
-            fn vmax_u(self, other: Self) -> Self {
-                if self.vgt_u(other) {
-                    self
-                } else {
-                    other
-                }
+    fn vand_i16(&mut self, a: &Self, b: i16) {
+        for i in 0..self.len() {
+            self[i] = a[i] & if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
             }
+        }
+    }
 
-            fn vmax_s(self, other: Self) -> Self {
-                if self.vgt_s(other) {
-                    self
-                } else {
-                    other
-                }
+    fn vandnot_i16(&mut self, a: &Self, b: i16) {
+        for i in 0..self.len() {
+            self[i] = a[i] & !if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
             }
+        }
+    }
 
-            fn vneg(self) -> Self {
-                let zero = [0; __limbs];
-                zero.vsub(self)
+    fn vor_i16(&mut self, a: &Self, b: i16) {
+        for i in 0..self.len() {
+            self[i] = a[i] | if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
             }
+        }
+    }
 
-            fn vabs(self) -> Self {
-                let neg = self.vneg();
-                if (self[__limbs-1] as __limb_i) < 0 {
-                    neg
-                } else {
-                    self
-                }
+    fn vxor_i16(&mut self, a: &Self, b: i16) {
+        for i in 0..self.len() {
+            self[i] = a[i] ^ if i == 0 {
+                b as __limb_t
+            } else if b < 0 {
+                __limb_t::MAX
+            } else {
+                0
             }
+        }
+    }
 
-            fn vnot(mut self) -> Self {
-                for i in 0..__limbs {
-                    self[i] = !self[i];
-                }
-                self
-            }
+    fn vshl_i16(&mut self, a: &Self, b: i16) {
+        let b = b as u32 % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
 
-            fn vclz(self) -> Self {
-                let mut sum = 0;
-                for i in 0..__limbs {
-                    sum = if self[i] == 0 { sum } else { 0 }
-                        + self[i].leading_zeros();
-                }
-                Self::wrapping_from_u32(sum)
-            }
+        for i in 0..self.len() {
+            self[i]
+                = (i.checked_sub(sh_hi)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    << sh_lo)
+                | (i.checked_sub(sh_hi+1)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    .checked_shr(width - sh_lo)
+                    .unwrap_or(0));
+        }
+    }
 
-            fn vctz(self) -> Self {
-                let mut sum = 0;
-                let mut done = false;
-                for i in 0..__limbs {
-                    sum += if !done { self[i].trailing_zeros() } else { 0 };
-                    done |= self[i] == 0;
-                }
-                Self::wrapping_from_u32(sum)
-            }
+    fn vshr_u_i16(&mut self, a: &Self, b: i16) {
+        let b = b as u32 % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
 
-            fn vpopcnt(self) -> Self {
-                let mut sum = 0;
-                for i in 0..__limbs {
-                    sum += self[i].count_ones();
-                }
-                Self::wrapping_from_u32(sum)
-            }
+        for i in 0..self.len() {
+            self[i]
+                = (i.checked_add(sh_hi)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    >> sh_lo)
+                | (i.checked_add(sh_hi+1)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&0)
+                    .checked_shl(width - sh_lo)
+                    .unwrap_or(0));
+        }
+    }
 
-            fn vadd(mut self, other: Self) -> Self {
-                let mut overflow = false;
-                for i in 0..__limbs {
-                    let (v, o1) = self[i].overflowing_add(other[i]);
-                    let (v, o2) = v.overflowing_add(<__limb_t>::from(overflow));
-                    self[i] = v;
-                    overflow = o1 || o2;
-                }
-                self
-            }
+    fn vshr_s_i16(&mut self, a: &Self, b: i16) {
+        let b = b as u32 % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
+        let sign = if (a[a.len()-1] as __limbi_t) < 0 { 0 } else { __limb_t::MAX };
 
-            fn vsub(mut self, other: Self) -> Self {
-                let mut overflow = false;
-                for i in 0..__limbs {
-                    let (v, o1) = self[i].overflowing_sub(other[i]);
-                    let (v, o2) = v.overflowing_sub(<__limb_t>::from(overflow));
-                    self[i] = v;
-                    overflow = o1 || o2;
-                }
-                self
-            }
+        for i in 0..self.len() {
+            self[i]
+                = (((*i.checked_add(sh_hi)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&sign)
+                    as __limbi_t) >> sh_lo) as __limb_t)
+                | (i.checked_add(sh_hi+1)
+                    .and_then(|j| a.get(j))
+                    .unwrap_or(&sign)
+                    .checked_shl(width - sh_lo)
+                    .unwrap_or(0));
+        }
+    }
 
-            fn vmul(self, other: Self) -> Self {
-                // simple long multiplication based on wikipedia
-                // https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication
-                let mut words = [0; __limbs];
-                for i in 0..__limbs {
-                    let mut overflow: __limb2_t = 0;
-                    for j in 0..__limbs {
-                        if i+j < __limbs {
-                            let v = <__limb2_t>::from(words[i+j])
-                                + (<__limb2_t>::from(self[i]) * <__limb2_t>::from(other[j]))
-                                + overflow;
-                            words[i+j] = v as __limb_t;
-                            overflow = v >> (8*__limb_size);
-                        }
-                    }
-                }
-                words
-            }
+    fn vrotl_i16(&mut self, a: &Self, b: i16) {
+        let b = b as u32 % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
 
-            fn vand(mut self, other: Self) -> Self {
-                for i in 0..__limbs {
-                    self[i] = self[i] & other[i];
-                }
-                self
-            }
+        for i in 0..self.len() {
+            self[i]
+                = (a[i.wrapping_sub(sh_hi  ) % a.len()]
+                    << sh_lo)
+                | (a[i.wrapping_sub(sh_hi+1) % a.len()]
+                    .checked_shr(width - sh_lo).unwrap_or(0));
+        }
+    }
 
-            fn vandnot(mut self, other: Self) -> Self {
-                for i in 0..__limbs {
-                    self[i] = self[i] & !other[i];
-                }
-                self
-            }
+    fn vrotr_i16(&mut self, a: &Self, b: i16) {
+        let b = b as u32 % (8*a.vsize() as u32);
+        let width = 8*__limb_size as u32;
+        let sh_lo = b % width;
+        let sh_hi = (b / width) as usize;
 
-            fn vor(mut self, other: Self) -> Self {
-                for i in 0..__limbs {
-                    self[i] = self[i] | other[i];
-                }
-                self
-            }
-
-            fn vxor(mut self, other: Self) -> Self {
-                for i in 0..__limbs {
-                    self[i] = self[i] ^ other[i];
-                }
-                self
-            }
-
-            fn vshl(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*__size as u32);
-                let width = 8*__limb_size as u32;
-                let sh_lo = b % width;
-                let sh_hi = (b / width) as usize;
-
-                let mut words = [0; __limbs];
-                for i in 0..__limbs {
-                    words[i]
-                        = (i.checked_sub(sh_hi)
-                            .and_then(|j| self.get(j))
-                            .unwrap_or(&0)
-                            << sh_lo)
-                        | (i.checked_sub(sh_hi+1)
-                            .and_then(|j| self.get(j))
-                            .unwrap_or(&0)
-                            .checked_shr(width - sh_lo)
-                            .unwrap_or(0));
-                }
-
-                words
-            }
-
-            fn vshr_u(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*__size as u32);
-                let width = 8*__limb_size as u32;
-                let sh_lo = b % width;
-                let sh_hi = (b / width) as usize;
-
-                let mut words = [0; __limbs];
-                for i in 0..__limbs {
-                    words[i]
-                        = (i.checked_add(sh_hi)
-                            .and_then(|j| self.get(j))
-                            .unwrap_or(&0)
-                            >> sh_lo)
-                        | (i.checked_add(sh_hi+1)
-                            .and_then(|j| self.get(j))
-                            .unwrap_or(&0)
-                            .checked_shl(width - sh_lo)
-                            .unwrap_or(0));
-                }
-
-                words
-            }
-
-            fn vshr_s(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*__size as u32);
-                let width = 8*__limb_size as u32;
-                let sh_lo = b % width;
-                let sh_hi = (b / width) as usize;
-                let sig = if (self[__limbs-1] as __limb_i) < 0 { 0 } else { <__limb_t>::MAX };
-
-                let mut words = [0; __limbs];
-                for i in 0..__limbs {
-                    words[i]
-                        = (((*i.checked_add(sh_hi)
-                            .and_then(|j| self.get(j))
-                            .unwrap_or(&sig)
-                            as __limb_i) >> sh_lo) as __limb_t)
-                        | (i.checked_add(sh_hi+1)
-                            .and_then(|j| self.get(j))
-                            .unwrap_or(&sig)
-                            .checked_shl(width - sh_lo)
-                            .unwrap_or(0));
-                }
-
-                words
-            }
-
-            fn vrotl(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*__size as u32);
-                let width = 8*__limb_size as u32;
-                let sh_lo = b % width;
-                let sh_hi = (b / width) as usize;
-
-                let mut words = [0; __limbs];
-                for i in 0..__limbs {
-                    words[i]
-                        = (self[i.wrapping_sub(sh_hi  ) % __limbs]
-                            << sh_lo)
-                        | (self[i.wrapping_sub(sh_hi+1) % __limbs]
-                            .checked_shr(width - sh_lo).unwrap_or(0));
-                }
-
-                words
-            }
-
-            fn vrotr(self, other: Self) -> Self {
-                let b = other.wrapping_into_u32() % (8*__size as u32);
-                let width = 8*__limb_size as u32;
-                let sh_lo = b % width;
-                let sh_hi = (b / width) as usize;
-
-                let mut words = [0; __limbs];
-                for i in 0..__limbs {
-                    words[i]
-                        = (self[i.wrapping_add(sh_hi) % __limbs]
-                            >> sh_lo)
-                        | (self[i.wrapping_add(sh_hi+1) % __limbs]
-                            .checked_shl(width - sh_lo).unwrap_or(0));
-                }
-
-                words
-            }
+        for i in 0..self.len() {
+            self[i]
+                = (a[i.wrapping_add(sh_hi) % a.len()]
+                    >> sh_lo)
+                | (a[i.wrapping_add(sh_hi+1) % a.len()]
+                    .checked_shl(width - sh_lo).unwrap_or(0));
         }
     }
 }
@@ -1122,6 +1414,8 @@ engine_for_t! {
 struct State<'a> {
     state: &'a mut [u8],
     align: usize,
+
+    scratch: Vec<__limb_t>,
 }
 
 impl<'a> From<&'a mut [u8]> for State<'a> {
@@ -1132,6 +1426,8 @@ impl<'a> From<&'a mut [u8]> for State<'a> {
         State {
             state: state,
             align: align,
+            // start with one so short_scratch never allocates
+            scratch: vec![0],
         }
     }
 }
@@ -1149,29 +1445,7 @@ impl AsMut<[u8]> for State<'_> {
 }
 
 impl State<'_> {
-    // accessors
-    fn reg<'a, T: 'a>(&'a self, idx: u16) -> Result<&'a T, Error> {
-        if self.align >= size_of::<T>() {
-            let ptr = self.state.as_ptr().cast();
-            let len = self.state.len() / size_of::<T>();
-            let slice = unsafe { slice::from_raw_parts(ptr, len) };
-            slice.get(usize::from(idx)).ok_or(Error::OutOfBounds)
-        } else {
-            Err(Error::Unaligned)
-        }
-    }
-
-    fn reg_mut<'a, T: 'a>(&'a mut self, idx: u16) -> Result<&'a mut T, Error> {
-        if self.align >= size_of::<T>() {
-            let ptr = self.state.as_mut_ptr().cast();
-            let len = self.state.len() / size_of::<T>();
-            let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
-            slice.get_mut(usize::from(idx)).ok_or(Error::OutOfBounds)
-        } else {
-            Err(Error::Unaligned)
-        }
-    }
-
+    // register accessors
     fn short_reg<'a, T: 'a>(&'a self, idx: u16) -> Result<&'a T, Error> {
         if self.align >= size_of::<T>() {
             let ptr = self.state.as_ptr().cast();
@@ -1224,52 +1498,20 @@ impl State<'_> {
         }
     }
 
-    fn slice<'a, I: SliceIndex<[u8]>>(
-        &'a self,
-        idx: I
-    ) -> Result<&'a <I as SliceIndex<[u8]>>::Output, Error> {
-        let ptr = self.state.as_ptr().cast();
-        let len = self.state.len();
-        let slice = unsafe { slice::from_raw_parts(ptr, len) };
-        slice.get(idx).ok_or(Error::OutOfBounds)
+    // lazily allocated scratch space when needed
+    fn short_scratch<'a, T: 'a>(&'a mut self) -> &'a mut T {
+        unsafe { &mut *(self.scratch.as_mut_ptr() as *mut T) }
     }
 
-    fn slice_mut<'a, I: SliceIndex<[u8]>>(
-        &'a mut self,
-        idx: I
-    ) -> Result<&'a mut <I as SliceIndex<[u8]>>::Output, Error> {
-        let ptr = self.state.as_mut_ptr().cast();
-        let len = self.state.len();
-        let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
-        slice.get_mut(idx).ok_or(Error::OutOfBounds)
-    }
-}
-
-impl<'a> State<'a> {
-    // needed due to ownership rules
-    fn ret(mut self, ret_size: usize) -> Result<&'a [u8], Error> {
-        // zero memory outside of register to avoid leaking info
-        self.slice_mut(ret_size..)?.fill(0x00);
-
-        #[cfg(feature="debug-trace")]
-        {
-            println!("result:");
-            print!("    0x");
-            for i in (0..ret_size).rev() {
-                print!("{:02x}", self.state.get(i).ok_or(Error::OutOfBounds)?);
-            }
-            println!();
+    fn long_scratch<'a>(&'a mut self, npw2: u8) -> &'a mut [__limb_t] {
+        let size = 1 << npw2;
+        debug_assert!(size > __limb_size);
+        let limbs = size / __limb_size;
+        if limbs > self.scratch.len() {
+            self.scratch.resize(limbs, 0);
         }
 
-        // print accumulative cycle count so far
-        #[cfg(feature="debug-cycle-count")]
-        {
-            let cycles = CYCLE_COUNT.with(|c| c.get());
-            println!("engine-cycle-count: {}", cycles);
-        }
-
-        // return ret value, consuming our lifetime
-        self.state.get(..ret_size).ok_or(Error::OutOfBounds)
+        &mut self.scratch[..limbs]
     }
 }
 
@@ -1278,7 +1520,6 @@ impl<'a> State<'a> {
 thread_local! {
     static CYCLE_COUNT: Cell<u64> = Cell::new(0);
 }
-
 
 /// Simple non-constant crypto-VM for testing 
 ///
@@ -1300,7 +1541,7 @@ pub fn exec<'a>(
     }
 
     // setup state
-    let mut s = State::from(state);
+    let mut s = UnsafeCell::new(State::from(state));
 
     #[cfg(feature="debug-trace")]
     {
@@ -1308,7 +1549,7 @@ pub fn exec<'a>(
     }
 
     // core loop
-    loop {
+    let ret_npw2 = loop {
         let ins: u64 = unsafe { *pc };
         pc = unsafe { pc.add(1) };
 
@@ -1321,8 +1562,8 @@ pub fn exec<'a>(
                 Ok(ins) => print!("    {:<24} :", format!("{}", ins)),
                 _       => print!("    {:<24} :", format!("unknown {:#018x}", ins)),
             }
-            for i in 0..s.state.len() {
-                print!(" {:02x}", s.state[i]);
+            for i in 0..s.get_mut().state.len() {
+                print!(" {:02x}", s.get_mut().state[i]);
             }
             println!();
         }
@@ -1333,28 +1574,26 @@ pub fn exec<'a>(
         let d     = ((ins & 0x0000ffff00000000) >> 32) as u16;
         let a     = ((ins & 0x00000000ffff0000) >> 16) as u16;
         let b     = ((ins & 0x000000000000ffff) >>  0) as u16;
-        let ab    = ((ins & 0x00000000ffffffff) >>  0) as u32;
+        let c     = ((ins & 0x000000000000ffff) >>  0) as i16;
+        let ab    = ((ins & 0x00000000ffffffff) >>  0) as i32;
 
         // engine_match sort of breaks macro hygiene, this was much easier than
         // proper scoping and engine_match is really only intended to be used here
         //
-        // aside from relying on opc, engine_match also introduces
-        // - U: type of word
-        // - L: type of lane
         engine_match! {
             //// arg/ret instructions ////
 
             // arg (convert to ne)
-            0x01 if __lnpw2 == 0 => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.from_le();
+            0x01 => {
+                __rx.vfrom_le_bytes(__ra.vraw_bytes());
+                __rd.vcopy(__rx);
             }
 
             // ret (convert from ne and exit)
-            0x02 if __lnpw2 == 0 => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.to_le();
-                return s.ret(size_of::<U>());
+            0x02 => {
+                <__t>::vto_le_bytes(__rx.vraw_bytes_mut(), __ra);
+                __rd.vcopy(__rx);
+                break npw2;
             }
 
 
@@ -1362,37 +1601,36 @@ pub fn exec<'a>(
 
             // extend_u
             0x03 => {
-                let ra = s.reg::<L>(a)?;
-                *s.reg_mut::<U>(d)? = <U>::extend_u(b as u8, *ra);
+                __rx.vextend_u(__la, b as u8);
+                __rd.vcopy(__rx);
             }
 
             // extend_s
             0x04 => {
-                let ra = s.reg::<L>(a)?;
-                *s.reg_mut::<U>(d)? = <U>::extend_s(b as u8, *ra);
+                __rx.vextend_s(__la, b as u8);
+                __rd.vcopy(__rx);
             }
 
             // truncate
             0x05 => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<L>(d)? = <L>::truncate(b as u8, *ra);
+                __lx.vtruncate(__ra, b as u8);
+                __ld.vcopy(__lx);
             }
 
             // splat
             0x06 => {
-                let ra = s.reg::<L>(a)?;
-                *s.reg_mut::<U>(d)? = <U>::splat(*ra);
+                __rd.vsplat(__la);
             }
 
-            // splat_const
+            // splat_c
             0x07 => {
                 // small const encoded in low 32-bits of instruction
                 // sign extend and splat
-                let c = <L>::cast_s(ab);
-                *s.reg_mut::<U>(d)? = <U>::splat(c);
+                __lx.vfrom_i32(ab);
+                __rd.vsplat(__lx);
             }
 
-            // splat_long_const
+            // splat_long_c
             0x08 => {
                 // b encodes size of const here, must be u64 aligned
                 if b < 3 {
@@ -1406,7 +1644,7 @@ pub fn exec<'a>(
                 }
 
                 // load from instruction stream
-                let mut bytes = [0u8; __lane_size];
+                let bytes = __lx.vraw_bytes_mut();
                 for i in 0..words {
                     let word = unsafe { *pc };
                     pc = unsafe { pc.add(1) };
@@ -1417,8 +1655,8 @@ pub fn exec<'a>(
                 bytes[8*words..].fill(sign);
 
                 // splat
-                let c = <L>::from_le_bytes(bytes);
-                *s.reg_mut::<U>(d)? = <U>::splat(c);
+                __lx.vfrom_le_bytes(bytes);
+                __rd.vsplat(__lx);
             }
 
 
@@ -1426,51 +1664,49 @@ pub fn exec<'a>(
 
             // extract (le)
             0x09 => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<L>(d)? = ra.extract(b).unwrap();
+                if !__ld.vextract(__ra, usize::from(b)) {
+                    Err(Error::InvalidOpcode(ins))?;
+                }
             }
 
             // replace (le)
             0x0a => {
-                let rd = s.reg::<U>(d)?;
-                let ra = s.reg::<L>(a)?;
-                *s.reg_mut::<U>(d)? = rd.replace(b, *ra).unwrap();
+                if !__rd.vreplace(__la, usize::from(b)) {
+                    Err(Error::InvalidOpcode(ins))?;
+                }
             }
 
             // select
             0x0b => {
-                let rd = s.reg::<U>(d)?;
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = rb.xmap3(*ra, *rd, |x: L, y: L, z: L| {
-                    if x != <L>::ZERO {
-                        y
+                __rx.xmap3::<__lane_t, _>(__rd, __ra, __rb, lnpw2, |lx, ld, la, lb| {
+                    if !lb.vis_zero() {
+                        lx.vcopy(la)
                     } else {
-                        z
+                        lx.vcopy(ld)
                     }
                 });
+                __rd.vcopy(__rx);
             }
 
             // shuffle
             0x0c => {
-                let rd = s.reg::<U>(d)?;
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                let mut i  = 0;
-                *s.reg_mut::<U>(d)? = ra.xfold2(*rd, |r, x: L, y: L| {
-                    let r = rb.xmap2(r, |w: L, z: L| {
-                        let j = w.try_into_u32().unwrap_or(u32::MAX);
-                        if j == i {
-                            x
-                        } else if j == i+(1<<__lnpw2) {
-                            y
-                        } else {
-                            z
+                // this is intentionally O(n^2), as this is what would be required
+                // for software-based constant-time. Though it's likely the compiler
+                // is smart enough to elide all of this...
+                __rx.vzero();
+                let ra = __ra;
+                let rd = __rd;
+                __rx.xmap::<__lane_t, _>(__rb, lnpw2, |lx, lb| {
+                    let i = lb.vtry_to_u32().unwrap_or(u32::MAX) as usize;
+                    for j in 0 .. 1 << lnpw2 {
+                        if i == j {
+                            lx.vextract(ra, j);
+                        } else if i == j+(1 << lnpw2) {
+                            lx.vextract(rd, j);
                         }
-                    });
-                    i += 1;
-                    r
-                }, <U>::ZERO);
+                    }
+                });
+                __rd.vcopy(__rx);
             }
 
 
@@ -1478,191 +1714,170 @@ pub fn exec<'a>(
 
             // eq
             0x0d => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x == y);
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.veq(lb));
+                __rd.vcopy(__rx);
             }
 
             // eq_c
             0x0e => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x == c);
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.veq_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // ne
             0x0f => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x != y);
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vne(lb));
+                __rd.vcopy(__rx);
             }
 
             // ne_c
             0x10 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x != c);
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vne_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // lt_u
             0x11 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vlt_u(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vlt_u(lb));
+                __rd.vcopy(__rx);
             }
 
             // lt_u_c
             0x12 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vlt_u(c));
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vlt_u_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // lt_s
             0x13 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vlt_s(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vlt_s(lb));
+                __rd.vcopy(__rx);
             }
 
             // lt_s_c
             0x14 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vlt_s(c));
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vlt_s_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // gt_u
             0x15 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vgt_u(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vgt_u(lb));
+                __rd.vcopy(__rx);
             }
 
             // gt_u_c
             0x16 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vgt_u(c));
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vgt_u_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // gt_s
             0x17 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vgt_s(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vgt_s(lb));
+                __rd.vcopy(__rx);
             }
 
             // gt_s_c
             0x18 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vgt_s(c));
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vgt_s_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // le_u
             0x19 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vle_u(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vle_u(lb));
+                __rd.vcopy(__rx);
             }
 
             // le_u_c
             0x1a => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vle_u(c));
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vle_u_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // le_s
             0x1b => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vle_s(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vle_s(lb));
+                __rd.vcopy(__rx);
             }
 
             // le_s_c
             0x1c => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vle_s(c));
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vle_s_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // ge_u
             0x1d => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vge_u(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vge_u(lb));
+                __rd.vcopy(__rx);
             }
 
             // ge_u_c
             0x1e => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xfilter(|x: L| x.vge_u(c));
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vge_u_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // ge_s
             0x1f => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xfilter2(*rb, |x: L, y: L| x.vge_s(y));
+                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vge_s(lb));
+                __rd.vcopy(__rx);
+            }
+
+            // ge_s_c
+            0x20 => {
+                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vge_s_i16(c));
+                __rd.vcopy(__rx);
             }
 
             // min_u
             0x21 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmin_u(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmin_u(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // min_u_c
             0x22 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmin_u(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmin_u_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // min_s
             0x23 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmin_s(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmin_s(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // min_s_c
             0x24 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmin_s(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmin_s_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // max_u
             0x25 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmax_u(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmax_u(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // max_u_c
             0x26 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmax_u(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmax_u_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // max_s
             0x27 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmax_s(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmax_s(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // max_s_c
             0x28 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmax_s(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmax_s_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
 
@@ -1670,208 +1885,209 @@ pub fn exec<'a>(
 
             // neg
             0x29 => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vneg());
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vneg(la));
+                __rd.vcopy(__rx);
             }
 
             // abs
             0x2a => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vabs());
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vabs(la));
+                __rd.vcopy(__rx);
             }
 
             // not
             0x2b => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.vnot();
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vnot(la));
+                __rd.vcopy(__rx);
             }
 
             // clz
             0x2c => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vclz());
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vclz(la));
+                __rd.vcopy(__rx);
             }
 
             // ctz
             0x2d => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vctz());
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vctz(la));
+                __rd.vcopy(__rx);
             }
 
             // popcnt
             0x2e => {
-                let ra = s.reg::<U>(a)?;
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vpopcnt());
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vpopcnt(la));
+                __rd.vcopy(__rx);
             }
 
             // add
             0x2f => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vadd(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vadd(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // add_c
             0x30 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vadd(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vadd_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // sub
             0x31 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vsub(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vsub(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // sub_c
             0x32 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vsub(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vsub_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // mul
             0x33 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vmul(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmul(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // mul_c
             0x34 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vmul(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmul_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // and
             0x35 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.vand(*rb);
+                __rx.vand(__ra, __rb);
+                __rd.vcopy(__rx);
             }
 
             // and_c
             0x36 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vand(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vand_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // andnot
             0x37 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.vandnot(*rb);
+                __rx.vandnot(__ra, __rb);
+                __rd.vcopy(__rx);
             }
 
             // andnot_c
             0x38 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vandnot(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vandnot_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // or
             0x39 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.vor(*rb);
+                __rx.vor(__ra, __rb);
+                __rd.vcopy(__rx);
             }
 
             // or_c
             0x3a => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vor(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vor_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // xor
             0x3b => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.vxor(*rb);
+                __rx.vxor(__ra, __rb);
+                __rd.vcopy(__rx);
             }
 
             // xor_c
             0x3c => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vxor(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vxor_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // shl
             0x3d => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshl(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshl(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // shl_c
             0x3e => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vshl(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshl_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // shr_u
             0x3f => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshr_u(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_u(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // shr_u_c
             0x40 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vshr_u(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_u_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // shr_s
             0x41 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vshr_s(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_s(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // shr_s_c
             0x42 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vshr_s(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_s_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // rotl
             0x43 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vrotl(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotl(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // rotl_c
             0x44 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vrotl(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotl_i16(la, c));
+                __rd.vcopy(__rx);
             }
 
             // rotr
             0x45 => {
-                let ra = s.reg::<U>(a)?;
-                let rb = s.reg::<U>(b)?;
-                *s.reg_mut::<U>(d)? = ra.xmap2(*rb, |x: L, y: L| x.vrotr(y));
+                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotr(la, lb));
+                __rd.vcopy(__rx);
             }
 
             // rotr_c
             0x46 => {
-                let ra = s.reg::<U>(a)?;
-                let c = <L>::cast_s(b);
-                *s.reg_mut::<U>(d)? = ra.xmap(|x: L| x.vrotr(c));
+                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotr_i16(la, c));
+                __rd.vcopy(__rx);
             }
         }
+    };
+
+    // zero memory outside of register to avoid leaking info
+    let ret_size = 1 << ret_npw2;
+    s.get_mut().state.get_mut(ret_size..).ok_or(Error::OutOfBounds)?.fill(0x00);
+    s.get_mut().scratch.fill(0);
+
+    #[cfg(feature="debug-trace")]
+    {
+        println!("result:");
+        print!("    0x");
+        for i in (0..ret_size).rev() {
+            print!("{:02x}", s.get_mut().state.get(i).ok_or(Error::OutOfBounds)?);
+        }
+        println!();
     }
+
+    // print accumulative cycle count so far
+    #[cfg(feature="debug-cycle-count")]
+    {
+        let cycles = CYCLE_COUNT.with(|c| c.get());
+        println!("engine-cycle-count: {}", cycles);
+    }
+
+    // return ret value, consuming our lifetime
+    s.into_inner().state.get(..ret_size).ok_or(Error::OutOfBounds)
 }
 

@@ -5,7 +5,6 @@ use proc_macro::TokenStream;
 use proc_macro::TokenTree;
 use proc_macro::Ident;
 use proc_macro::Group;
-use proc_macro::Delimiter;
 use proc_macro::Literal;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
@@ -16,7 +15,6 @@ use std::iter::FromIterator;
 use quote::quote;
 use quote::ToTokens;
 use syn::parse_macro_input;
-use syn::spanned::Spanned;
 use std::cmp::min;
 
 use evalexpr;
@@ -38,6 +36,22 @@ macro_rules! lit {
 }
 
 fn token_replace(input: TokenStream, map: &HashMap<String, TokenTree>) -> TokenStream {
+    // helper function to set span recursively
+    fn token_setspan(tt: &mut TokenTree, span: proc_macro::Span) {
+        tt.set_span(span);
+        if let TokenTree::Group(group) = tt {
+            let mut ngroup = Group::new(
+                group.delimiter(),
+                group.stream().into_iter().map(|mut tt| {
+                    token_setspan(&mut tt, span);
+                    tt
+                }).collect()
+            );
+            ngroup.set_span(group.span());
+            *tt = TokenTree::Group(ngroup)
+        }
+    }
+
     input.into_iter()
         .map(|tt| {
             match tt {
@@ -45,7 +59,7 @@ fn token_replace(input: TokenStream, map: &HashMap<String, TokenTree>) -> TokenS
                     match map.get(ident.to_string().deref()) {
                         Some(to) => {
                             let mut to = to.clone();
-                            to.set_span(ident.span());
+                            token_setspan(&mut to, ident.span());
                             to
                         }
                         None => {
@@ -228,128 +242,49 @@ pub fn for_secret_t_2(input: TokenStream) -> TokenStream {
     output
 }
 
-// quick macro to get configurable limb type
+// quick macros to get configurable limb types
 pub fn engine_limb_t(_input: TokenStream) -> TokenStream {
     TokenStream::from(ident!("u{}", 8 << LIMB_NPW2))
 }
 
+pub fn engine_limbi_t(_input: TokenStream) -> TokenStream {
+    TokenStream::from(ident!("i{}", 8 << LIMB_NPW2))
+}
+
+pub fn engine_limb2_t(_input: TokenStream) -> TokenStream {
+    TokenStream::from(ident!("u{}", 2*8 << LIMB_NPW2))
+}
+
 /// Build the type mapping to the given npw2, either a primitive type (u16)
-/// for limb type ([u16;4]) depending on LIMB_NPW2 for the cutoff
+/// or limb type ([u16]) depending on LIMB_NPW2 for the cutoff
 fn engine_t(npw2: u8) -> TokenTree {
     if npw2 <= LIMB_NPW2 {
-        TokenTree::Ident(Ident::new(
-            &format!("u{}", 8 << npw2),
-            proc_macro::Span::call_site()
-        ))
+        ident!("u{}", 8 << npw2)
     } else {
-        let word = TokenStream2::from(TokenStream::from(TokenTree::Ident(Ident::new(
-            &format!("u{}", 8 << LIMB_NPW2),
-            proc_macro::Span::call_site()
-        ))));
-        let n = 1usize << npw2-LIMB_NPW2;
-        TokenTree::Group(Group::new(
-            Delimiter::None,
-            TokenStream::from(quote!{[#word;#n]})
-        ))
+        let limb = TokenStream2::from(TokenStream::from(ident!("u{}", 8 << LIMB_NPW2)));
+        TokenStream::from(quote!{ [#limb] }).into_iter().next().unwrap()
     }
 }
 
-// core generator for the engine, different since we don't have different views
-// of the underlying bits
-fn engine_map<'a>() -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> + 'a {
-    (0 ..= MAX_NPW2).map(move |npw2| {
-        (0 ..= min(MAX_LNPW2, npw2)).map(move |lnpw2| {
-            // replace word/lane types
-            let u = engine_t(npw2);
-            let l = engine_t(npw2-lnpw2);
+fn engine_short_map<'a>() -> impl Iterator<Item=(u8, HashMap<String, TokenTree>)> + 'a {
+    (0 ..= LIMB_NPW2).map(move |npw2| {
+        (npw2, HashMap::from_iter([
+            (format!("__prim_t"),    ident!("u{}", 8 << npw2)),
+            (format!("__primi_t"),   ident!("i{}", 8 << npw2)),
 
-            let has_lanes = lnpw2 > 0;
-            let has_limbs = npw2 > LIMB_NPW2;
-
-            (npw2, lnpw2, HashMap::from_iter([
-                (format!("U"), u),
-                (format!("L"), l),
-                (format!("__npw2"),      lit!(Literal::u8_unsuffixed(npw2))),
-                (format!("__lnpw2"),     lit!(Literal::u8_unsuffixed(lnpw2))),
-                (format!("__size"),      lit!(Literal::usize_unsuffixed(1 << npw2))),
-                (format!("__has_lanes"), ident!("{}", has_lanes)),
-                (format!("__lane_npw2"), lit!(Literal::u8_unsuffixed(npw2-lnpw2))),
-                (format!("__lane_size"), lit!(Literal::usize_unsuffixed(1 << (npw2-lnpw2)))),
-                (format!("__lanes"),     lit!(Literal::usize_unsuffixed(1 << lnpw2))),
-                (format!("__has_limbs"), ident!("{}", has_limbs)),
-                (format!("__limb_t"),    ident!("u{}", 8 << LIMB_NPW2)),
-                (format!("__limb_i"),    ident!("i{}", 8 << LIMB_NPW2)),
-                (format!("__limb2_t"),   ident!("u{}", 16 << LIMB_NPW2)), // double width for mul
-                (format!("__limb_size"), lit!(Literal::usize_unsuffixed(1 << LIMB_NPW2))),
-                (format!("__limbs"),     lit!(Literal::usize_unsuffixed(
-                    if has_limbs { 1 << npw2-LIMB_NPW2 } else { 0 }))),
-                (format!("__has_prim"),  ident!("{}", !has_limbs)),
-                (format!("__prim_t"),    ident!("u{}", 8 << npw2-lnpw2)),
-                (format!("__prim_i"),    ident!("i{}", 8 << npw2-lnpw2)),
-            ]))
-        })
+            (format!("__npw2"),      lit!(Literal::u8_unsuffixed(npw2))),
+            (format!("__size"),      lit!(Literal::usize_unsuffixed(1 << npw2))),
+        ]))
     })
-        .flatten()
 }
 
-pub fn engine_for_t(input: TokenStream) -> TokenStream {
-    if cfg!(feature = "debug-internal-proc-macros") {
-        println!("proc-macro engine_for_t <= {}", input);
-    }
-
-    let mut output = Vec::new();
-    for (_, _, map) in engine_map() {
-        let tokens = input.clone();
-        let tokens = token_replace(tokens, &map);
-        let tokens = token_if(tokens);
-        output.push(tokens);
-    }
-    let output = output.into_iter().collect();
-
-    if cfg!(feature = "debug-internal-proc-macros") {
-        println!("proc-macro engine_for_t => {}", output);
-    }
-
-    output
-}
-
-// core generator for the engine, different since we don't have different views
-// of the underlying bits, limited to at most a slice of limb size
-fn engine_gen_map<'a>() -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> + 'a {
-    (0 ..= min(LIMB_NPW2+1, MAX_NPW2)).map(move |npw2| {
-        (0 ..= min(MAX_LNPW2, npw2)).map(move |lnpw2| {
-            (npw2, lnpw2, HashMap::from_iter([
-                (format!("__t"),         engine_t(npw2)),
-                (format!("__lane_t"),    engine_t(npw2-lnpw2)),
-                (format!("__short"),     ident!("{}", npw2 <  LIMB_NPW2)),
-                (format!("__long"),      ident!("{}", npw2 >= LIMB_NPW2)),
-
-                (format!("__prim_t"),    ident!("u{}", 8 << npw2-lnpw2)),
-                (format!("__primi_t"),   ident!("i{}", 8 << npw2-lnpw2)),
-                (format!("__limb_t"),    ident!("u{}", 8 << LIMB_NPW2)),
-                (format!("__limbi_t"),   ident!("i{}", 8 << LIMB_NPW2)),
-                (format!("__limb2_t"),   ident!("u{}", 2*8 << LIMB_NPW2)), // double width for mul
-
-                (format!("__npw2"),      lit!(Literal::u8_unsuffixed(npw2))),
-                (format!("__lnpw2"),     lit!(Literal::u8_unsuffixed(lnpw2))),
-                (format!("__size"),      lit!(Literal::usize_unsuffixed(1 << npw2))),
-                (format!("__has_lanes"), ident!("{}", lnpw2 > 0)),
-                (format!("__lane_npw2"), lit!(Literal::u8_unsuffixed(npw2-lnpw2))),
-                (format!("__lane_size"), lit!(Literal::usize_unsuffixed(1 << (npw2-lnpw2)))),
-                (format!("__lanes"),     lit!(Literal::usize_unsuffixed(1 << lnpw2))),
-            ]))
-        })
-    })
-        .flatten()
-}
-
-pub fn engine_gen(input: TokenStream) -> TokenStream {
+pub fn engine_for_short_t(input: TokenStream) -> TokenStream {
     if cfg!(featurefor_t = "debug-internal-proc-macros") {
-        println!("proc-macro engine_for_t <= {}", input);
+        println!("proc-macro engine_for_short_t <= {}", input);
     }
 
     let mut output = Vec::new();
-    for (_, _, map) in engine_gen_map() {
+    for (_, map) in engine_short_map() {
         let tokens = input.clone();
         let tokens = token_replace(tokens, &map);
         let tokens = token_if(tokens);
@@ -358,10 +293,61 @@ pub fn engine_gen(input: TokenStream) -> TokenStream {
     let output = output.into_iter().collect();
 
     if cfg!(feature = "debug-internal-proc-macros") {
-        println!("proc-macro engine_for_t => {}", output);
+        println!("proc-macro engine_for_short_t => {}", output);
     }
 
     output
+}
+
+fn engine_map<'a>() -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> + 'a {
+    (0 ..= LIMB_NPW2+1).map(move |npw2| {
+        (0 ..= min(LIMB_NPW2+1, npw2)).map(move |lane_npw2| {
+            // these macros map to state access
+            let (rd, ra, rb, rx, ld, la, lb, lx);
+            if npw2 <= LIMB_NPW2 {
+                let t = TokenStream2::from(TokenStream::from(engine_t(npw2)));
+                rd = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_reg_mut::<#t>(d)?) });
+                ra = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(a)?) });
+                rb = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(b)?) });
+                rx = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_scratch::<#t>()) });
+            } else {
+                rd = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_reg_mut(d, npw2)?) });
+                ra = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(a, npw2)?) });
+                rb = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(b, npw2)?) });
+                rx = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_scratch(npw2)) });
+            }
+            if lane_npw2 <= LIMB_NPW2 {
+                let t = TokenStream2::from(TokenStream::from(engine_t(lane_npw2)));
+                ld = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_reg_mut::<#t>(d)?) });
+                la = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(a)?) });
+                lb = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(b)?) });
+                lx = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_scratch::<#t>()) });
+            } else {
+                ld = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_reg_mut(d, npw2-lnpw2)?) });
+                la = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(a, npw2-lnpw2)?) });
+                lb = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(b, npw2-lnpw2)?) });
+                lx = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_scratch(npw2-lnpw2)) });
+            }
+
+            (npw2, lane_npw2, HashMap::from_iter([
+                (format!("__t"),         engine_t(npw2)),
+                (format!("__lane_t"),    engine_t(lane_npw2)),
+                (format!("__has_limbs"), ident!("{}", npw2 > LIMB_NPW2)),
+                (format!("__lane_has_limbs"), ident!("{}", lane_npw2 > LIMB_NPW2)),
+
+                // these macros map to state access
+                (format!("__rd"), rd.into_iter().next().unwrap()),
+                (format!("__ra"), ra.into_iter().next().unwrap()),
+                (format!("__rb"), rb.into_iter().next().unwrap()),
+                (format!("__rx"), rx.into_iter().next().unwrap()),
+                (format!("__ld"), ld.into_iter().next().unwrap()),
+                (format!("__la"), la.into_iter().next().unwrap()),
+                (format!("__lb"), lb.into_iter().next().unwrap()),
+                (format!("__lx"), lx.into_iter().next().unwrap()),
+            ]))
+        })
+    })
+        .flatten()
 }
 
 pub fn engine_match(input: TokenStream) -> TokenStream {
@@ -377,50 +363,33 @@ pub fn engine_match(input: TokenStream) -> TokenStream {
     let mut arms = Vec::new();
     for arm in match_.arms {
         let pat = arm.pat;
-        let guard = arm.guard;
         let body = arm.body;
 
-        // generate arms for all npw2/lnpw2 combinations
-        let mut matches = Vec::new();
-        for (npw2, lnpw2, map) in engine_map() {
-            // has guard?
-            if let Some((_, cond)) = &guard {
-                // eval
-                let tokens = TokenStream::from(cond.to_token_stream());
-                let tokens = token_replace(tokens, &map);
-                let cond = TokenStream2::from(tokens);
-                let res = evalexpr::eval_boolean(&format!("{}", cond));
-
-                // skip?
-                match res {
-                    Ok(true) => {
-                        // continue to emit
-                    }
-                    Ok(false) => {
-                        // skip
-                        continue;
-                    }
-                    Err(err) => {
-                        // the quote is a bit weird here in order to form a proper match arm
-                        let err = format!("{}", err);
-                        matches.push(quote_spanned! {
-                            Span::from(cond.span()) => compile_error!(#err) => {}
-                        });
-                        // skip
-                        continue;
-                    }
-                }
-            }
-
+        // generate arms for npw2/lnpw2 combinations
+        for (npw2, lane_npw2, map) in engine_map() {
             // replace tokens in body
             let tokens = TokenStream::from(body.to_token_stream());
             let tokens = token_replace(tokens, &map);
             let body = TokenStream2::from(tokens);
 
-            let npw2 = syn::LitInt::new(&format!("{}", npw2), Span::call_site());
-            let lnpw2 = syn::LitInt::new(&format!("{}", lnpw2), Span::call_site());
+            let npw2_pat = TokenStream2::from(TokenStream::from(
+                if npw2 <= LIMB_NPW2 {
+                    lit!(Literal::u8_unsuffixed(npw2))
+                } else {
+                    ident!("_")
+                }
+            ));
+
+            let lane_npw2_pat = TokenStream2::from(TokenStream::from(
+                if lane_npw2 <= LIMB_NPW2 {
+                    lit!(Literal::u8_unsuffixed(lane_npw2))
+                } else {
+                    ident!("_")
+                }
+            ));
+
             arms.push(quote! {
-                (#pat, #npw2, #lnpw2) => {
+                (#pat, #npw2_pat, #lane_npw2_pat) => {
                     #body
                 }
             });
@@ -428,7 +397,8 @@ pub fn engine_match(input: TokenStream) -> TokenStream {
     }
 
     let output = quote! {
-        match (op, npw2, lnpw2) {
+        #[allow(unused_parens)]
+        match (op, npw2, npw2-lnpw2) {
             #(#arms)*
 
             // unknown instructions?

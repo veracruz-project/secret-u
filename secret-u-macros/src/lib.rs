@@ -180,37 +180,25 @@ pub fn engine_limb_t(input: TokenStream) -> TokenStream {
     internal::engine_limb_t(input)
 }
 
-/// Internally used engine macro for generating types
-///
-/// Internal macro-like variables:
-/// U - full type
-/// L - lane type
-/// __npw2 - npw2(size) of the type
-/// __lnpw2 - npw2(lanes) of the type
-/// __size - size in bytes of the type
-/// __has_lanes - whether or not the type has lanes
-/// __lane_npw2 - npw(lane_size) of the type
-/// __lane_size - size of each lane in bytes
-/// __lanes - number of lanes
-/// __has_limbs - whether or not the lane type is combosed of more than one limb
-/// __limb_t - limb type
-/// __limb_i - signed limb type
-/// __limb2_t - double-width limb type, useful for mul
-/// __limb_size - size of limb type in bytes
-/// __limbs - number of limbs in the lane type
-/// __has_prim - if it has a primitive type
-/// __prim_t - primitive type, if it has one
-/// __prim_i - signed primitive type, if it has one
-///
+/// Quick macro to get the engine's underlying signed limb type
 #[proc_macro]
-pub fn engine_for_t(input: TokenStream) -> TokenStream {
-    internal::engine_for_t(input)
+pub fn engine_limbi_t(input: TokenStream) -> TokenStream {
+    internal::engine_limbi_t(input)
 }
 
-/// TODO doc
+/// Quick macro to get the engine's underlying wide limb type (used for mul)
 #[proc_macro]
-pub fn engine_gen(input: TokenStream) -> TokenStream {
-    internal::engine_gen(input)
+pub fn engine_limb2_t(input: TokenStream) -> TokenStream {
+    internal::engine_limb2_t(input)
+}
+
+/// Internally used engine macro for generating short (non-limb) types
+///
+/// See engine.rs for more info.
+///
+#[proc_macro]
+pub fn engine_for_short_t(input: TokenStream) -> TokenStream {
+    internal::engine_for_short_t(input)
 }
 
 /// Internally used engine macro for generating match statements

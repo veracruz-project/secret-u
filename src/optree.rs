@@ -21,6 +21,8 @@ use crate::error::Error;
 use crate::opcode::OpCode;
 use crate::opcode::OpIns;
 use crate::opcode::prefix;
+#[cfg(feature="debug-bytecode")]
+use crate::opcode::disas;
 use crate::engine::exec;
 
 use secret_u_macros::for_secret_t;
