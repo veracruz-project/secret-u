@@ -58,6 +58,20 @@ trait VType {
     fn vfrom_i32(&mut self, a: i32);
     fn vfrom_i16(&mut self, a: i16);
 
+    unsafe fn vas<T>(a: &T) -> &Self
+    where
+        T: VType + ?Sized
+    {
+        Self::vref(a.vraw_bytes())
+    }
+
+    unsafe fn vas_mut<T>(a: &mut T) -> &mut Self
+    where
+        T: VType + ?Sized
+    {
+        Self::vref_mut(a.vraw_bytes_mut())
+    }
+
     // little-endian byte access
     fn vget_byte(&self, i: usize) -> Option<&u8>;
     fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8>;
@@ -71,6 +85,9 @@ trait VType {
     }
 
     // to/from little-endian
+    fn vfrom_le(&mut self, a: &Self);
+    fn vto_le(&mut self, a: &Self);
+
     fn vfrom_le_bytes(&mut self, a: &[u8]) {
         for i in 0..self.vsize() {
             *self.vbyte_mut(i) = a[i];
@@ -421,6 +438,14 @@ engine_for_short_t! {
             self.vraw_bytes_mut().get_mut(self.vsize()-1 - i)
         }
 
+        fn vfrom_le(&mut self, a: &Self) {
+            *self = Self::from_le(*a);
+        }
+
+        fn vto_le(&mut self, a: &Self) {
+            *self = a.to_le();
+        }
+
         fn veq(&self, b: &Self) -> bool {
             *self == *b
         }
@@ -760,6 +785,19 @@ impl VType for [__limb_t] {
 
     fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8> {
         self.get_mut(i / __limb_size).and_then(|x| x.vget_byte_mut(i % __limb_size))
+    }
+
+    fn vfrom_le(&mut self, a: &Self) {
+        for i in 0..self.len() {
+            self[i] = __limb_t::from_le(a[i]);
+        }
+    }
+
+    fn vto_le(&mut self, a: &Self) {
+        for i in 0..self.len() {
+            self[i] = a[i].to_le();
+        }
+
     }
 
     fn veq(&self, b: &Self) -> bool {
@@ -1585,14 +1623,12 @@ pub fn exec<'a>(
 
             // arg (convert to ne)
             0x01 => {
-                __rx.vfrom_le_bytes(__ra.vraw_bytes());
-                __rd.vcopy(__rx);
+                __rd.vfrom_le(__ra);
             }
 
             // ret (convert from ne and exit)
             0x02 => {
-                <__t>::vto_le_bytes(__rx.vraw_bytes_mut(), __ra);
-                __rd.vcopy(__rx);
+                __rd.vto_le(__ra);
                 break npw2;
             }
 
@@ -1626,8 +1662,8 @@ pub fn exec<'a>(
             0x07 => {
                 // small const encoded in low 32-bits of instruction
                 // sign extend and splat
-                __lx.vfrom_i32(ab);
-                __rd.vsplat(__lx);
+                __rd_0.vfrom_i32(ab);
+                __rd.vsplat(__rd_0);
             }
 
             // splat_long_c
@@ -1644,7 +1680,7 @@ pub fn exec<'a>(
                 }
 
                 // load from instruction stream
-                let bytes = __lx.vraw_bytes_mut();
+                let bytes = __rd_0.vraw_bytes_mut();
                 for i in 0..words {
                     let word = unsafe { *pc };
                     pc = unsafe { pc.add(1) };
@@ -1655,8 +1691,8 @@ pub fn exec<'a>(
                 bytes[8*words..].fill(sign);
 
                 // splat
-                __lx.vfrom_le_bytes(bytes);
-                __rd.vsplat(__lx);
+                __rd_0.vfrom_le_bytes(bytes);
+                __rd.vsplat(__rd_0);
             }
 
 
@@ -1714,170 +1750,142 @@ pub fn exec<'a>(
 
             // eq
             0x0d => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.veq(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.veq(lb));
             }
 
             // eq_c
             0x0e => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.veq_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.veq_i16(c));
             }
 
             // ne
             0x0f => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vne(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vne(lb));
             }
 
             // ne_c
             0x10 => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vne_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vne_i16(c));
             }
 
             // lt_u
             0x11 => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vlt_u(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vlt_u(lb));
             }
 
             // lt_u_c
             0x12 => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vlt_u_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vlt_u_i16(c));
             }
 
             // lt_s
             0x13 => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vlt_s(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vlt_s(lb));
             }
 
             // lt_s_c
             0x14 => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vlt_s_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vlt_s_i16(c));
             }
 
             // gt_u
             0x15 => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vgt_u(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vgt_u(lb));
             }
 
             // gt_u_c
             0x16 => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vgt_u_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vgt_u_i16(c));
             }
 
             // gt_s
             0x17 => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vgt_s(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vgt_s(lb));
             }
 
             // gt_s_c
             0x18 => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vgt_s_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vgt_s_i16(c));
             }
 
             // le_u
             0x19 => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vle_u(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vle_u(lb));
             }
 
             // le_u_c
             0x1a => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vle_u_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vle_u_i16(c));
             }
 
             // le_s
             0x1b => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vle_s(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vle_s(lb));
             }
 
             // le_s_c
             0x1c => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vle_s_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vle_s_i16(c));
             }
 
             // ge_u
             0x1d => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vge_u(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vge_u(lb));
             }
 
             // ge_u_c
             0x1e => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vge_u_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vge_u_i16(c));
             }
 
             // ge_s
             0x1f => {
-                __rx.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vge_s(lb));
-                __rd.vcopy(__rx);
+                __rd.xfilter2::<__lane_t, _>(__ra, __rb, lnpw2, |la, lb| la.vge_s(lb));
             }
 
             // ge_s_c
             0x20 => {
-                __rx.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vge_s_i16(c));
-                __rd.vcopy(__rx);
+                __rd.xfilter::<__lane_t, _>(__ra, lnpw2, |la| la.vge_s_i16(c));
             }
 
             // min_u
             0x21 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmin_u(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmin_u(la, lb));
             }
 
             // min_u_c
             0x22 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmin_u_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmin_u_i16(la, c));
             }
 
             // min_s
             0x23 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmin_s(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmin_s(la, lb));
             }
 
             // min_s_c
             0x24 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmin_s_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmin_s_i16(la, c));
             }
 
             // max_u
             0x25 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmax_u(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmax_u(la, lb));
             }
 
             // max_u_c
             0x26 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmax_u_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmax_u_i16(la, c));
             }
 
             // max_s
             0x27 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmax_s(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmax_s(la, lb));
             }
 
             // max_s_c
             0x28 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmax_s_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmax_s_i16(la, c));
             }
 
 
@@ -1885,62 +1893,52 @@ pub fn exec<'a>(
 
             // neg
             0x29 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vneg(la));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vneg(la));
             }
 
             // abs
             0x2a => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vabs(la));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vabs(la));
             }
 
             // not
             0x2b => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vnot(la));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vnot(la));
             }
 
             // clz
             0x2c => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vclz(la));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vclz(la));
             }
 
             // ctz
             0x2d => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vctz(la));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vctz(la));
             }
 
             // popcnt
             0x2e => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vpopcnt(la));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vpopcnt(la));
             }
 
             // add
             0x2f => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vadd(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vadd(la, lb));
             }
 
             // add_c
             0x30 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vadd_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vadd_i16(la, c));
             }
 
             // sub
             0x31 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vsub(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vsub(la, lb));
             }
 
             // sub_c
             0x32 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vsub_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vsub_i16(la, c));
             }
 
             // mul
@@ -1957,50 +1955,42 @@ pub fn exec<'a>(
 
             // and
             0x35 => {
-                __rx.vand(__ra, __rb);
-                __rd.vcopy(__rx);
+                __rd.vand(__ra, __rb);
             }
 
             // and_c
             0x36 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vand_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vand_i16(la, c));
             }
 
             // andnot
             0x37 => {
-                __rx.vandnot(__ra, __rb);
-                __rd.vcopy(__rx);
+                __rd.vandnot(__ra, __rb);
             }
 
             // andnot_c
             0x38 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vandnot_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vandnot_i16(la, c));
             }
 
             // or
             0x39 => {
-                __rx.vor(__ra, __rb);
-                __rd.vcopy(__rx);
+                __rd.vor(__ra, __rb);
             }
 
             // or_c
             0x3a => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vor_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vor_i16(la, c));
             }
 
             // xor
             0x3b => {
-                __rx.vxor(__ra, __rb);
-                __rd.vcopy(__rx);
+                __rd.vxor(__ra, __rb);
             }
 
             // xor_c
             0x3c => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vxor_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vxor_i16(la, c));
             }
 
             // shl
