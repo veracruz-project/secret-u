@@ -1628,8 +1628,6 @@ impl VType for [__limb_t] {
 struct State<'a> {
     state: &'a mut [u8],
     align: usize,
-
-    scratch: Vec<__limb_t>,
 }
 
 impl<'a> From<&'a mut [u8]> for State<'a> {
@@ -1640,8 +1638,6 @@ impl<'a> From<&'a mut [u8]> for State<'a> {
         State {
             state: state,
             align: align,
-            // start with one so short_scratch never allocates
-            scratch: vec![0],
         }
     }
 }
@@ -1710,22 +1706,6 @@ impl State<'_> {
         } else {
             Err(Error::Unaligned)
         }
-    }
-
-    // lazily allocated scratch space when needed
-    fn short_scratch<'a, T: 'a>(&'a mut self) -> &'a mut T {
-        unsafe { &mut *(self.scratch.as_mut_ptr() as *mut T) }
-    }
-
-    fn long_scratch<'a>(&'a mut self, npw2: u8) -> &'a mut [__limb_t] {
-        let size = 1 << npw2;
-        debug_assert!(size > __limb_size);
-        let limbs = size / __limb_size;
-        if limbs > self.scratch.len() {
-            self.scratch.resize(limbs, 0);
-        }
-
-        &mut self.scratch[..limbs]
     }
 }
 
@@ -2217,7 +2197,6 @@ pub fn exec<'a>(
     // zero memory outside of register to avoid leaking info
     let ret_size = 1 << ret_npw2;
     s.get_mut().state.get_mut(ret_size..).ok_or(Error::OutOfBounds)?.fill(0x00);
-    s.get_mut().scratch.fill(0);
 
     #[cfg(feature="debug-trace")]
     {

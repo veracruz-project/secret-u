@@ -303,31 +303,29 @@ fn engine_map<'a>() -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> 
     (0 ..= LIMB_NPW2+1).map(move |npw2| {
         (0 ..= min(LIMB_NPW2+1, npw2)).map(move |lane_npw2| {
             // these macros map to state access
-            let (rd, ra, rb, rx, ld, la, lb, lx, rd_0);
+            let (rd, ra, rb);
             if npw2 <= LIMB_NPW2 {
                 let t = TokenStream2::from(TokenStream::from(engine_t(npw2)));
                 rd = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_reg_mut::<#t>(d)?) });
                 ra = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(a)?) });
                 rb = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(b)?) });
-                rx = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_scratch::<#t>()) });
             } else {
                 rd = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_reg_mut(d, npw2)?) });
                 ra = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(a, npw2)?) });
                 rb = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(b, npw2)?) });
-                rx = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_scratch(npw2)) });
             }
+
+            let (ld, la, lb, rd_0);
             if lane_npw2 <= LIMB_NPW2 {
                 let t = TokenStream2::from(TokenStream::from(engine_t(lane_npw2)));
                 ld   = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_reg_mut::<#t>(d)?) });
                 la   = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(a)?) });
                 lb   = TokenStream::from(quote!{ (unsafe {&    *s.get()}.short_reg::<#t>(b)?) });
-                lx   = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_scratch::<#t>()) });
                 rd_0 = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.short_reg_mut::<#t>(d << lnpw2)?) });
             } else {
                 ld   = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_reg_mut(d, npw2-lnpw2)?) });
                 la   = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(a, npw2-lnpw2)?) });
                 lb   = TokenStream::from(quote!{ (unsafe {&    *s.get()}.long_reg(b, npw2-lnpw2)?) });
-                lx   = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_scratch(npw2-lnpw2)) });
                 rd_0 = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_reg_mut(d << lnpw2, npw2-lnpw2)?) });
             }
 
@@ -341,11 +339,9 @@ fn engine_map<'a>() -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> 
                 (format!("__rd"),   rd.into_iter().next().unwrap()),
                 (format!("__ra"),   ra.into_iter().next().unwrap()),
                 (format!("__rb"),   rb.into_iter().next().unwrap()),
-                (format!("__rx"),   rx.into_iter().next().unwrap()),
                 (format!("__ld"),   ld.into_iter().next().unwrap()),
                 (format!("__la"),   la.into_iter().next().unwrap()),
                 (format!("__lb"),   lb.into_iter().next().unwrap()),
-                (format!("__lx"),   lx.into_iter().next().unwrap()),
                 (format!("__rd_0"), rd_0.into_iter().next().unwrap()),
             ]))
         })
