@@ -1887,14 +1887,13 @@ pub fn exec<'a>(
 
             // select
             0x0b => {
-                __rx.xmap3::<__lane_t, _>(__rd, __ra, __rb, lnpw2, |lx, ld, la, lb| {
-                    if !lb.vis_zero() {
+                __rd.xmap3::<__lane_t, _>(__rd, __ra, __rb, lnpw2, |lx, ld, la, lb| {
+                    if !ld.vis_zero() {
                         lx.vcopy(la)
                     } else {
-                        lx.vcopy(ld)
+                        lx.vcopy(lb)
                     }
                 });
-                __rd.vcopy(__rx);
             }
 
             // shuffle
@@ -1902,20 +1901,19 @@ pub fn exec<'a>(
                 // this is intentionally O(n^2), as this is what would be required
                 // for software-based constant-time. Though it's likely the compiler
                 // is smart enough to elide all of this...
-                __rx.vzero();
                 let ra = __ra;
-                let rd = __rd;
-                __rx.xmap::<__lane_t, _>(__rb, lnpw2, |lx, lb| {
-                    let i = lb.vtry_to_u32().unwrap_or(u32::MAX) as usize;
+                let rb = __rb;
+                __rd.xmap::<__lane_t, _>(__rd, lnpw2, |lx, ld| {
+                    let i = ld.vtry_to_u32().unwrap_or(u32::MAX) as usize;
+                    lx.vzero();
                     for j in 0 .. 1 << lnpw2 {
                         if i == j {
                             lx.vextract(ra, j);
                         } else if i == j+(1 << lnpw2) {
-                            lx.vextract(rd, j);
+                            lx.vextract(rb, j);
                         }
                     }
                 });
-                __rd.vcopy(__rx);
             }
 
 

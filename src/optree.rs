@@ -3190,21 +3190,21 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if b_refs == 0 {
+                if p_refs == 0 {
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Select, b_slot, a_slot, p_slot
+                        T::NPW2, *lnpw2, OpCode::Select, p_slot, a_slot, b_slot
                     )));
-                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    self.slot.set(Some(p_slot));
+                    (p_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Splat, slot, b_slot, 0
+                        T::NPW2, 0, OpCode::Splat, slot, p_slot, 0
                     )));
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Select, slot, a_slot, p_slot
+                        T::NPW2, *lnpw2, OpCode::Select, slot, a_slot, b_slot
                     )));
                     if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
@@ -3227,21 +3227,21 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let b_refs = b.dec_refs();
 
                 // can we reuse slots?
-                if b_refs == 0 {
+                if p_refs == 0 {
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, b_slot, a_slot, p_slot
+                        T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, a_slot, b_slot
                     )));
-                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    self.slot.set(Some(b_slot));
-                    (b_slot, T::NPW2)
+                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    self.slot.set(Some(p_slot));
+                    (p_slot, T::NPW2)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, 0, OpCode::Splat, slot, b_slot, 0
+                        T::NPW2, 0, OpCode::Splat, slot, p_slot, 0
                     )));
                     state.bytecode.push(u64::from(OpIns::new(
-                        T::NPW2, *lnpw2, OpCode::Shuffle, slot, a_slot, p_slot
+                        T::NPW2, *lnpw2, OpCode::Shuffle, slot, a_slot, b_slot
                     )));
                     if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
                     if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
