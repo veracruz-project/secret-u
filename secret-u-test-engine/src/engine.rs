@@ -807,7 +807,7 @@ impl VType for [__limb_t] {
         }
         eq
     }
-    
+
     fn vne(&self, b: &Self) -> bool {
         let mut ne = false;
         for i in 0..self.len() {
@@ -889,7 +889,7 @@ impl VType for [__limb_t] {
         }
         eq
     }
-    
+
     fn vne_i16(&self, b: i16) -> bool {
         let mut ne = false;
         for i in 0..self.len() {
@@ -1094,36 +1094,114 @@ impl VType for [__limb_t] {
     fn vadd(&mut self, a: &Self, b: &Self) {
         let mut overflow = false;
         for i in 0..self.len() {
-            let (v, o1) = a[i].overflowing_add(b[i]);
-            let (v, o2) = v.overflowing_add(__limb_t::from(overflow));
-            self[i] = v;
-            overflow = o1 || o2;
+            let res1 = a[i].overflowing_add(b[i]);
+            let res2 = res1.0.overflowing_add(__limb_t::from(overflow));
+            self[i] = res2.0;
+            overflow = res1.1 || res2.1;
         }
     }
 
     fn vsub(&mut self, a: &Self, b: &Self) {
         let mut overflow = false;
         for i in 0..self.len() {
-            let (v, o1) = a[i].overflowing_sub(b[i]);
-            let (v, o2) = v.overflowing_sub(__limb_t::from(overflow));
-            self[i] = v;
-            overflow = o1 || o2;
+            let res1 = a[i].overflowing_sub(b[i]);
+            let res2 = res1.0.overflowing_sub(__limb_t::from(overflow));
+            self[i] = res2.0;
+            overflow = res1.1 || res2.1;
         }
     }
 
     fn vmul(&mut self, a: &Self, b: &Self) {
-        // simple long multiplication based on wikipedia
-        // https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication
-        self.vzero();
-        for i in 0..a.len() {
-            let mut overflow: __limb2_t = 0;
-            for j in 0..b.len() {
-                if i+j < self.len() {
-                    let v = <__limb2_t>::from(self[i+j])
-                        + (<__limb2_t>::from(a[i]) * <__limb2_t>::from(b[j]))
-                        + overflow;
-                    self[i+j] = v as __limb_t;
-                    overflow = v >> (8*__limb_size);
+        // Top-to-bottom long-multiplication to allow in-place multiplication,
+        // this was a bit complicated to get right
+        //
+        // We need to multiply top-to-bottom through both arguments, in case
+        // overlap our destination. Fortunately this can just barely be
+        // accomplished by multiplying inwards a pair of digits at a time.
+        //
+        // Most implementations I've seen end up needing an extra log n space
+        // to hold the carry during computation, however we can sum the carry
+        // directly into the result as we go along. Note that this may have
+        // some performance implications I haven't thought about, though it's
+        // an open question if the performance cost is higher than the required
+        // allocation for additional space
+        //
+        // The diagram here is very helpful:
+        //
+        //               x0     y3
+        //                 \   /
+        //                  \ /
+        //                   X
+        //           x1     /|\     y2
+        //             \   / | \   /
+        //              \ /  |  \ /
+        //               X   |   X
+        //       x2     /|\  |  /|\     y1
+        //         \   / | \ | / | \   /
+        //          \ /  |  \|/  |  \ /
+        //           X   |   X   |   X
+        //   x3     /|\  |  /|\  |  /|\     y0
+        //     \   / | \ | / | \ | / | \   /
+        //      \ /  |  \|/  |  \|/  |  \ /
+        //       V   |   X   |   X   |   V
+        //       |\  |  /|\  |  /|\  |  /|
+        //       | \ | / | \ | / | \ | / |
+        //       |  \|/  |  \|/  |  \|/  |
+        //       |   V   |   X   |   V   |
+        //       |   |\  |  /|\  |  /|   |
+        //       |   | \ | / | \ | / |   |
+        //       |   |  \|/  |  \|/  |   |
+        //       |   |   V   |   V   |   |
+        //       |   |   |\  |  /|   |   |
+        //       |   |   | \ | / |   |   |
+        //       |   |   |  \|/  |   |   |
+        //       |   |   |   V   |   |   |
+        //       |   |   |   |   |   |   |
+        //   n7  n6  n5  n4  n3  n2  n1  n0
+        //
+        //   https://stackoverflow.com/questions/2755086/multiplication-algorithm-for-abritrary-precision-bignum-integers
+        //
+        // Though note since we are performing truncated multiplication, we
+        // only have to worry about digits <= n3
+        //
+        // TODO does this need to use pointers to avoid aliases issues?
+        //
+        let mask = <__limb2_t>::from(__limb_t::MAX);
+        let shift = 8*__limb_size;
+
+        for i in (0..self.len()).rev() {
+            for j in 0 .. (i+2)/2 {
+                // multiply inward 2 digits at a time to avoid overlap with
+                // either argument
+                let (u, v);
+                if i-j != j {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(b[j]);
+                    let z = <__limb2_t>::from(b[i-j]);
+                    let w = <__limb2_t>::from(a[j]);
+                    u = x*y;
+                    v = z*w;
+                } else {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(b[j]);
+                    u = x*y;
+                    v = 0;
+                }
+
+                // sum, making sure not to overflow our wide-limb type
+
+                // if first access of digit, zero
+                let sum = if j == 0 { 0 } else { <__limb2_t>::from(self[i]) }
+                    + (u & mask)
+                    + (v & mask);
+                self[i] = sum as __limb_t;
+                let mut overflow = (sum >> shift) + (u >> shift) + (v >> shift);
+
+                // propagate carry
+                for k in i+1..self.len() {
+                    let sum = <__limb2_t>::from(self[k]) + overflow;
+                    self[k] = sum as __limb_t;
+                    overflow = sum >> shift;
                 }
             }
         }
@@ -1247,7 +1325,7 @@ impl VType for [__limb_t] {
     fn vadd_i16(&mut self, a: &Self, b: i16) {
         let mut overflow = false;
         for i in 0..self.len() {
-            let (v, o1) = a[i].overflowing_add(
+            let res1 = a[i].overflowing_add(
                 if i == 0 {
                     b as __limb_t
                 } else if b < 0 {
@@ -1256,16 +1334,16 @@ impl VType for [__limb_t] {
                     0
                 }
             );
-            let (v, o2) = v.overflowing_add(__limb_t::from(overflow));
-            self[i] = v;
-            overflow = o1 || o2;
+            let res2 = res1.0.overflowing_add(__limb_t::from(overflow));
+            self[i] = res2.0;
+            overflow = res1.1 || res2.1;
         }
     }
 
     fn vsub_i16(&mut self, a: &Self, b: i16) {
         let mut overflow = false;
         for i in 0..self.len() {
-            let (v, o1) = a[i].overflowing_sub(
+            let res1 = a[i].overflowing_sub(
                 if i == 0 {
                     b as __limb_t
                 } else if b < 0 {
@@ -1274,33 +1352,74 @@ impl VType for [__limb_t] {
                     0
                 }
             );
-            let (v, o2) = v.overflowing_sub(__limb_t::from(overflow));
-            self[i] = v;
-            overflow = o1 || o2;
+            let res2 = res1.0.overflowing_sub(__limb_t::from(overflow));
+            self[i] = res2.0;
+            overflow = res1.1 || res2.1;
         }
     }
 
     fn vmul_i16(&mut self, a: &Self, b: i16) {
-        // simple long multiplication based on wikipedia
-        // https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication
-        self.vzero();
-        for i in 0..a.len() {
-            let mut overflow: __limb2_t = 0;
-            for j in 0..self.len() {
-                if i+j < self.len() {
-                    let v = <__limb2_t>::from(self[i+j])
-                        + (<__limb2_t>::from(a[i]) * <__limb2_t>::from(
-                            if j == 0 {
-                                b as __limb_t
-                            } else if b < 0 {
-                                __limb_t::MAX
-                            } else {
-                                0
-                            }
-                        ))
-                        + overflow;
-                    self[i+j] = v as __limb_t;
-                    overflow = v >> (8*__limb_size);
+        // Note this is the same as vmul, just modified to operate on an i16,
+        // see above for an explanation of this algorithm
+        let mask = <__limb2_t>::from(__limb_t::MAX);
+        let shift = 8*__limb_size;
+
+        for i in (0..self.len()).rev() {
+            for j in 0 .. (i+2)/2 {
+                // multiply inward 2 digits at a time to avoid overlap
+                let (u, v);
+                if i-j != j {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(
+                        if j == 0 {
+                            b as __limb_t
+                        } else if b < 0 {
+                            __limb_t::MAX
+                        } else {
+                            0
+                        }
+                    );
+                    let z = <__limb2_t>::from(
+                        if i-j == 0 {
+                            b as __limb_t
+                        } else if b < 0 {
+                            __limb_t::MAX
+                        } else {
+                            0
+                        }
+                    );
+                    let w = <__limb2_t>::from(a[j]);
+                    u = x*y;
+                    v = z*w;
+                } else {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(
+                        if j == 0 {
+                            b as __limb_t
+                        } else if b < 0 {
+                            __limb_t::MAX
+                        } else {
+                            0
+                        }
+                    );
+                    u = x*y;
+                    v = 0;
+                }
+
+                // sum, making sure not to overflow our wide-limb type
+
+                // if first access of digit, zero
+                let sum = if j == 0 { 0 } else { <__limb2_t>::from(self[i]) }
+                    + (u & mask)
+                    + (v & mask);
+                self[i] = sum as __limb_t;
+                let mut overflow = (sum >> shift) + (u >> shift) + (v >> shift);
+
+                // propagate carry
+                for k in i+1..self.len() {
+                    let sum = <__limb2_t>::from(self[k]) + overflow;
+                    self[k] = sum as __limb_t;
+                    overflow = sum >> shift;
                 }
             }
         }
@@ -1559,7 +1678,7 @@ thread_local! {
     static CYCLE_COUNT: Cell<u64> = Cell::new(0);
 }
 
-/// Simple non-constant crypto-VM for testing 
+/// Simple non-constant crypto-VM for testing
 ///
 /// NOTE! This is a quick simulated VM for testing and proof-of-concept!
 /// Not constant time!
@@ -1943,14 +2062,12 @@ pub fn exec<'a>(
 
             // mul
             0x33 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmul(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vmul(la, lb));
             }
 
             // mul_c
             0x34 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmul_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vmul_i16(la, c));
             }
 
             // and
