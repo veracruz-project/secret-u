@@ -1166,10 +1166,10 @@ impl VType for [__limb_t] {
         //
         // TODO does this need to use pointers to avoid aliases issues?
         //
-        let mask = <__limb2_t>::from(__limb_t::MAX);
-        let shift = 8*__limb_size;
-
         for i in (0..self.len()).rev() {
+            let mut sum: __limb2_t = 0;
+            let mut overflow: __limb_t = 0;
+
             for j in 0 .. (i+2)/2 {
                 // multiply inward 2 digits at a time to avoid overlap with
                 // either argument
@@ -1188,21 +1188,32 @@ impl VType for [__limb_t] {
                     v = 0;
                 }
 
-                // sum, making sure not to overflow our wide-limb type
+                // sum, making sure to catch overflow
+                //
+                // note there can be at most n multiplications for each digit,
+                // requiring at most log(n)-bits of overflow in addition to the
+                // overflow for each multiplication)
+                //
+                // since we are already limited to u16::MAX bytes, the maximum
+                // number of limbs we will ever multiply comfortably fits
+                // in __limb2_t
+                let res1 = sum.overflowing_add(u);
+                let res2 = res1.0.overflowing_add(v);
+                sum = res2.0;
+                overflow += <__limb_t>::from(res1.1) + <__limb_t>::from(res2.1);
+            }
 
-                // if first access of digit, zero
-                let sum = if j == 0 { 0 } else { <__limb2_t>::from(self[i]) }
-                    + (u & mask)
-                    + (v & mask);
-                self[i] = sum as __limb_t;
-                let mut overflow = (sum >> shift) + (u >> shift) + (v >> shift);
+            // store result
+            self[i] = sum as __limb_t;
+            let mut overflow
+                = (<__limb2_t>::from(overflow) << 8*__limb_size)
+                | (sum >> 8*__limb_size);
 
-                // propagate carry
-                for k in i+1..self.len() {
-                    let sum = <__limb2_t>::from(self[k]) + overflow;
-                    self[k] = sum as __limb_t;
-                    overflow = sum >> shift;
-                }
+            // propagate carry
+            for k in i+1..self.len() {
+                let sum = <__limb2_t>::from(self[k]) + overflow;
+                self[k] = sum as __limb_t;
+                overflow = sum >> 8*__limb_size;
             }
         }
     }
@@ -1361,12 +1372,13 @@ impl VType for [__limb_t] {
     fn vmul_i16(&mut self, a: &Self, b: i16) {
         // Note this is the same as vmul, just modified to operate on an i16,
         // see above for an explanation of this algorithm
-        let mask = <__limb2_t>::from(__limb_t::MAX);
-        let shift = 8*__limb_size;
-
         for i in (0..self.len()).rev() {
+            let mut sum: __limb2_t = 0;
+            let mut overflow: __limb_t = 0;
+
             for j in 0 .. (i+2)/2 {
-                // multiply inward 2 digits at a time to avoid overlap
+                // multiply inward 2 digits at a time to avoid overlap with
+                // either argument
                 let (u, v);
                 if i-j != j {
                     let x = <__limb2_t>::from(a[i-j]);
@@ -1406,21 +1418,32 @@ impl VType for [__limb_t] {
                     v = 0;
                 }
 
-                // sum, making sure not to overflow our wide-limb type
+                // sum, making sure to catch overflow
+                //
+                // note there can be at most n multiplications for each digit,
+                // requiring at most log(n)-bits of overflow (in addition to the
+                // overflow for each multiplication)
+                //
+                // since we are already limited to u16::MAX bytes, the maximum
+                // number of limbs we will ever multiply comfortably fits
+                // in __limb2_t
+                let res1 = sum.overflowing_add(u);
+                let res2 = res1.0.overflowing_add(v);
+                sum = res2.0;
+                overflow += <__limb_t>::from(res1.1) + <__limb_t>::from(res2.1);
+            }
 
-                // if first access of digit, zero
-                let sum = if j == 0 { 0 } else { <__limb2_t>::from(self[i]) }
-                    + (u & mask)
-                    + (v & mask);
-                self[i] = sum as __limb_t;
-                let mut overflow = (sum >> shift) + (u >> shift) + (v >> shift);
+            // store result
+            self[i] = sum as __limb_t;
+            let mut overflow
+                = (<__limb2_t>::from(overflow) << 8*__limb_size)
+                | (sum >> 8*__limb_size);
 
-                // propagate carry
-                for k in i+1..self.len() {
-                    let sum = <__limb2_t>::from(self[k]) + overflow;
-                    self[k] = sum as __limb_t;
-                    overflow = sum >> shift;
-                }
+            // propagate carry
+            for k in i+1..self.len() {
+                let sum = <__limb2_t>::from(self[k]) + overflow;
+                self[k] = sum as __limb_t;
+                overflow = sum >> 8*__limb_size;
             }
         }
     }
