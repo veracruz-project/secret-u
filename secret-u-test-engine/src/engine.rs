@@ -58,46 +58,18 @@ trait VType {
     fn vfrom_i32(&mut self, a: i32);
     fn vfrom_i16(&mut self, a: i16);
 
-    unsafe fn vas<T>(a: &T) -> &Self
-    where
-        T: VType + ?Sized
-    {
-        Self::vref(a.vraw_bytes())
-    }
-
-    unsafe fn vas_mut<T>(a: &mut T) -> &mut Self
-    where
-        T: VType + ?Sized
-    {
-        Self::vref_mut(a.vraw_bytes_mut())
-    }
-
-    // little-endian byte access
-    fn vget_byte(&self, i: usize) -> Option<&u8>;
-    fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8>;
-
-    fn vbyte(&self, i: usize) -> &u8 {
-        self.vget_byte(i).unwrap()
-    }
-
-    fn vbyte_mut(&mut self, i: usize) -> &mut u8 {
-        self.vget_byte_mut(i).unwrap()
-    }
-
     // to/from little-endian
     fn vfrom_le(&mut self, a: &Self);
     fn vto_le(&mut self, a: &Self);
 
-    fn vfrom_le_bytes(&mut self, a: &[u8]) {
-        for i in 0..self.vsize() {
-            *self.vbyte_mut(i) = a[i];
-        }
+    fn vfrom_le_inplace(&mut self) {
+        let self_const = unsafe { &*(self as *mut Self) };
+        self.vfrom_le(self_const);
     }
 
-    fn vto_le_bytes(d: &mut [u8], a: &Self) {
-        for i in 0..d.len() {
-            d[i] = *a.vbyte(i);
-        }
+    fn vto_le_inplace(&mut self) {
+        let self_const = unsafe { &*(self as *mut Self) };
+        self.vto_le(self_const);
     }
 
     // extract/replace
@@ -105,10 +77,27 @@ trait VType {
     where
         T: VType + ?Sized
     {
-        if i*self.vsize() < a.vsize() {
-            for j in 0..self.vsize() {
-                *self.vbyte_mut(j) = *a.vbyte(i*self.vsize() + j);
+        let from_size = a.vsize();
+        let to_size = self.vsize();
+        if i*to_size < from_size {
+            // Horrible hack that assumes a references a mutable array, don't worry
+            // we put things back how they were before
+            //
+            // This is necessary in order to work on both le/be systems while allowing
+            // overlapping arg/dest
+            //
+            let a = unsafe { &mut *(a as *const T as *mut T) };
+            a.vto_le_inplace();
+            let from_bytes = a.vraw_bytes();
+            let to_bytes = self.vraw_bytes_mut();
+
+            to_bytes.copy_from_slice(&from_bytes[i*to_size..(i+1)*to_size]);
+
+            if !from_bytes.as_ptr_range().contains(&to_bytes.as_ptr()) {
+                a.vfrom_le_inplace();
             }
+            self.vfrom_le_inplace();
+
             true
         } else {
             false
@@ -119,10 +108,27 @@ trait VType {
     where
         T: VType + ?Sized
     {
-        if i*a.vsize() < self.vsize() {
-            for j in 0..a.vsize() {
-                *self.vbyte_mut(i*a.vsize() + j) = *a.vbyte(j);
+        let from_size = a.vsize();
+        let to_size = self.vsize();
+        if i*from_size < to_size {
+            // Horrible hack that assumes a references a mutable array, don't worry
+            // we put things back how they were before
+            //
+            // This is necessary in order to work on both le/be systems while allowing
+            // overlapping arg/dest
+            //
+            let a = unsafe { &mut *(a as *const T as *mut T) };
+            a.vto_le_inplace();
+            let from_bytes = a.vraw_bytes();
+            let to_bytes = self.vraw_bytes_mut();
+
+            to_bytes[i*from_size..(i+1)*from_size].copy_from_slice(from_bytes);
+
+            if !to_bytes.as_ptr_range().contains(&from_bytes.as_ptr()) {
+                a.vfrom_le_inplace();
             }
+            self.vfrom_le_inplace();
+
             true
         } else {
             false
@@ -137,13 +143,22 @@ trait VType {
         let from_lane_size = a.vsize() >> lnpw2;
         let to_lane_size = self.vsize() >> lnpw2;
 
-        self.vzero();
+        // first copy a to low-part of d so we can be sure overlap
+        // is handled correctly
+        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vcopy(a);
+        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vto_le_inplace();
+        let bytes = self.vraw_bytes_mut();
 
-        for i in 0 .. 1 << lnpw2 {
-            for j in 0..from_lane_size {
-                *self.vbyte_mut(i*to_lane_size+j) = *a.vbyte(i*from_lane_size+j);
-            }
+        for i in (0 .. 1 << lnpw2).rev() {
+            bytes.copy_within(
+                i*from_lane_size .. (i+1)*from_lane_size,
+                i*to_lane_size
+            );
+            bytes[i*to_lane_size+from_lane_size .. (i+1)*to_lane_size]
+                .fill(0x00);
         }
+
+        self.vfrom_le_inplace();
     }
 
     fn vextend_s<T>(&mut self, a: &T, lnpw2: u8)
@@ -153,20 +168,24 @@ trait VType {
         let from_lane_size = a.vsize() >> lnpw2;
         let to_lane_size = self.vsize() >> lnpw2;
 
-        for i in 0 .. 1 << lnpw2 {
-            for j in 0..from_lane_size {
-                *self.vbyte_mut(i*to_lane_size+j) = *a.vbyte(i*from_lane_size+j);
-            }
+        // first copy a to low-part of d so we can be sure overlap
+        // is handled correctly
+        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vcopy(a);
+        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vto_le_inplace();
+        let bytes = self.vraw_bytes_mut();
 
-            let sign = if a.vbyte(i*from_lane_size+from_lane_size-1) & 0x80 == 0x80 {
-                0xff
-            } else {
-                0x00
-            };
-            for j in from_lane_size..to_lane_size {
-                *self.vbyte_mut(i*to_lane_size+j) = sign;
-            }
+        for i in (0 .. 1 << lnpw2).rev() {
+            bytes.copy_within(
+                i*from_lane_size .. (i+1)*from_lane_size,
+                i*to_lane_size
+            );
+            let sign = if bytes[i*to_lane_size+from_lane_size-1]
+                & 0x80 == 0x80 { 0xff } else { 0x00 };
+            bytes[i*to_lane_size+from_lane_size .. (i+1)*to_lane_size]
+                .fill(sign);
         }
+
+        self.vfrom_le_inplace();
     }
 
     fn vtruncate<T>(&mut self, a: &T, lnpw2: u8)
@@ -176,21 +195,40 @@ trait VType {
         let from_lane_size = a.vsize() >> lnpw2;
         let to_lane_size = self.vsize() >> lnpw2;
 
+        // Horrible hack that assumes a references a mutable array, don't worry
+        // we put things back how they were before
+        //
+        // This is necessary in order to work on both le/be systems while allowing
+        // overlapping arg/dest
+        //
+        let a = unsafe { &mut *(a as *const T as *mut T) };
+        a.vto_le_inplace();
+        let from_bytes = a.vraw_bytes();
+        let to_bytes = self.vraw_bytes_mut();
+
         for i in 0 .. 1 << lnpw2 {
-            for j in 0..to_lane_size {
-                *self.vbyte_mut(i*to_lane_size+j) = *a.vbyte(i*from_lane_size+j);
-            }
+            to_bytes[i*to_lane_size .. (i+1)*to_lane_size]
+                .copy_from_slice(&from_bytes[i*from_lane_size .. i*from_lane_size+to_lane_size]);
         }
+
+        if !from_bytes.as_ptr_range().contains(&to_bytes.as_ptr()) {
+            a.vfrom_le_inplace();
+        }
+        self.vfrom_le_inplace();
     }
 
     fn vsplat<T>(&mut self, a: &T)
     where
         T: VType + ?Sized
     {
-        for i in 0 .. self.vsize()/a.vsize() {
-            for j in 0..a.vsize() {
-                *self.vbyte_mut(i*a.vsize() + j) = *a.vbyte(j);
-            }
+        let from_size = a.vsize();
+        let to_size = self.vsize();
+        let from_bytes = a.vraw_bytes();
+        let to_bytes = self.vraw_bytes_mut();
+
+        for i in (0..to_size).step_by(from_size) {
+            to_bytes[i..i+from_size]
+                .copy_from_slice(from_bytes);
         }
     }
 
@@ -416,26 +454,6 @@ engine_for_short_t! {
 
         fn vtry_to_u32(&self) -> Option<u32> {
             u32::try_from(*self).ok()
-        }
-
-        #[cfg(target_endian="little")]
-        fn vget_byte(&self, i: usize) -> Option<&u8> {
-            self.vraw_bytes().get(i)
-        }
-
-        #[cfg(target_endian="big")]
-        fn vget_byte(&self, i: usize) -> Option<&u8> {
-            self.vraw_bytes().get(self.vsize()-1 - i)
-        }
-
-        #[cfg(target_endian="little")]
-        fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8> {
-            self.vraw_bytes_mut().get_mut(i)
-        }
-
-        #[cfg(target_endian="big")]
-        fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8> {
-            self.vraw_bytes_mut().get_mut(self.vsize()-1 - i)
         }
 
         fn vfrom_le(&mut self, a: &Self) {
@@ -777,14 +795,6 @@ impl VType for [__limb_t] {
 
     fn vfrom_i16(&mut self, a: i16) {
         self.vfrom_i32(a as i32);
-    }
-
-    fn vget_byte(&self, i: usize) -> Option<&u8> {
-        self.get(i / __limb_size).and_then(|x| x.vget_byte(i % __limb_size))
-    }
-
-    fn vget_byte_mut(&mut self, i: usize) -> Option<&mut u8> {
-        self.get_mut(i / __limb_size).and_then(|x| x.vget_byte_mut(i % __limb_size))
     }
 
     fn vfrom_le(&mut self, a: &Self) {
@@ -1248,7 +1258,7 @@ impl VType for [__limb_t] {
         let sh_lo = b % width;
         let sh_hi = (b / width) as usize;
 
-        for i in 0..self.len() {
+        for i in (0..self.len()).rev() {
             self[i]
                 = (i.checked_sub(sh_hi)
                     .and_then(|j| a.get(j))
@@ -1309,11 +1319,17 @@ impl VType for [__limb_t] {
         let sh_lo = b % width;
         let sh_hi = (b / width) as usize;
 
-        for i in 0..self.len() {
+        // in-place rotate is complicated, let rust take care of the worst part
+        // this could be done a bit more efficiently, but as I said it would be
+        // complicated...
+        self.vcopy(a);
+        self.rotate_right(sh_hi);
+
+        let limb0 = self[self.len()-1];
+        for i in (0..self.len()).rev() {
             self[i]
-                = (a[i.wrapping_sub(sh_hi  ) % a.len()]
-                    << sh_lo)
-                | (a[i.wrapping_sub(sh_hi+1) % a.len()]
+                = (self[i] << sh_lo)
+                | (self.get(i.wrapping_sub(1)).unwrap_or(&limb0)
                     .checked_shr(width - sh_lo).unwrap_or(0));
         }
     }
@@ -1324,11 +1340,17 @@ impl VType for [__limb_t] {
         let sh_lo = b % width;
         let sh_hi = (b / width) as usize;
 
+        // in-place rotate is complicated, let rust take care of the worst part
+        // this could be done a bit more efficiently, but as I said it would be
+        // complicated...
+        self.vcopy(a);
+        self.rotate_left(sh_hi);
+
+        let limb0 = self[0];
         for i in 0..self.len() {
             self[i]
-                = (a[i.wrapping_add(sh_hi) % a.len()]
-                    >> sh_lo)
-                | (a[i.wrapping_add(sh_hi+1) % a.len()]
+                = (self[i] >> sh_lo)
+                | (self.get(i.wrapping_add(1)).unwrap_or(&limb0)
                     .checked_shl(width - sh_lo).unwrap_or(0));
         }
     }
@@ -1502,7 +1524,7 @@ impl VType for [__limb_t] {
         let sh_lo = b % width;
         let sh_hi = (b / width) as usize;
 
-        for i in 0..self.len() {
+        for i in (0..self.len()).rev() {
             self[i]
                 = (i.checked_sub(sh_hi)
                     .and_then(|j| a.get(j))
@@ -1563,11 +1585,17 @@ impl VType for [__limb_t] {
         let sh_lo = b % width;
         let sh_hi = (b / width) as usize;
 
-        for i in 0..self.len() {
+        // in-place rotate is complicated, let rust take care of the worst part
+        // this could be done a bit more efficiently, but as I said it would be
+        // complicated...
+        self.vcopy(a);
+        self.rotate_right(sh_hi);
+
+        let limb0 = self[self.len()-1];
+        for i in (0..self.len()).rev() {
             self[i]
-                = (a[i.wrapping_sub(sh_hi  ) % a.len()]
-                    << sh_lo)
-                | (a[i.wrapping_sub(sh_hi+1) % a.len()]
+                = (self[i] << sh_lo)
+                | (self.get(i.wrapping_sub(1)).unwrap_or(&limb0)
                     .checked_shr(width - sh_lo).unwrap_or(0));
         }
     }
@@ -1578,11 +1606,17 @@ impl VType for [__limb_t] {
         let sh_lo = b % width;
         let sh_hi = (b / width) as usize;
 
+        // in-place rotate is complicated, let rust take care of the worst part
+        // this could be done a bit more efficiently, but as I said it would be
+        // complicated...
+        self.vcopy(a);
+        self.rotate_left(sh_hi);
+
+        let limb0 = self[0];
         for i in 0..self.len() {
             self[i]
-                = (a[i.wrapping_add(sh_hi) % a.len()]
-                    >> sh_lo)
-                | (a[i.wrapping_add(sh_hi+1) % a.len()]
+                = (self[i] >> sh_lo)
+                | (self.get(i.wrapping_add(1)).unwrap_or(&limb0)
                     .checked_shl(width - sh_lo).unwrap_or(0));
         }
     }
@@ -1779,20 +1813,17 @@ pub fn exec<'a>(
 
             // extend_u
             0x03 => {
-                __rx.vextend_u(__la, b as u8);
-                __rd.vcopy(__rx);
+                __rd.vextend_u(__la, b as u8);
             }
 
             // extend_s
             0x04 => {
-                __rx.vextend_s(__la, b as u8);
-                __rd.vcopy(__rx);
+                __rd.vextend_s(__la, b as u8);
             }
 
             // truncate
             0x05 => {
-                __lx.vtruncate(__ra, b as u8);
-                __ld.vcopy(__lx);
+                __ld.vtruncate(__ra, b as u8);
             }
 
             // splat
@@ -1833,7 +1864,7 @@ pub fn exec<'a>(
                 bytes[8*words..].fill(sign);
 
                 // splat
-                __rd_0.vfrom_le_bytes(bytes);
+                __rd_0.vfrom_le(__rd_0);
                 __rd.vsplat(__rd_0);
             }
 
@@ -2135,62 +2166,52 @@ pub fn exec<'a>(
 
             // shl
             0x3d => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshl(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshl(la, lb));
             }
 
             // shl_c
             0x3e => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshl_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshl_i16(la, c));
             }
 
             // shr_u
             0x3f => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_u(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_u(la, lb));
             }
 
             // shr_u_c
             0x40 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_u_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_u_i16(la, c));
             }
 
             // shr_s
             0x41 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_s(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_s(la, lb));
             }
 
             // shr_s_c
             0x42 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_s_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_s_i16(la, c));
             }
 
             // rotl
             0x43 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotl(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotl(la, lb));
             }
 
             // rotl_c
             0x44 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotl_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotl_i16(la, c));
             }
 
             // rotr
             0x45 => {
-                __rx.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotr(la, lb));
-                __rd.vcopy(__rx);
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotr(la, lb));
             }
 
             // rotr_c
             0x46 => {
-                __rx.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotr_i16(la, c));
-                __rd.vcopy(__rx);
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotr_i16(la, c));
             }
         }
     };
