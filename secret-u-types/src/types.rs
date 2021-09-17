@@ -53,12 +53,14 @@ enum DeferredTree {
 }
 
 impl From<bool> for SecretBool {
+    #[inline]
     fn from(v: bool) -> SecretBool {
         Self::classify(v)
     }
 }
 
 impl Default for SecretBool {
+    #[inline]
     fn default() -> Self {
         Self::const_(false)
     }
@@ -68,6 +70,7 @@ impl SecretBool {
     pub const SIZE: usize = 1;
 
     /// Wraps a non-secret value as a secret value
+    #[inline]
     pub fn classify(v: bool) -> SecretBool {
         Self::from_tree(OpTree::<U8>::imm(if v { 0xffu8 } else { 0x00u8 }))
     }
@@ -75,43 +78,51 @@ impl SecretBool {
     /// Extracts the secret value into a non-secret value, this
     /// effectively "leaks" the secret value, but is necessary
     /// to actually do anything
+    #[inline]
     pub fn declassify(&self) -> bool {
         self.try_declassify().unwrap()
     }
 
     /// Same as declassify but propagating internal VM errors
+    #[inline]
     pub fn try_declassify(&self) -> Result<bool, Error> {
         Ok(self.resolve::<U8>().try_eval()?.result::<u8>() != 0)
     }
 
     /// Wraps a non-secret value as a secret value
+    #[inline]
     pub fn new(v: bool) -> SecretBool {
         Self::classify(v)
     }
 
     /// Create a non-secret constant value, these are available for
     /// more optimizations than secret values
+    #[inline]
     pub fn const_(v: bool) -> SecretBool {
         Self::from_tree(if v { OpTree::<U8>::ones() } else { OpTree::<U8>::zero() })
     }
 
     /// A constant, non-secret false
+    #[inline]
     pub fn false_() -> Self {
         Self::from_tree(OpTree::zero())
     }
 
     /// A constant, non-secret true
+    #[inline]
     pub fn true_() -> Self {
         Self::from_tree(OpTree::ones())
     }
 
     /// Create a deferred SecretBool, the actual type will resolved until
     /// needed to avoid unecessary truncates/extends
+    #[inline]
     fn defer(tree: Rc<dyn DynOpTree>) -> Self {
         Self(DeferredTree::Deferred(tree))
     }
 
     /// Force into deferred SecretBool
+    #[inline]
     fn deferred<'a>(&'a self) -> &'a dyn DynOpTree {
         match &self.0 {
             DeferredTree::Resolved(tree) => tree,
@@ -120,11 +131,13 @@ impl SecretBool {
     }
 
     /// Reduce a deferred SecretBool down into a U8 if necessary
+    #[inline]
     fn resolve<'a, U: OpU>(&'a self) -> Cow<'a, OpTree<U>> {
         OpTree::dyn_cast_s(self.deferred())
     }
 
     /// Select operation for constant-time conditionals
+    #[inline]
     pub fn select<T>(self, a: T, b: T) -> T
     where
         T: Select<SecretBool>
@@ -134,6 +147,7 @@ impl SecretBool {
 }
 
 impl Eval for SecretBool {
+    #[inline]
     fn try_eval(&self) -> Result<Self, Error> {
         let tree = self.resolve::<U8>();
         Ok(Self::from_tree(tree.try_eval()?))
@@ -143,10 +157,12 @@ impl Eval for SecretBool {
 impl Tree for SecretBool {
     type Tree = OpTree<U8>;
 
+    #[inline]
     fn from_tree(tree: OpTree<U8>) -> Self {
         Self(DeferredTree::Resolved(tree))
     }
 
+    #[inline]
     fn tree(&self) -> Cow<'_, OpTree<U8>> {
         self.resolve::<U8>()
     }
@@ -154,6 +170,7 @@ impl Tree for SecretBool {
 
 impl Not for SecretBool {
     type Output = SecretBool;
+    #[inline]
     fn not(self) -> SecretBool {
         match self.0 {
             DeferredTree::Resolved(tree) => Self::from_tree(OpTree::not(tree)),
@@ -164,12 +181,14 @@ impl Not for SecretBool {
 
 impl BitAnd for SecretBool {
     type Output = SecretBool;
+    #[inline]
     fn bitand(self, other: SecretBool) -> SecretBool {
         Self::defer(self.deferred().dyn_and(other.deferred()))
     }
 }
 
 impl BitAndAssign for SecretBool {
+    #[inline]
     fn bitand_assign(&mut self, other: SecretBool) {
         *self = self.clone().bitand(other)
     }
@@ -177,12 +196,14 @@ impl BitAndAssign for SecretBool {
 
 impl BitOr for SecretBool {
     type Output = SecretBool;
+    #[inline]
     fn bitor(self, other: SecretBool) -> SecretBool {
         Self::defer(self.deferred().dyn_or(other.deferred()))
     }
 }
 
 impl BitOrAssign for SecretBool {
+    #[inline]
     fn bitor_assign(&mut self, other: SecretBool) {
         *self = self.clone().bitor(other)
     }
@@ -190,12 +211,14 @@ impl BitOrAssign for SecretBool {
 
 impl BitXor for SecretBool {
     type Output = SecretBool;
+    #[inline]
     fn bitxor(self, other: SecretBool) -> SecretBool {
         Self::defer(self.deferred().dyn_xor(other.deferred()))
     }
 }
 
 impl BitXorAssign for SecretBool {
+    #[inline]
     fn bitxor_assign(&mut self, other: SecretBool) {
         *self = self.clone().bitxor(other)
     }
@@ -204,10 +227,12 @@ impl BitXorAssign for SecretBool {
 impl Eq for SecretBool {
     type Output = SecretBool;
 
+    #[inline]
     fn eq(self, other: Self) -> SecretBool {
         !(self ^ other)
     }
 
+    #[inline]
     fn ne(self, other: Self) -> SecretBool {
         self ^ other
     }
@@ -216,32 +241,39 @@ impl Eq for SecretBool {
 impl Ord for SecretBool {
     type Output = SecretBool;
 
+    #[inline]
     fn lt(self, other: Self) -> SecretBool {
         !self & other
     }
 
+    #[inline]
     fn le(self, other: Self) -> SecretBool {
         !self | other
     }
 
+    #[inline]
     fn gt(self, other: Self) -> SecretBool {
         self & !other
     }
 
+    #[inline]
     fn ge(self, other: Self) -> SecretBool {
         self | !other
     }
 
+    #[inline]
     fn min(self, other: Self) -> Self {
         self & other
     }
 
+    #[inline]
     fn max(self, other: Self) -> Self {
         self | other
     }
 }
 
 impl Select<SecretBool> for SecretBool {
+    #[inline]
     fn select(p: SecretBool, a: Self, b: Self) -> Self {
         Self::from_tree(OpTree::select(0,
             p.resolve::<U8>().into_owned(),
@@ -265,6 +297,7 @@ for_secret_t! {
 
         __if(__has_prim) {
             impl From<__prim_t> for __secret_t {
+                #[inline]
                 fn from(v: __prim_t) -> __secret_t {
                     Self::classify(v)
                 }
@@ -272,6 +305,7 @@ for_secret_t! {
         }
 
         impl Default for __secret_t {
+            #[inline]
             fn default() -> Self {
                 Self::zero()
             }
@@ -281,6 +315,7 @@ for_secret_t! {
             pub const SIZE: usize = __size;
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn classify_le_bytes(v: [u8; __size]) -> Self {
                 Self(OpTree::imm(v))
             }
@@ -288,28 +323,33 @@ for_secret_t! {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
+            #[inline]
             pub fn declassify_le_bytes(&self) -> [u8; __size] {
                 self.try_declassify_le_bytes().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
+            #[inline]
             pub fn try_declassify_le_bytes(&self) -> Result<[u8; __size], Error> {
                 Ok(self.try_eval()?.0.result())
             }
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn from_le_bytes(v: [u8; __size]) -> Self {
                 Self::classify_le_bytes(v)
             }
 
             /// Create a non-secret constant value, these are available
             /// for more optimizations than secret values
+            #[inline]
             pub fn const_le_bytes(v: [u8; __size]) -> Self {
                 Self(OpTree::const_(v))
             }
 
             __if(__has_prim) {
                 /// Wraps a non-secret value as a secret value
+                #[inline]
                 pub fn classify(v: __prim_t) -> Self {
                     Self(OpTree::imm(v.to_le_bytes()))
                 }
@@ -317,80 +357,96 @@ for_secret_t! {
                 /// Extracts the secret value into a non-secret value, this
                 /// effectively "leaks" the secret value, but is necessary
                 /// to actually do anything
+                #[inline]
                 pub fn declassify(&self) -> __prim_t {
                     self.try_declassify().unwrap()
                 }
 
                 /// Same as declassify but propagating internal VM errors
+                #[inline]
                 pub fn try_declassify(&self) -> Result<__prim_t, Error> {
                     Ok(self.try_eval()?.0.result())
                 }
 
                 /// Wraps a non-secret value as a secret value
+                #[inline]
                 pub fn new(v: __prim_t) -> Self {
                     Self::classify(v)
                 }
 
                 /// Create a non-secret constant value, these are available
                 /// for more optimizations than secret values
+                #[inline]
                 pub fn const_(v: __prim_t) -> Self {
                     Self::const_le_bytes(v.to_le_bytes())
                 }
             }
 
             /// A constant, non-secret 0
+            #[inline]
             pub fn zero() -> Self {
                 Self(OpTree::zero())
             }
 
             /// A constant, non-secret 1
+            #[inline]
             pub fn one() -> Self {
                 Self(OpTree::one())
             }
 
             /// A constant with all bits set to 1, non-secret
+            #[inline]
             pub fn ones() -> Self {
                 Self(OpTree::ones())
             }
 
             // abs only available on signed types
             __if(__t == "i") {
+                #[inline]
                 pub fn abs(self) -> Self {
                     Self(OpTree::abs(0, self.0))
                 }
             }
 
             // other non-trait operations
+            #[inline]
             pub fn trailing_zeros(self) -> __secret_t {
                 Self(OpTree::ctz(0, self.0))
             }
 
+            #[inline]
             pub fn trailing_ones(self) -> __secret_t {
                 (!self).trailing_zeros()
             }
 
+            #[inline]
             pub fn leading_zeros(self) -> __secret_t {
                 Self(OpTree::clz(0, self.0))
             }
 
+            #[inline]
             pub fn leading_ones(self) -> __secret_t {
                 (!self).leading_zeros()
             }
 
+            #[inline]
             pub fn count_zeros(self) -> __secret_t {
                 (!self).count_ones()
             }
 
+            #[inline]
             pub fn count_ones(self) -> __secret_t {
                 Self(OpTree::popcnt(0, self.0))
             }
 
             // ipw2/npw2 only available on unsigned types
             __if(__t == "u") {
+                #[inline]
                 pub fn is_power_of_two(self) -> SecretBool {
                     self.count_ones().eq(Self::one())
                 }
 
+                #[inline]
                 pub fn next_power_of_two(self) -> __secret_t {
                     // based on implementation in rust core
                     self.clone().le(Self::one()).select(
@@ -402,14 +458,17 @@ for_secret_t! {
                 }
             }
 
+            #[inline]
             pub fn rotate_left(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::rotl(0, self.0, other.0))
             }
 
+            #[inline]
             pub fn rotate_right(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::rotr(0, self.0, other.0))
             }
 
+            #[inline]
             pub fn reverse_bits(mut self) -> __secret_t {
                 // reverse bytes
                 if __size > 1 {
@@ -438,6 +497,7 @@ for_secret_t! {
                 self
             }
 
+            #[inline]
             pub fn reverse_bytes(self) -> __secret_t {
                 let mut bytes = [0xff; __size];
                 for i in 0..__size {
@@ -455,6 +515,7 @@ for_secret_t! {
         }
 
         impl Eval for __secret_t {
+            #[inline]
             fn try_eval(&self) -> Result<Self, Error> {
                 Ok(Self::from_tree(self.tree().try_eval()?))
             }
@@ -463,10 +524,12 @@ for_secret_t! {
         impl Tree for __secret_t {
             type Tree = OpTree<__U>;
 
+            #[inline]
             fn from_tree(tree: OpTree<__U>) -> Self {
                 Self(tree)
             }
 
+            #[inline]
             fn tree<'a>(&'a self) -> Cow<'a, OpTree<__U>> {
                 Cow::Borrowed(&self.0)
             }
@@ -474,6 +537,7 @@ for_secret_t! {
 
         impl Not for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn not(self) -> __secret_t {
                 Self(OpTree::not(self.0))
             }
@@ -481,12 +545,14 @@ for_secret_t! {
 
         impl BitAnd for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitand(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::and(self.0, other.0))
             }
         }
 
         impl BitAndAssign for __secret_t {
+            #[inline]
             fn bitand_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitand(other)
             }
@@ -494,12 +560,14 @@ for_secret_t! {
 
         impl BitOr for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitor(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::or(self.0, other.0))
             }
         }
 
         impl BitOrAssign for __secret_t {
+            #[inline]
             fn bitor_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitor(other)
             }
@@ -507,12 +575,14 @@ for_secret_t! {
 
         impl BitXor for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitxor(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::xor(self.0, other.0))
             }
         }
 
         impl BitXorAssign for __secret_t {
+            #[inline]
             fn bitxor_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitxor(other)
             }
@@ -522,6 +592,7 @@ for_secret_t! {
         __if(__t == "i") {
             impl Neg for __secret_t {
                 type Output = __secret_t;
+                #[inline]
                 fn neg(self) -> __secret_t {
                     Self(OpTree::neg(0, self.0))
                 }
@@ -530,12 +601,14 @@ for_secret_t! {
 
         impl Add for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn add(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::add(0, self.0, other.0))
             }
         }
 
         impl AddAssign for __secret_t {
+            #[inline]
             fn add_assign(&mut self, other: __secret_t) {
                 *self = self.clone().add(other)
             }
@@ -543,12 +616,14 @@ for_secret_t! {
 
         impl Sub for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn sub(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::sub(0, self.0, other.0))
             }
         }
 
         impl SubAssign for __secret_t {
+            #[inline]
             fn sub_assign(&mut self, other: __secret_t) {
                 *self = self.clone().sub(other)
             }
@@ -556,12 +631,14 @@ for_secret_t! {
 
         impl Mul for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn mul(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::mul(0, self.0, other.0))
             }
         }
 
         impl MulAssign for __secret_t {
+            #[inline]
             fn mul_assign(&mut self, other: __secret_t) {
                 *self = self.clone().mul(other)
             }
@@ -569,12 +646,14 @@ for_secret_t! {
 
         impl Shl for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn shl(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::shl(0, self.0, other.0))
             }
         }
 
         impl ShlAssign for __secret_t {
+            #[inline]
             fn shl_assign(&mut self, other: __secret_t) {
                 *self = self.clone().shl(other)
             }
@@ -582,6 +661,7 @@ for_secret_t! {
 
         impl Shr for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn shr(self, other: __secret_t) -> __secret_t {
                 __if(__t == "u") {
                     Self(OpTree::shr_u(0, self.0, other.0))
@@ -593,6 +673,7 @@ for_secret_t! {
         }
 
         impl ShrAssign for __secret_t {
+            #[inline]
             fn shr_assign(&mut self, other: __secret_t) {
                 *self = self.clone().shr(other)
             }
@@ -601,10 +682,12 @@ for_secret_t! {
         impl Eq for __secret_t {
             type Output = SecretBool;
 
+            #[inline]
             fn eq(self, other: Self) -> SecretBool {
                 SecretBool::defer(Rc::new(OpTree::eq(0, self.0, other.0)))
             }
 
+            #[inline]
             fn ne(self, other: Self) -> SecretBool {
                 SecretBool::defer(Rc::new(OpTree::ne(0, self.0, other.0)))
             }
@@ -614,51 +697,63 @@ for_secret_t! {
             type Output = SecretBool;
 
             __if(__t == "u") {
+                #[inline]
                 fn lt(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::lt_u(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn le(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::le_u(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn gt(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::gt_u(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn ge(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::ge_u(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn min(self, other: Self) -> Self {
                     Self(OpTree::min_u(0, self.0, other.0))
                 }
 
+                #[inline]
                 fn max(self, other: Self) -> Self {
                     Self(OpTree::max_u(0, self.0, other.0))
                 }
             }
             __if(__t == "i") {
+                #[inline]
                 fn lt(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::lt_s(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn le(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::le_s(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn gt(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::gt_s(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn ge(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::ge_s(0, self.0, other.0)))
                 }
 
+                #[inline]
                 fn min(self, other: Self) -> Self {
                     Self(OpTree::min_s(0, self.0, other.0))
                 }
 
+                #[inline]
                 fn max(self, other: Self) -> Self {
                     Self(OpTree::max_s(0, self.0, other.0))
                 }
@@ -666,6 +761,7 @@ for_secret_t! {
         }
 
         impl Select<SecretBool> for __secret_t {
+            #[inline]
             fn select(p: SecretBool, a: Self, b: Self) -> Self {
                 Self(OpTree::select(0,
                     p.resolve().into_owned(),
@@ -695,6 +791,7 @@ for_secret_t! {
         pub struct __secret_t(OpTree<__U>);
 
         impl Default for __secret_t {
+            #[inline]
             fn default() -> Self {
                 Self::const_splat(false)
             }
@@ -705,6 +802,7 @@ for_secret_t! {
             pub const LANES: usize = __lanes;
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn classify_lanes(lanes: [bool; __lanes]) -> Self {
                 let mut bytes = [0; __size];
                 for (i, lane) in lanes.iter().enumerate() {
@@ -723,11 +821,13 @@ for_secret_t! {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
+            #[inline]
             pub fn declassify_lanes(&self) -> [bool; __lanes] {
                 self.try_declassify_lanes().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
+            #[inline]
             pub fn try_declassify_lanes(&self) -> Result<[bool; __lanes], Error> {
                 let bytes: [u8; __size] = self.try_eval()?.0.result();
                 let mut lanes = [false; __lanes];
@@ -742,11 +842,13 @@ for_secret_t! {
             }
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn new_lanes(lanes: [bool; __lanes]) -> Self {
                 Self::classify_lanes(lanes)
             }
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn const_lanes(lanes: [bool; __lanes]) -> Self {
                 let mut bytes = [0; __size];
                 for (i, lane) in lanes.iter().enumerate() {
@@ -763,17 +865,20 @@ for_secret_t! {
             }
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn new_splat(v: bool) -> Self {
                 Self(OpTree::imm(<__U>::splat(if v { <__U>::ones() } else { <__U>::zero() })))
             }
 
             /// Create a non-secret constant value, these are available
             /// for more optimizations than secret values
+            #[inline]
             pub fn const_splat(v: bool) -> Self {
                 Self(OpTree::const_(<__U>::splat(if v { <__U>::ones() } else { <__U>::zero() })))
             }
 
             /// Build from lanes
+            #[inline]
             pub fn from_lanes(lanes: [SecretBool; __lanes]) -> Self {
                 // into iter here to avoid cloning
                 let mut lanes = IntoIterator::into_iter(lanes);
@@ -785,6 +890,7 @@ for_secret_t! {
             }
 
             /// Extract all lanes
+            #[inline]
             pub fn to_lanes(self) -> [SecretBool; __lanes] {
                 let mut lanes: [MaybeUninit<SecretBool>; __lanes]
                     = unsafe { MaybeUninit::uninit().assume_init() };
@@ -795,11 +901,13 @@ for_secret_t! {
             }
 
             /// Splat a given value to all lanes
+            #[inline]
             pub fn splat(value: SecretBool) -> Self {
                 Self(OpTree::splat(value.resolve::<__lane_U>().into_owned()))
             }
 
             /// Extract a specific lane
+            #[inline]
             pub fn extract(self, lane: usize) -> SecretBool {
                 assert!(lane < __lanes);
                 SecretBool::defer(Rc::new(OpTree::<__lane_U>::extract(
@@ -808,6 +916,7 @@ for_secret_t! {
             }
 
             /// Replace a specific lane
+            #[inline]
             pub fn replace(self, lane: usize, value: SecretBool) -> Self {
                 assert!(lane < __lanes);
                 Self(OpTree::replace::<__lane_U>(
@@ -816,6 +925,7 @@ for_secret_t! {
             }
 
             /// Reverse lanes
+            #[inline]
             pub fn reverse_lanes(self) -> Self {
                 let mut lanes = [0xff; __size];
                 for i in 0..__lanes {
@@ -830,11 +940,13 @@ for_secret_t! {
             }
 
             /// A constant, non-secret false in each lane
+            #[inline]
             pub fn false_() -> Self {
                 Self(OpTree::zero())
             }
 
             /// A constant, non-secret true in each lane
+            #[inline]
             pub fn true_() -> Self {
                 Self(OpTree::ones())
             }
@@ -842,6 +954,7 @@ for_secret_t! {
             /// Apply an operation horizontally, reducing the input to a single lane
             ///
             /// Note that this runs in log2(number of lanes)
+            #[inline]
             pub fn reduce<F>(mut self, f: F) -> SecretBool
             where
                 F: Fn(Self, Self) -> Self
@@ -874,21 +987,25 @@ for_secret_t! {
 
 
             /// Find if no lanes are true
+            #[inline]
             pub fn none(self) -> SecretBool {
                 SecretBool::defer(Rc::new(OpTree::eq(0, self.0, OpTree::zero())))
             }
 
             /// Find if any lanes are true
+            #[inline]
             pub fn any(self) -> SecretBool {
                 SecretBool::defer(Rc::new(OpTree::ne(0, self.0, OpTree::zero())))
             }
 
             /// Find if all lanes are true
+            #[inline]
             pub fn all(self) -> SecretBool {
                 self.reduce(|a, b| a & b)
             }
 
             /// Select operation for constant-time conditionals
+            #[inline]
             pub fn select<T>(self, a: T, b: T) -> T
             where
                 T: Select<__secret_t>
@@ -898,6 +1015,7 @@ for_secret_t! {
         }
 
         impl Eval for __secret_t {
+            #[inline]
             fn try_eval(&self) -> Result<Self, Error> {
                 Ok(Self::from_tree(self.tree().try_eval()?))
             }
@@ -906,10 +1024,12 @@ for_secret_t! {
         impl Tree for __secret_t {
             type Tree = OpTree<__U>;
 
+            #[inline]
             fn from_tree(tree: OpTree<__U>) -> Self {
                 Self(tree)
             }
 
+            #[inline]
             fn tree<'a>(&'a self) -> Cow<'a, OpTree<__U>> {
                 Cow::Borrowed(&self.0)
             }
@@ -917,6 +1037,7 @@ for_secret_t! {
 
         impl Not for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn not(self) -> __secret_t {
                 Self(OpTree::not(self.0))
             }
@@ -924,12 +1045,14 @@ for_secret_t! {
 
         impl BitAnd for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitand(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::and(self.0, other.0))
             }
         }
 
         impl BitAndAssign for __secret_t {
+            #[inline]
             fn bitand_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitand(other)
             }
@@ -937,12 +1060,14 @@ for_secret_t! {
 
         impl BitOr for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitor(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::or(self.0, other.0))
             }
         }
 
         impl BitOrAssign for __secret_t {
+            #[inline]
             fn bitor_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitor(other)
             }
@@ -950,12 +1075,14 @@ for_secret_t! {
 
         impl BitXor for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitxor(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::xor(self.0, other.0))
             }
         }
 
         impl BitXorAssign for __secret_t {
+            #[inline]
             fn bitxor_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitxor(other)
             }
@@ -964,10 +1091,12 @@ for_secret_t! {
         impl Eq for __secret_t {
             type Output = __secret_t;
 
+            #[inline]
             fn eq(self, other: Self) -> __secret_t {
                 !(self ^ other)
             }
 
+            #[inline]
             fn ne(self, other: Self) -> __secret_t {
                 self ^ other
             }
@@ -976,38 +1105,46 @@ for_secret_t! {
         impl Ord for __secret_t {
             type Output = __secret_t;
 
+            #[inline]
             fn lt(self, other: Self) -> __secret_t {
                 !self & other
             }
 
+            #[inline]
             fn le(self, other: Self) -> __secret_t {
                 !self | other
             }
 
+            #[inline]
             fn gt(self, other: Self) -> __secret_t {
                 self & !other
             }
 
+            #[inline]
             fn ge(self, other: Self) -> __secret_t {
                 self | !other
             }
 
+            #[inline]
             fn min(self, other: Self) -> Self {
                 self & other
             }
 
+            #[inline]
             fn max(self, other: Self) -> Self {
                 self | other
             }
         }
 
         impl Select<__secret_t> for __secret_t {
+            #[inline]
             fn select(p: __secret_t, a: Self, b: Self) -> Self {
                 Self(OpTree::select(__lnpw2, p.0, a.0, b.0))
             }
         }
 
         impl Shuffle<__secret_ux> for __secret_t {
+            #[inline]
             fn shuffle(p: __secret_ux, a: Self, b: Self) -> Self {
                 Self(OpTree::shuffle(__lnpw2,
                     p.0,
@@ -1018,6 +1155,7 @@ for_secret_t! {
         }
 
         impl Shuffle<__secret_ix> for __secret_t {
+            #[inline]
             fn shuffle(p: __secret_ix, a: Self, b: Self) -> Self {
                 Self(OpTree::shuffle(__lnpw2,
                     p.0,
@@ -1047,6 +1185,7 @@ for_secret_t! {
         pub struct __secret_t(OpTree<__U>);
 
         impl Default for __secret_t {
+            #[inline]
             fn default() -> Self {
                 Self::zero()
             }
@@ -1057,6 +1196,7 @@ for_secret_t! {
             pub const LANES: usize = __lanes;
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn classify_le_bytes(v: [u8; __size]) -> Self {
                 Self(OpTree::imm(v))
             }
@@ -1064,28 +1204,33 @@ for_secret_t! {
             /// Extracts the secret value into a non-secret value, this
             /// effectively "leaks" the secret value, but is necessary
             /// to actually do anything
+            #[inline]
             pub fn declassify_le_bytes(&self) -> [u8; __size] {
                 self.try_declassify_le_bytes().unwrap()
             }
 
             /// Same as declassify but propagating internal VM errors
+            #[inline]
             pub fn try_declassify_le_bytes(&self) -> Result<[u8; __size], Error> {
                 Ok(self.try_eval()?.0.result())
             }
 
             /// Wraps a non-secret value as a secret value
+            #[inline]
             pub fn from_le_bytes(v: [u8; __size]) -> Self {
                 Self::classify_le_bytes(v)
             }
 
             /// Create a non-secret constant value, these are available
             /// for more optimizations than secret values
+            #[inline]
             pub fn const_le_bytes(v: [u8; __size]) -> Self {
                 Self(OpTree::const_(v))
             }
 
             __if(__has_prim) {
                 /// Wraps a non-secret value as a secret value
+                #[inline]
                 pub fn classify_lanes(lanes: [__prim_t; __lanes]) -> Self {
                     let mut bytes = [0; __size];
                     for (i, lane) in lanes.iter().enumerate() {
@@ -1098,11 +1243,13 @@ for_secret_t! {
                 /// Extracts the secret value into a non-secret value, this
                 /// effectively "leaks" the secret value, but is necessary
                 /// to actually do anything
+                #[inline]
                 pub fn declassify_lanes(&self) -> [__prim_t; __lanes] {
                     self.try_declassify_lanes().unwrap()
                 }
 
                 /// Same as declassify but propagating internal VM errors
+                #[inline]
                 pub fn try_declassify_lanes(&self) -> Result<[__prim_t; __lanes], Error> {
                     let bytes: [u8; __size] = self.try_eval()?.0.result();
                     let mut lanes = [0; __lanes];
@@ -1117,11 +1264,13 @@ for_secret_t! {
                 }
 
                 /// Wraps a non-secret value as a secret value
+                #[inline]
                 pub fn new_lanes(lanes: [__prim_t; __lanes]) -> Self {
                     Self::classify_lanes(lanes)
                 }
 
                 /// Wraps a non-secret value as a secret value
+                #[inline]
                 pub fn const_lanes(lanes: [__prim_t; __lanes]) -> Self {
                     let mut bytes = [0; __size];
                     for (i, lane) in lanes.iter().enumerate() {
@@ -1132,18 +1281,21 @@ for_secret_t! {
                 }
 
                 /// Wraps a non-secret value as a secret value
+                #[inline]
                 pub fn new_splat(v: __prim_t) -> Self {
                     Self(OpTree::imm(<__U>::splat(<__lane_U>::from(v))))
                 }
 
                 /// Create a non-secret constant value, these are available
                 /// for more optimizations than secret values
+                #[inline]
                 pub fn const_splat(v: __prim_t) -> Self {
                     Self(OpTree::const_(<__U>::splat(<__lane_U>::from(v))))
                 }
             }
 
             /// Build from lanes
+            #[inline]
             pub fn from_lanes(lanes: [__lane_t; __lanes]) -> Self {
                 // into iter here to avoid cloning
                 let mut lanes = IntoIterator::into_iter(lanes);
@@ -1155,6 +1307,7 @@ for_secret_t! {
             }
 
             /// Extract all lanes
+            #[inline]
             pub fn to_lanes(self) -> [__lane_t; __lanes] {
                 let mut lanes: [MaybeUninit<__lane_t>; __lanes]
                     = unsafe { MaybeUninit::uninit().assume_init() };
@@ -1165,11 +1318,13 @@ for_secret_t! {
             }
 
             /// Splat a given value to all lanes
+            #[inline]
             pub fn splat(value: __lane_t) -> Self {
                 Self(OpTree::splat(value.0))
             }
 
             /// Extract a specific lane
+            #[inline]
             pub fn extract(self, lane: usize) -> __lane_t {
                 assert!(lane < __lanes);
                 <__lane_t>::from_tree(OpTree::<__lane_U>::extract(
@@ -1178,6 +1333,7 @@ for_secret_t! {
             }
 
             /// Replace a specific lane
+            #[inline]
             pub fn replace(self, lane: usize, value: __lane_t) -> Self {
                 assert!(lane < __lanes);
                 Self(OpTree::replace::<__lane_U>(
@@ -1186,6 +1342,7 @@ for_secret_t! {
             }
 
             /// Reverse lanes
+            #[inline]
             pub fn reverse_lanes(self) -> Self {
                 let mut lanes = [0xff; __size];
                 for i in 0..__lanes {
@@ -1200,58 +1357,70 @@ for_secret_t! {
             }
 
             /// A constant, non-secret 0, in all lanes
+            #[inline]
             pub fn zero() -> Self {
                 Self(OpTree::zero())
             }
 
             /// A constant, non-secret 1, in all lanes
+            #[inline]
             pub fn one() -> Self {
                 Self(OpTree::const_(<__U>::splat(<__lane_U>::one())))
             }
 
             /// A constant with all bits set to 1, non-secret, in all lanes
+            #[inline]
             pub fn ones() -> Self {
                 Self(OpTree::ones())
             }
 
             // abs only available on signed types
             __if(__t == "ix") {
+                #[inline]
                 pub fn abs(self) -> Self {
                     Self(OpTree::abs(__lnpw2, self.0))
                 }
             }
 
             // other non-trait operations
+            #[inline]
             pub fn trailing_zeros(self) -> __secret_t {
                 Self(OpTree::ctz(__lnpw2, self.0))
             }
 
+            #[inline]
             pub fn trailing_ones(self) -> __secret_t {
                 (!self).trailing_zeros()
             }
 
+            #[inline]
             pub fn leading_zeros(self) -> __secret_t {
                 Self(OpTree::clz(__lnpw2, self.0))
             }
 
+            #[inline]
             pub fn leading_ones(self) -> __secret_t {
                 (!self).leading_zeros()
             }
 
+            #[inline]
             pub fn count_zeros(self) -> __secret_t {
                 (!self).count_ones()
             }
 
+            #[inline]
             pub fn count_ones(self) -> __secret_t {
                 Self(OpTree::popcnt(__lnpw2, self.0))
             }
 
             // ipw2/npw2 only available on unsigned types
             __if(__t == "ux") {
+                #[inline]
                 pub fn is_power_of_two(self) -> __secret_mx {
                     self.count_ones().eq(Self::one())
                 }
 
+                #[inline]
                 pub fn next_power_of_two(self) -> __secret_t {
                     // based on implementation in rust core
                     self.clone().le(Self::one()).select(
@@ -1263,14 +1432,17 @@ for_secret_t! {
                 }
             }
 
+            #[inline]
             pub fn rotate_left(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::rotl(__lnpw2, self.0, other.0))
             }
 
+            #[inline]
             pub fn rotate_right(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::rotr(__lnpw2, self.0, other.0))
             }
 
+            #[inline]
             pub fn reverse_bits(mut self) -> __secret_t {
                 // reverse bytes
                 if __lane_size > 1 {
@@ -1299,6 +1471,7 @@ for_secret_t! {
                 self
             }
 
+            #[inline]
             pub fn reverse_bytes(self) -> __secret_t {
                 let mut bytes = [0xff; __size];
                 for j in (0..__size).step_by(__lane_size) {
@@ -1319,6 +1492,7 @@ for_secret_t! {
             /// Apply an operation horizontally, reducing the input to a single lane
             ///
             /// Note that this runs in log2(number of lanes)
+            #[inline]
             pub fn reduce<F>(mut self, f: F) -> __lane_t
             where
                 F: Fn(Self, Self) -> Self
@@ -1349,30 +1523,37 @@ for_secret_t! {
                 self.extract(0)
             }
 
+            #[inline]
             pub fn horizontal_sum(self) -> __lane_t {
                 self.reduce(|a, b| a + b)
             }
 
+            #[inline]
             pub fn horizontal_product(self) -> __lane_t {
                 self.reduce(|a, b| a * b)
             }
 
+            #[inline]
             pub fn horizontal_and(self) -> __lane_t {
                 self.reduce(|a, b| a & b)
             }
 
+            #[inline]
             pub fn horizontal_or(self) -> __lane_t {
                 self.reduce(|a, b| a | b)
             }
 
+            #[inline]
             pub fn horizontal_xor(self) -> __lane_t {
                 self.reduce(|a, b| a ^ b)
             }
 
+            #[inline]
             pub fn horizontal_min(self) -> __lane_t {
                 self.reduce(|a, b| a.min(b))
             }
 
+            #[inline]
             pub fn horizontal_max(self) -> __lane_t {
                 self.reduce(|a, b| a.max(b))
             }
@@ -1383,6 +1564,7 @@ for_secret_t! {
             /// 0..lanes       <= lane from a
             /// lanes..2*lanes <= lane-lanes from b
             /// otherwise      <= 0
+            #[inline]
             pub fn shuffle<T>(self, a: T, b: T) -> T
             where
                 T: Shuffle<__secret_t>
@@ -1392,6 +1574,7 @@ for_secret_t! {
         }
 
         impl Eval for __secret_t {
+            #[inline]
             fn try_eval(&self) -> Result<Self, Error> {
                 Ok(Self::from_tree(self.tree().try_eval()?))
             }
@@ -1400,10 +1583,12 @@ for_secret_t! {
         impl Tree for __secret_t {
             type Tree = OpTree<__U>;
 
+            #[inline]
             fn from_tree(tree: OpTree<__U>) -> Self {
                 Self(tree)
             }
 
+            #[inline]
             fn tree<'a>(&'a self) -> Cow<'a, OpTree<__U>> {
                 Cow::Borrowed(&self.0)
             }
@@ -1411,6 +1596,7 @@ for_secret_t! {
 
         impl Not for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn not(self) -> __secret_t {
                 Self(OpTree::not(self.0))
             }
@@ -1418,12 +1604,14 @@ for_secret_t! {
 
         impl BitAnd for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitand(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::and(self.0, other.0))
             }
         }
 
         impl BitAndAssign for __secret_t {
+            #[inline]
             fn bitand_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitand(other)
             }
@@ -1431,12 +1619,14 @@ for_secret_t! {
 
         impl BitOr for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitor(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::or(self.0, other.0))
             }
         }
 
         impl BitOrAssign for __secret_t {
+            #[inline]
             fn bitor_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitor(other)
             }
@@ -1444,12 +1634,14 @@ for_secret_t! {
 
         impl BitXor for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn bitxor(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::xor(self.0, other.0))
             }
         }
 
         impl BitXorAssign for __secret_t {
+            #[inline]
             fn bitxor_assign(&mut self, other: __secret_t) {
                 *self = self.clone().bitxor(other)
             }
@@ -1459,6 +1651,7 @@ for_secret_t! {
         __if(__t == "ix") {
             impl Neg for __secret_t {
                 type Output = __secret_t;
+                #[inline]
                 fn neg(self) -> __secret_t {
                     Self(OpTree::neg(__lnpw2, self.0))
                 }
@@ -1467,12 +1660,14 @@ for_secret_t! {
 
         impl Add for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn add(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::add(__lnpw2, self.0, other.0))
             }
         }
 
         impl AddAssign for __secret_t {
+            #[inline]
             fn add_assign(&mut self, other: __secret_t) {
                 *self = self.clone().add(other)
             }
@@ -1480,12 +1675,14 @@ for_secret_t! {
 
         impl Sub for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn sub(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::sub(__lnpw2, self.0, other.0))
             }
         }
 
         impl SubAssign for __secret_t {
+            #[inline]
             fn sub_assign(&mut self, other: __secret_t) {
                 *self = self.clone().sub(other)
             }
@@ -1493,12 +1690,14 @@ for_secret_t! {
 
         impl Mul for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn mul(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::mul(__lnpw2, self.0, other.0))
             }
         }
 
         impl MulAssign for __secret_t {
+            #[inline]
             fn mul_assign(&mut self, other: __secret_t) {
                 *self = self.clone().mul(other)
             }
@@ -1506,12 +1705,14 @@ for_secret_t! {
 
         impl Shl for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn shl(self, other: __secret_t) -> __secret_t {
                 Self(OpTree::shl(__lnpw2, self.0, other.0))
             }
         }
 
         impl ShlAssign for __secret_t {
+            #[inline]
             fn shl_assign(&mut self, other: __secret_t) {
                 *self = self.clone().shl(other)
             }
@@ -1519,6 +1720,7 @@ for_secret_t! {
 
         impl Shr for __secret_t {
             type Output = __secret_t;
+            #[inline]
             fn shr(self, other: __secret_t) -> __secret_t {
                 __if(__t == "ux") {
                     Self(OpTree::shr_u(__lnpw2, self.0, other.0))
@@ -1530,6 +1732,7 @@ for_secret_t! {
         }
 
         impl ShrAssign for __secret_t {
+            #[inline]
             fn shr_assign(&mut self, other: __secret_t) {
                 *self = self.clone().shr(other)
             }
@@ -1538,10 +1741,12 @@ for_secret_t! {
         impl Eq for __secret_t {
             type Output = __secret_mx;
 
+            #[inline]
             fn eq(self, other: Self) -> __secret_mx {
                 __secret_mx(OpTree::eq(__lnpw2, self.0, other.0))
             }
 
+            #[inline]
             fn ne(self, other: Self) -> __secret_mx {
                 __secret_mx(OpTree::ne(__lnpw2, self.0, other.0))
             }
@@ -1551,51 +1756,63 @@ for_secret_t! {
             type Output = __secret_mx;
 
             __if(__t == "ux") {
+                #[inline]
                 fn lt(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::lt_u(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn le(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::le_u(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn gt(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::gt_u(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn ge(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::ge_u(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn min(self, other: Self) -> Self {
                     Self(OpTree::min_u(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn max(self, other: Self) -> Self {
                     Self(OpTree::max_u(__lnpw2, self.0, other.0))
                 }
             }
             __if(__t == "ix") {
+                #[inline]
                 fn lt(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::lt_s(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn le(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::le_s(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn gt(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::gt_s(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn ge(self, other: Self) -> __secret_mx {
                     __secret_mx(OpTree::ge_s(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn min(self, other: Self) -> Self {
                     Self(OpTree::min_s(__lnpw2, self.0, other.0))
                 }
 
+                #[inline]
                 fn max(self, other: Self) -> Self {
                     Self(OpTree::max_s(__lnpw2, self.0, other.0))
                 }
@@ -1603,6 +1820,7 @@ for_secret_t! {
         }
 
         impl Select<__secret_mx> for __secret_t {
+            #[inline]
             fn select(p: __secret_mx, a: Self, b: Self) -> Self {
                 Self(OpTree::select(__lnpw2,
                     p.0,
@@ -1613,6 +1831,7 @@ for_secret_t! {
         }
 
         impl Shuffle<__secret_ux> for __secret_t {
+            #[inline]
             fn shuffle(p: __secret_ux, a: Self, b: Self) -> Self {
                 Self(OpTree::shuffle(__lnpw2,
                     p.0,
@@ -1623,6 +1842,7 @@ for_secret_t! {
         }
 
         impl Shuffle<__secret_ix> for __secret_t {
+            #[inline]
             fn shuffle(p: __secret_ix, a: Self, b: Self) -> Self {
                 Self(OpTree::shuffle(__lnpw2,
                     p.0,
@@ -1643,6 +1863,7 @@ for_secret_t! {
     __if(__t == "u" || __t == "i") {
         // bool extending (bool -> u32)
         impl From<SecretBool> for __secret_t {
+            #[inline]
             fn from(v: SecretBool) -> __secret_t {
                 Self(OpTree::and(v.resolve().into_owned(), <__secret_t>::one().0))
             }
@@ -1654,6 +1875,7 @@ for_secret_t_2! {
     // unsigned extending (u8 -> u32)
     __if(__t_2 == "u" && __npw2 > __npw2_2) {
         impl From<__secret_t_2> for __secret_t {
+            #[inline]
             fn from(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::extend_u(0, v.0))
             }
@@ -1663,6 +1885,7 @@ for_secret_t_2! {
     // signed extending (i8 -> i32)
     __if(__t == "i" && __t_2 == "i" && __npw2 > __npw2_2) {
         impl From<__secret_t_2> for __secret_t {
+            #[inline]
             fn from(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::extend_s(0, v.0))
             }
@@ -1672,6 +1895,7 @@ for_secret_t_2! {
     // truncating (i32 -> i8)
     __if((__t == "u" || __t == "i") && __t == __t_2 && __npw2 < __npw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
+            #[inline]
             fn from_cast(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::truncate(0, v.0))
             }
@@ -1681,6 +1905,7 @@ for_secret_t_2! {
     // cast same width (u8x4 -> u32)
     __if((__t != __t_2 || __lnpw2 != __lnpw2_2) && __npw2 == __npw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
+            #[inline]
             fn from_cast(v: __secret_t_2) -> __secret_t {
                 Self(v.0)
             }
@@ -1691,6 +1916,7 @@ for_secret_t_2! {
     __if((__t == "ux" || __t == "ix" || __t == "mx")
             && __t == __t_2 && __lane_npw2 == __lane_npw2_2 && __lnpw2 > __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
+            #[inline]
             fn from(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::extend_u(0, v.0))
             }
@@ -1701,6 +1927,7 @@ for_secret_t_2! {
     __if((__t == "ux" || __t == "ix" || __t == "mx")
             && __t == __t_2 && __lane_npw2 == __lane_npw2_2 && __lnpw2 < __lnpw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
+            #[inline]
             fn from_cast(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::truncate(0, v.0))
             }
@@ -1711,6 +1938,7 @@ for_secret_t_2! {
     __if((((__t == "ux" || __t == "ix") && __t_2 == "ux") || (__t == "mx" && __t_2 == "mx"))
             && __lane_npw2 > __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
+            #[inline]
             fn from(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::extend_u(__lnpw2, v.0))
             }
@@ -1721,6 +1949,7 @@ for_secret_t_2! {
     __if(__t == "ix" && __t_2 == "ix"
             && __lane_npw2 > __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
+            #[inline]
             fn from(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::extend_s(__lnpw2, v.0))
             }
@@ -1731,6 +1960,7 @@ for_secret_t_2! {
     __if((__t == "ux" || __t == "ix" || __t == "mx") && __t == __t_2
             && __lane_npw2 < __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
+            #[inline]
             fn from_cast(v: __secret_t_2) -> __secret_t {
                 Self(OpTree::truncate(__lnpw2, v.0))
             }

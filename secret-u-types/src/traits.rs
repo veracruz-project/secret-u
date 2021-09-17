@@ -23,6 +23,7 @@ pub trait Ord {
     fn max(self, other: Self) -> Self;
     fn min(self, other: Self) -> Self;
 
+    #[inline]
     fn clamp(self, min: Self, max: Self) -> Self
     where
         Self: Sized
@@ -49,6 +50,7 @@ pub trait Eval: Sized {
     /// but this can be useful for flattening the internal
     /// tree manually to avoid growing too larger during a
     /// computation
+    #[inline]
     fn eval(&self) -> Self {
         self.try_eval().unwrap()
     }
@@ -86,6 +88,7 @@ impl<T, U> FromCast<U> for T
 where
     T: From<U>,
 {
+    #[inline]
     fn from_cast(u: U) -> T {
         T::from(u)
     }
@@ -101,6 +104,7 @@ impl<T, U> Cast<T> for U
 where
     T: FromCast<U>
 {
+    #[inline]
     fn cast(self) -> T {
         T::from_cast(self)
     }
