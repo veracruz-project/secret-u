@@ -16,12 +16,60 @@ use quote::quote;
 use quote::ToTokens;
 use syn::parse_macro_input;
 use std::cmp::min;
+use std::env;
 
 use evalexpr;
+use lazy_static::lazy_static;
 
-const MAX_NPW2: u8 = 15;  // 2^15 bytes = u262144
-const MAX_LNPW2: u8 = 15; // 2^15 lanes = 32768 lanes
-const LIMB_NPW2: u8 = 3;  // 2^3 bytes = u64
+const DEFAULT_MAX_NPW2: u8 = 15;  // 2^15 bytes = u262144
+const DEFAULT_MAX_LNPW2: u8 = 15; // 2^15 lanes = 32768 lanes
+const LIMB_NPW2: u8 = 3;          // 2^3 bytes = u64
+
+// allow overwriting MAX_NPW2 and MAX_LNPW2 from environment to reduce the
+// number of generated types and speed up compile times
+lazy_static! {
+    static ref MAX_NPW2: u8 = {
+        match env::var("SECRET_U_MAX_NPW2") {
+            Ok(x) => {
+                match x.parse::<u8>() {
+                    Ok(x) if x < DEFAULT_MAX_NPW2 => {
+                        x
+                    }
+                    _ => {
+                        panic!("Bad value for SECRET_U_MAX_NPW2: {}", x);
+                    }
+                }
+            }
+            Err(env::VarError::NotPresent) => {
+                DEFAULT_MAX_NPW2
+            }
+            Err(err) => {
+                panic!("Bad value for SECRET_U_MAX_NPW2: {}", err);
+            }
+        }
+    };
+
+    static ref MAX_LNPW2: u8 = {
+        match env::var("SECRET_U_MAX_LNPW2") {
+            Ok(x) => {
+                match x.parse::<u8>() {
+                    Ok(x) if x < DEFAULT_MAX_LNPW2 => {
+                        x
+                    }
+                    _ => {
+                        panic!("Bad value for SECRET_U_MAX_LNPW2: {}", x);
+                    }
+                }
+            }
+            Err(env::VarError::NotPresent) => {
+                DEFAULT_MAX_NPW2
+            }
+            Err(err) => {
+                panic!("Bad value for SECRET_U_MAX_LNPW2: {}", err);
+            }
+        }
+    };
+}
 
 macro_rules! ident {
     ($($fmt:tt)+) => {
@@ -144,10 +192,10 @@ fn token_if(input: TokenStream) -> TokenStream {
 fn secret_t_map<'a>(
     suffix: &'a str
 ) -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> + 'a {
-    (0..=MAX_NPW2).map(move |npw2| {
+    (0..=*MAX_NPW2).map(move |npw2| {
         std::array::IntoIter::new(["u", "i", "ux", "ix", "mx"]).map(move |t| {
             let has_lanes = t == "ux" || t == "ix" || t == "mx";
-            (0 ..= if has_lanes { min(MAX_LNPW2, npw2) } else { 0 }).map(move |lnpw2| {
+            (0 ..= if has_lanes { min(*MAX_LNPW2, npw2) } else { 0 }).map(move |lnpw2| {
                 (npw2, lnpw2, HashMap::from_iter([
                     (format!("__secret_t{}", suffix),
                         if has_lanes {

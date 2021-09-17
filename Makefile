@@ -26,6 +26,11 @@ test:
 	cargo build --lib --no-default-features
 	$(patsubst examples/%.rs,$(call TEST_EXAMPLE,%),$(wildcard examples/*.rs))
 
+# quick test only tests up to u512 and does not test examples
+quick-test: export SECRET_U_MAX_NPW2=6
+quick-test:
+	cargo test --lib -- --nocapture --test-threads 1
+
 .PHONY: bench-sha256
 bench-sha256:
 	# build (assuming builds are cached)
