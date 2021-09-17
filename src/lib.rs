@@ -5,12 +5,12 @@ pub mod engine;
 pub mod opcode;
 pub mod optree;
 pub mod traits;
-pub mod num;
+pub mod types;
 pub mod lambda;
 pub mod table;
 
 pub use error::*;
-pub use num::*;
+pub use types::*;
 pub use lambda::*;
 
 // introduce traits, but prefix to avoid names collisions, this

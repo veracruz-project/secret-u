@@ -1,8 +1,10 @@
 //! entry point to vm
 
+
+// separate crate for parallel builds
 pub use secret_u_test_engine::exec;
 
-// this module is mostly tests over the engine's behavior
+
 #[cfg(test)]
 mod tests {
     use super::*;

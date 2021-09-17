@@ -1,0 +1,11 @@
+[package]
+name = "secret-u-types"
+description = "Crate containing generated types, separated for better parallel builds"
+authors = ["Christopher Haster <christopher.haster@arm.com>"]
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+secret-u-macros = {path = "../secret-u-macros"}
+secret-u-opcode = {path = "../secret-u-opcode"}
+secret-u-optree = {path = "../secret-u-optree"}

@@ -12,5 +12,5 @@ debug-trace = []
 debug-cycle-count = []
 
 [dependencies]
-secret-u-macros = {path = "../secret-u-macros", default-features=false}
+secret-u-macros = {path = "../secret-u-macros"}
 secret-u-opcode = {path = "../secret-u-opcode"}

@@ -1720,7 +1720,8 @@ thread_local! {
 /// NOTE! This is a quick simulated VM for testing and proof-of-concept!
 /// Not constant time!
 ///
-pub fn exec<'a>(
+#[export_name="secret_u_engine_exec"]
+pub extern "Rust" fn exec<'a>(
     bytecode: &[u64],
     state: &'a mut [u8]
 ) -> Result<&'a [u8], Error> {

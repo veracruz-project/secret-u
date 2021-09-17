@@ -17,28 +17,28 @@ default = [
 
 # color slots in order to reuse slots, you probably want this
 # enabled, but it can be disabled for debugging
-opt-color-slots = []
+opt-color-slots = ["secret-u-optree/opt-color-slots"]
 # reorder branches of instruction sequences to minimize register
 # pressure
-opt-schedule-slots = []
+opt-schedule-slots = ["secret-u-optree/opt-schedule-slots"]
 # perform constant folding during compilation, note this run
 # small chunks of bytecode in the vm to do the folding
-opt-fold-consts = []
+opt-fold-consts = ["secret-u-optree/opt-fold-consts"]
 # fold simple nops as a part of constant folding, these are
 # expressions such as x+0, x-0, x<<0, x*1, etc
-opt-fold-nops = ["opt-fold-consts"]
+opt-fold-nops = ["opt-fold-consts", "secret-u-optree/opt-fold-nops"]
 # replace simple reductions of instruction sequences during
 # constant folding
-opt-simple-reductions = ["opt-fold-consts"]
+opt-simple-reductions = ["opt-fold-consts", "secret-u-optree/opt-simple-reductions"]
 # find compressed const representations, such as `u8x16.extend_const8_s 0xfe`
 # instead of `u128.move_const_s 0xfffffffffffffffffffffffffffffffe`, this
 # reduces bytecode size and may result in faster code
-opt-compress-consts = []
+opt-compress-consts = ["secret-u-optree/opt-compress-consts"]
 
 # show ast before compilation
-debug-ast = []
+debug-ast = ["secret-u-optree/debug-ast"]
 # show bytecode output by compilation
-debug-bytecode = []
+debug-bytecode = ["secret-u-optree/debug-bytecode"]
 # show VM execution
 debug-trace = ["secret-u-test-engine/debug-trace"]
 # show total number of instructions executed after each exec
@@ -48,7 +48,7 @@ debug-proc-macros = ["secret-u-macros/debug-proc-macros"]
 # show _internal_ proc macro generation
 debug-internal-proc-macros = ["secret-u-macros/debug-internal-proc-macros"]
 # check internal refs correctly return to 0, note this is very expensive
-debug-check-refs = []
+debug-check-refs = ["secret-u-optree/debug-check-refs"]
 
 # simplify by DeMorgan identities
 bitslice-simplify-identities = ["secret-u-macros/bitslice-simplify-identities"]
@@ -62,8 +62,10 @@ example-bitslice-tables = []
 
 
 [dependencies]
-secret-u-macros = {path="secret-u-macros", default-features=false}
+secret-u-macros = {path="secret-u-macros"}
 secret-u-opcode = {path="secret-u-opcode"}
+secret-u-optree = {path="secret-u-optree"}
+secret-u-types = {path="secret-u-types"}
 secret-u-test-engine = {path="secret-u-test-engine"}
 paste = "1.0.5"
 aligned-utils = "1.0.2"

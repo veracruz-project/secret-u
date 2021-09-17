@@ -217,7 +217,7 @@ impl Prim {
 
         let crate_ = crate_();
         parse_quote! {
-            #crate_::num::#ident
+            #crate_::types::#ident
         }
     }
 
@@ -246,7 +246,7 @@ impl Prim {
 
         let crate_ = crate_();
         parse_quote! {
-            #crate_::num::#ident
+            #crate_::types::#ident
         }
     }
 
