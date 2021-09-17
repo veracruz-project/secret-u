@@ -19,8 +19,8 @@ use std::cmp::min;
 
 use evalexpr;
 
-const MAX_NPW2: u8 = 6;   // 2^6 bytes = u512
-const MAX_LNPW2: u8 = 6;  // 2^6 lanes = 64 lanes
+const MAX_NPW2: u8 = 15;  // 2^15 bytes = u262144
+const MAX_LNPW2: u8 = 15; // 2^15 lanes = 32768 lanes
 const LIMB_NPW2: u8 = 3;  // 2^3 bytes = u64
 
 macro_rules! ident {
