@@ -10,6 +10,10 @@ use std::cell::Cell;
 use std::cmp::max;
 use std::mem::size_of;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::borrow::Borrow;
 #[cfg(feature="opt-color-slots")]
 use std::collections::BTreeSet;
 use std::cell::RefCell;
@@ -30,6 +34,7 @@ use secret_u_macros::for_secret_t;
 use aligned_utils::bytes::AlignedBytes;
 
 
+/// Abritrary names for dissassembly
 fn arbitrary_names() -> impl Iterator<Item=String> {
     let alphabet = "abcdefghijklmnopqrstuvwxyz";
     // a..z
@@ -45,13 +50,31 @@ fn arbitrary_names() -> impl Iterator<Item=String> {
         )
 }
 
-/// Trait for the underlying types
+/// Hack for reborrowing Options containing mut refs
+trait Reborrow {
+    type Reborrow;
+
+    fn reborrow(self) -> Self::Reborrow;
+}
+
+impl<'a, 'b, T> Reborrow for &'b mut Option<&'a mut T> {
+    type Reborrow = Option<&'b mut T>;
+
+    fn reborrow(self) -> Self::Reborrow {
+        self.as_mut().map(|x| &mut **x)
+    }
+}
+
+/// Trait for the underlying raw types
 pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static {
     /// npw2(size)
     const NPW2: u8;
 
     /// raw byte representation
     type Bytes: AsRef<[u8]> + AsMut<[u8]> + for<'a> TryFrom<&'a [u8]>;
+
+    /// access the underlying raw bytes
+    fn as_ne_bytes(&self) -> &[u8];
 
     /// to raw byte representation
     fn to_le_bytes(self) -> Self::Bytes;
@@ -129,6 +152,9 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
     }
 }
 
+
+
+
 for_secret_t! {
     __if(__t == "u") {
         #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -176,6 +202,10 @@ for_secret_t! {
             const NPW2: u8 = __npw2;
 
             type Bytes = [u8; __size];
+
+            fn as_ne_bytes(&self) -> &[u8] {
+                &self.0
+            }
 
             fn to_le_bytes(self) -> Self::Bytes {
                 self.0
@@ -350,6 +380,70 @@ impl<T: OpU> Clone for OpTree<T> {
 }
 
 
+/// Pool of const OpNodes
+#[derive(Debug)]
+pub struct ConstPool {
+    pool: HashSet<ConstPoolNode>
+}
+
+/// Wrapper around OpNode for hashing const nodes
+#[derive(Debug)]
+struct ConstPoolNode(Rc<dyn DynOpNode>);
+
+impl PartialEq<ConstPoolNode> for ConstPoolNode {
+    fn eq(&self, other: &ConstPoolNode) -> bool {
+        self.0.get_const_ne_bytes() == other.0.get_const_ne_bytes()
+    }
+}
+
+impl Eq for ConstPoolNode {}
+
+impl Hash for ConstPoolNode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.get_const_ne_bytes().hash(state)
+    }
+}
+
+impl Borrow<[u8]> for ConstPoolNode {
+    fn borrow(&self) -> &[u8] {
+        self.0.get_const_ne_bytes().unwrap()
+    }
+}
+
+impl ConstPool {
+    pub fn new() -> ConstPool {
+        ConstPool {
+            pool: HashSet::new()
+        }
+    }
+
+    pub fn deduplicate(&mut self, node: &Rc<dyn DynOpNode>) -> Option<Rc<dyn DynOpNode>> {
+        debug_assert!(node.is_const());
+
+        // already exists?
+        if let Some(node) = self.pool.get(node.get_const_ne_bytes().unwrap()) {
+            return Some(node.0.clone());
+        }
+
+        // insert new node
+        self.pool.insert(ConstPoolNode(node.clone()));
+        None
+    }
+
+    pub fn deduplicate_new<T: OpU>(&mut self, v: T) -> Rc<dyn DynOpNode> {
+        // already exists?
+        if let Some(node) = self.pool.get(v.as_ne_bytes()) {
+            return node.0.clone();
+        }
+
+        // insert new node
+        let node = Rc::new(OpNode::<T>::new(
+            OpKind::Const(v), 0, 0
+        ));
+        self.pool.insert(ConstPoolNode(node.clone()));
+        node
+    }
+}
 
 /// Pool for allocating/reusing slots in a fictional blob of bytes
 #[derive(Debug)]
@@ -371,7 +465,7 @@ struct SlotPool {
 
 impl SlotPool {
     /// Create a new empty slot pool
-    fn new() -> SlotPool {
+    pub fn new() -> SlotPool {
         SlotPool {
             #[cfg(feature="opt-color-slots")]
             pool: BTreeSet::new(),
@@ -382,7 +476,7 @@ impl SlotPool {
 
     /// Allocate a slot with the required npw2 size,
     /// note it's possible to run out of slots here
-    fn alloc(&mut self, npw2: u8) -> Result<u16, Error> {
+    pub fn alloc(&mut self, npw2: u8) -> Result<u16, Error> {
         // The allocation scheme here is a bit complicated.
         //
         // Slots of all sizes share a common buffer, which means
@@ -471,7 +565,7 @@ impl SlotPool {
     }
 
     /// Return a slot to the pool
-    fn dealloc(
+    pub fn dealloc(
         &mut self,
         #[allow(unused)] mut slot: u16,
         #[allow(unused)] mut npw2: u8
@@ -512,7 +606,7 @@ pub struct OpCompile {
 }
 
 impl OpCompile {
-    fn new(opt: bool) -> OpCompile {
+    pub fn new(opt: bool) -> OpCompile {
         OpCompile {
             bytecode: Vec::new(),
             slots: Vec::new(),
@@ -601,7 +695,6 @@ impl<T: OpU> DynOpTree for OpTree<T> {
         }
     }
 }
-
 
 /// Core of the OpTree
 impl<T: OpU> OpTree<T> {
@@ -1108,7 +1201,13 @@ impl<T: OpU> OpTree<T> {
                 // so we can update our root reference
                 #[cfg(feature="opt-fold-consts")]
                 if opt {
-                    if let Some(x) = tree.fold_consts() {
+                    #[cfg(feature="opt-deduplicate-consts")]
+                    let mut const_pool = Some(ConstPool::new());
+                    #[cfg(not(feature="opt-deduplicate-consts"))]
+                    let const_pool = None;
+
+                    let tree_dyn: Rc<dyn DynOpNode> = tree.clone();
+                    if let Some(x) = tree.fold_consts(&tree_dyn, const_pool.as_mut()) {
                         *tree = OpNode::<T>::dyn_downcast(x);
                     }
                 }
@@ -1362,6 +1461,12 @@ pub trait DynOpNode: Debug {
     /// checks if expression is compressable into a u16
     fn get_const_u16(&self, lnpw2: Option<u8>) -> Option<(u8, u16)>;
 
+    /// get raw value of underlying const if node is const, note
+    /// because of trait object limitations we can't get the
+    /// type-safe type, so this should only be used for things like
+    /// hashing/equality checking
+    fn get_const_ne_bytes<'a>(&'a self) -> Option<&'a [u8]>;
+
     /// Increment tree-internal reference count
     fn inc_refs(&self) -> u32;
 
@@ -1387,7 +1492,11 @@ pub trait DynOpNode: Debug {
 
     /// An optional pass to fold consts in the tree
     #[cfg(feature="opt-fold-consts")]
-    fn fold_consts(&self) -> Option<Rc<dyn DynOpNode>>;
+    fn fold_consts(
+        &self,
+        rc: &Rc<dyn DynOpNode>,
+        const_pool: Option<&mut ConstPool>
+    ) -> Option<Rc<dyn DynOpNode>>;
 
     /// First compile pass, used to find the number of immediates
     /// for offset calculation, and local reference counting to
@@ -1513,14 +1622,14 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
     fn is_const_one(&self) -> bool {
         match (self.is_const(), &self.kind) {
-            (true, OpKind::Const(v)) => v.is_zero(),
+            (true, OpKind::Const(v)) => v.is_one(),
             _                        => false,
         }
     }
 
     fn is_const_ones(&self) -> bool {
         match (self.is_const(), &self.kind) {
-            (true, OpKind::Const(v)) => v.is_zero(),
+            (true, OpKind::Const(v)) => v.is_ones(),
             _                        => false,
         }
     }
@@ -1555,6 +1664,13 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 None
             }
             _ => None,
+        }
+    }
+
+    fn get_const_ne_bytes<'a>(&'a self) -> Option<&'a [u8]> {
+        match (self.is_const(), &self.kind) {
+            (true, OpKind::Const(v)) => Some(v.as_ne_bytes()),
+            _                        => None,
         }
     }
 
@@ -2147,7 +2263,11 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
 
     #[cfg(feature="opt-fold-consts")]
-    fn fold_consts(&self) -> Option<Rc<dyn DynOpNode>> {
+    fn fold_consts(
+        &self,
+        #[allow(unused)] rc: &Rc<dyn DynOpNode>,
+        #[allow(unused)] mut const_pool: Option<&mut ConstPool>
+    ) -> Option<Rc<dyn DynOpNode>> {
         // already folded?
         if self.folded.get() {
             return None;
@@ -2163,6 +2283,12 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             // if this fails we just bail on the const folding so the error
             // can be reported at runtime
             if let Ok(v) = self.try_eval() {
+                // check for duplicate consts?
+                #[cfg(feature="opt-deduplicate-consts")]
+                if let Some(const_pool) = const_pool {
+                    return Some(const_pool.deduplicate_new(v));
+                }
+
                 return Some(Rc::new(Self::new(
                     OpKind::Const(v), 0, 0
                 )));
@@ -2170,59 +2296,66 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
 
         match &self.kind {
-            OpKind::Const(_) => {},
+            OpKind::Const(_) => {
+                // check for duplicate consts?
+                #[cfg(feature="opt-deduplicate-consts")]
+                if let Some(const_pool) = const_pool {
+                    return const_pool.deduplicate(&rc);
+                }
+            },
+
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
 
             OpKind::Extract(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = x);
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = x);
             }
             OpKind::Replace(_, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = x);
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = x);
             }
             OpKind::Select(_, p, a, b) => {
-                let mut p = p.borrow_mut();
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                p.fold_consts().map(|x| *p = Self::dyn_downcast(x));
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut p = p.borrow_mut(); let p_dyn: Rc<dyn DynOpNode> = p.clone();
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                p.fold_consts(&p_dyn, const_pool.reborrow()).map(|x| *p = Self::dyn_downcast(x));
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
             }
             OpKind::Shuffle(_, p, a, b) => {
-                let mut p = p.borrow_mut();
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                p.fold_consts().map(|x| *p = Self::dyn_downcast(x));
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut p = p.borrow_mut(); let p_dyn: Rc<dyn DynOpNode> = p.clone();
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                p.fold_consts(&p_dyn, const_pool.reborrow()).map(|x| *p = Self::dyn_downcast(x));
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
             }
 
             OpKind::ExtendU(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = x);
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = x);
             }
             OpKind::ExtendS(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = x);
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = x);
             }
             OpKind::Truncate(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = x);
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = x);
             }
             OpKind::Splat(a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = x);
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = x);
             }
 
             OpKind::Eq(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2235,10 +2368,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Ne(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2251,10 +2384,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LtU(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2267,10 +2400,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LtS(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2283,10 +2416,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GtU(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2299,10 +2432,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GtS(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2315,10 +2448,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LeU(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2331,10 +2464,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::LeS(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2347,10 +2480,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GeU(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2363,10 +2496,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::GeS(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2379,10 +2512,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MinU(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2395,10 +2528,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MinS(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2411,10 +2544,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MaxU(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2427,10 +2560,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::MaxS(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-compress-consts")]
                 if a.is_const_u16(Some(*x)) {
                     return Some(Rc::new(OpNode::new(
@@ -2444,16 +2577,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             }
 
             OpKind::Neg(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Abs(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Not(a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
                 // not has the most powerful set of reductions, fortunately
                 // it is a bit unique in this regard
                 #[cfg(feature="opt-simple-reductions")]
@@ -2555,22 +2688,22 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Clz(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Ctz(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Popcnt(_, a) => {
-                let mut a = a.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
             }
             OpKind::Add(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_zero() {
                     return Some(b.clone());
@@ -2611,10 +2744,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Sub(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if b.is_const_zero() {
                     return Some(a.clone());
@@ -2634,10 +2767,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Mul(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && a.is_const_one() {
                     return Some(b.clone());
@@ -2656,10 +2789,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::And(a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_ones() {
                     return Some(b.clone());
@@ -2712,10 +2845,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Andnot(a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_ones() {
                     return Some(b.clone());
@@ -2737,10 +2870,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Or(a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_zero() {
                     return Some(b.clone());
@@ -2775,10 +2908,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Xor(a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if a.is_const_zero() {
                     return Some(b.clone());
@@ -2797,10 +2930,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Shl(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
@@ -2817,10 +2950,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::ShrU(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
@@ -2837,10 +2970,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::ShrS(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
@@ -2857,10 +2990,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Rotl(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());
@@ -2877,10 +3010,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
             }
             OpKind::Rotr(x, a, b) => {
-                let mut a = a.borrow_mut();
-                let mut b = b.borrow_mut();
-                a.fold_consts().map(|x| *a = Self::dyn_downcast(x));
-                b.fold_consts().map(|x| *b = Self::dyn_downcast(x));
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
                 #[cfg(feature="opt-fold-nops")]
                 if *x == 0 && b.is_const_zero() {
                     return Some(a.clone());

@@ -12,6 +12,7 @@ default = [
     "opt-fold-nops",
     "opt-simple-reductions",
     "opt-compress-consts",
+    "opt-deduplicate-consts",
     "bitslice-simplify-bdd"
 ]
 
@@ -34,6 +35,9 @@ opt-simple-reductions = ["opt-fold-consts", "secret-u-optree/opt-simple-reductio
 # instead of `u128.move_const_s 0xfffffffffffffffffffffffffffffffe`, this
 # reduces bytecode size and may result in faster code
 opt-compress-consts = ["secret-u-optree/opt-compress-consts"]
+# find duplicate consts in code, and deduplicate so we spend less time
+# decoding consts, at the cost of higher register usage
+opt-deduplicate-consts = ["secret-u-optree/opt-deduplicate-consts"]
 
 # show ast before compilation
 debug-ast = ["secret-u-optree/debug-ast"]

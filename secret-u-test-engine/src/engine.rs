@@ -40,8 +40,8 @@ trait VType {
     unsafe fn vref(a: &[u8]) -> &Self;
     unsafe fn vref_mut(a: &mut [u8]) -> &mut Self;
 
-    fn vraw_bytes(&self) -> &[u8];
-    fn vraw_bytes_mut(&mut self) -> &mut [u8];
+    fn vas_ne_bytes(&self) -> &[u8];
+    fn vas_ne_bytes_mut(&mut self) -> &mut [u8];
 
     // zero and ones, truthy constants
     fn vzero(&mut self);
@@ -88,8 +88,8 @@ trait VType {
             //
             let a = unsafe { &mut *(a as *const T as *mut T) };
             a.vto_le_inplace();
-            let from_bytes = a.vraw_bytes();
-            let to_bytes = self.vraw_bytes_mut();
+            let from_bytes = a.vas_ne_bytes();
+            let to_bytes = self.vas_ne_bytes_mut();
 
             to_bytes.copy_from_slice(&from_bytes[i*to_size..(i+1)*to_size]);
 
@@ -119,8 +119,8 @@ trait VType {
             //
             let a = unsafe { &mut *(a as *const T as *mut T) };
             a.vto_le_inplace();
-            let from_bytes = a.vraw_bytes();
-            let to_bytes = self.vraw_bytes_mut();
+            let from_bytes = a.vas_ne_bytes();
+            let to_bytes = self.vas_ne_bytes_mut();
 
             to_bytes[i*from_size..(i+1)*from_size].copy_from_slice(from_bytes);
 
@@ -145,9 +145,9 @@ trait VType {
 
         // first copy a to low-part of d so we can be sure overlap
         // is handled correctly
-        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vcopy(a);
-        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vto_le_inplace();
-        let bytes = self.vraw_bytes_mut();
+        unsafe { T::vref_mut(&mut self.vas_ne_bytes_mut()[..a.vsize()]) }.vcopy(a);
+        unsafe { T::vref_mut(&mut self.vas_ne_bytes_mut()[..a.vsize()]) }.vto_le_inplace();
+        let bytes = self.vas_ne_bytes_mut();
 
         for i in (0 .. 1 << lnpw2).rev() {
             bytes.copy_within(
@@ -170,9 +170,9 @@ trait VType {
 
         // first copy a to low-part of d so we can be sure overlap
         // is handled correctly
-        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vcopy(a);
-        unsafe { T::vref_mut(&mut self.vraw_bytes_mut()[..a.vsize()]) }.vto_le_inplace();
-        let bytes = self.vraw_bytes_mut();
+        unsafe { T::vref_mut(&mut self.vas_ne_bytes_mut()[..a.vsize()]) }.vcopy(a);
+        unsafe { T::vref_mut(&mut self.vas_ne_bytes_mut()[..a.vsize()]) }.vto_le_inplace();
+        let bytes = self.vas_ne_bytes_mut();
 
         for i in (0 .. 1 << lnpw2).rev() {
             bytes.copy_within(
@@ -203,8 +203,8 @@ trait VType {
         //
         let a = unsafe { &mut *(a as *const T as *mut T) };
         a.vto_le_inplace();
-        let from_bytes = a.vraw_bytes();
-        let to_bytes = self.vraw_bytes_mut();
+        let from_bytes = a.vas_ne_bytes();
+        let to_bytes = self.vas_ne_bytes_mut();
 
         for i in 0 .. 1 << lnpw2 {
             to_bytes[i*to_lane_size .. (i+1)*to_lane_size]
@@ -223,8 +223,8 @@ trait VType {
     {
         let from_size = a.vsize();
         let to_size = self.vsize();
-        let from_bytes = a.vraw_bytes();
-        let to_bytes = self.vraw_bytes_mut();
+        let from_bytes = a.vas_ne_bytes();
+        let to_bytes = self.vas_ne_bytes_mut();
 
         for i in (0..to_size).step_by(from_size) {
             to_bytes[i..i+from_size]
@@ -310,8 +310,8 @@ trait VType {
         T: VType + ?Sized
     {
         let lane_size = self.vsize() >> lnpw2;
-        let bytes   = self.vraw_bytes_mut();
-        let a_bytes = a.vraw_bytes();
+        let bytes   = self.vas_ne_bytes_mut();
+        let a_bytes = a.vas_ne_bytes();
         for i in 0 .. 1 << lnpw2 {
             let slice   = &mut bytes[i*lane_size .. (i+1)*lane_size];
             let a_slice = &a_bytes[i*lane_size .. (i+1)*lane_size];
@@ -325,9 +325,9 @@ trait VType {
         T: VType + ?Sized
     {
         let lane_size = self.vsize() >> lnpw2;
-        let bytes   = self.vraw_bytes_mut();
-        let a_bytes = a.vraw_bytes();
-        let b_bytes = b.vraw_bytes();
+        let bytes   = self.vas_ne_bytes_mut();
+        let a_bytes = a.vas_ne_bytes();
+        let b_bytes = b.vas_ne_bytes();
         for i in 0 .. 1 << lnpw2 {
             let slice   = &mut bytes[i*lane_size .. (i+1)*lane_size];
             let a_slice = &a_bytes[i*lane_size .. (i+1)*lane_size];
@@ -342,10 +342,10 @@ trait VType {
         T: VType + ?Sized
     {
         let lane_size = self.vsize() >> lnpw2;
-        let bytes   = self.vraw_bytes_mut();
-        let a_bytes = a.vraw_bytes();
-        let b_bytes = b.vraw_bytes();
-        let c_bytes = c.vraw_bytes();
+        let bytes   = self.vas_ne_bytes_mut();
+        let a_bytes = a.vas_ne_bytes();
+        let b_bytes = b.vas_ne_bytes();
+        let c_bytes = c.vas_ne_bytes();
         for i in 0 .. 1 << lnpw2 {
             let slice   = &mut bytes[i*lane_size .. (i+1)*lane_size];
             let a_slice = &a_bytes[i*lane_size .. (i+1)*lane_size];
@@ -412,11 +412,11 @@ engine_for_short_t! {
             &mut *(a.as_mut_ptr() as *mut Self)
         }
 
-        fn vraw_bytes(&self) -> &[u8] {
+        fn vas_ne_bytes(&self) -> &[u8] {
             unsafe { &*(self as *const __prim_t as *const [u8; __size]) }
         }
 
-        fn vraw_bytes_mut(&mut self) -> &mut [u8] {
+        fn vas_ne_bytes_mut(&mut self) -> &mut [u8] {
             unsafe { &mut *(self as *mut __prim_t as *mut [u8; __size]) }
         }
 
@@ -717,7 +717,7 @@ impl VType for [__limb_t] {
         )
     }
 
-    fn vraw_bytes(&self) -> &[u8] {
+    fn vas_ne_bytes(&self) -> &[u8] {
         unsafe {
             slice::from_raw_parts(
                 self.as_ptr() as *const u8,
@@ -726,7 +726,7 @@ impl VType for [__limb_t] {
         }
     }
 
-    fn vraw_bytes_mut(&mut self) -> &mut [u8] {
+    fn vas_ne_bytes_mut(&mut self) -> &mut [u8] {
         unsafe {
             slice::from_raw_parts_mut(
                 self.as_mut_ptr() as *mut u8,
@@ -1834,7 +1834,7 @@ pub extern "Rust" fn exec<'a>(
                 }
 
                 // load from instruction stream
-                let bytes = __rd_0.vraw_bytes_mut();
+                let bytes = __rd_0.vas_ne_bytes_mut();
                 for i in 0..words {
                     let word = unsafe { *pc };
                     pc = unsafe { pc.add(1) };
