@@ -9,7 +9,7 @@ fn sqrt(x: SecretU32) -> SecretU32 {
     let mut hi = x.clone();
 
     // each round determines one bit, so only need log(x) rounds
-    for _ in 0..4 {
+    for _ in 0..8 {
         // test mid
         let mid = (lo.clone() + hi.clone()) >> SecretU32::const_(1);
         let mid_sq = mid.clone()*mid.clone();
