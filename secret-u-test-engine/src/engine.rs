@@ -1754,8 +1754,8 @@ pub extern "Rust" fn exec<'a>(
         #[cfg(feature="debug-trace")]
         {
             match OpIns::try_from(ins) {
-                Ok(ins) => print!("    {:<24} :", format!("{}", ins)),
-                _       => print!("    {:<24} :", format!("unknown {:#018x}", ins)),
+                Ok(ins) => print!("    {:<28} :", format!("{}", ins)),
+                _       => print!("    {:<28} :", format!("unknown {:#018x}", ins)),
             }
             for i in 0..s.get_mut().state.len() {
                 print!(" {:02x}", s.get_mut().state[i]);

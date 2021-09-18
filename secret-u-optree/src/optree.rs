@@ -614,7 +614,7 @@ impl SlotPool {
 /// Compilation state
 pub struct OpCompile {
     bytecode: Vec<u64>,
-    slots: Vec<u8>,
+    state: Vec<u8>,
 
     #[allow(dead_code)]
     opt: bool,
@@ -625,7 +625,7 @@ impl OpCompile {
     pub fn new(opt: bool) -> OpCompile {
         OpCompile {
             bytecode: Vec::new(),
-            slots: Vec::new(),
+            state: Vec::new(),
 
             opt: opt,
             slot_pool: SlotPool::new(),
@@ -1235,25 +1235,25 @@ impl<T: OpU> OpTree<T> {
         }
     }
 
-    /// Assuming we are Sym, patch the slots during a call
-    pub fn patch<U>(&self, slots: &mut [u8], v: U)
+    /// Assuming we are Sym, patch the state during a call
+    pub fn patch<U>(&self, state: &mut [u8], v: U)
     where
         T: From<U>
     {
         match self.0.borrow().deref() {
-            OpRoot::Tree(tree) => tree.patch(slots, v),
+            OpRoot::Tree(tree) => tree.patch(state, v),
             _ => panic!("patching non-sym?")
         }
     }
 
     /// execute bytecode, resulting in an immediate OpTree
-    pub fn exec(bytecode: &[u64], slots: &mut [u8]) -> Self {
-        Self::try_exec(bytecode, slots).unwrap()
+    pub fn exec(bytecode: &[u64], state: &mut [u8]) -> Self {
+        Self::try_exec(bytecode, state).unwrap()
     }
 
     /// execute bytecode, resulting in an immediate OpTree
-    pub fn try_exec(bytecode: &[u64], slots: &mut [u8]) -> Result<Self, Error> {
-        let res = exec(bytecode, slots)?;
+    pub fn try_exec(bytecode: &[u64], state: &mut [u8]) -> Result<Self, Error> {
+        let res = exec(bytecode, state)?;
         Ok(OpTree(RefCell::new(OpRoot::Imm(T::from_le_bytes(
             T::Bytes::try_from(res).map_err(|_| Error::InvalidReturn)?
         )))))
@@ -1386,18 +1386,18 @@ impl<T: OpU> OpNode<T> {
             T::NPW2, 0, OpCode::Ret, 0, slot, 0
         )));
 
-        // align slots
-        let mut aligned_slots = AlignedBytes::new_zeroed(
+        // align state
+        let mut aligned_state = AlignedBytes::new_zeroed(
             state.slot_pool.size,
             1usize << state.slot_pool.max_npw2
         );
-        aligned_slots[..state.slots.len()].copy_from_slice(&state.slots);
+        aligned_state[..state.state.len()].copy_from_slice(&state.state);
 
         #[cfg(feature="debug-bytecode")]
         {
-            println!("slots:");
+            println!("state:");
             print!("   ");
-            for b in aligned_slots.iter() {
+            for b in aligned_state.iter() {
                  print!(" {:02x}", b);
             }
             println!();
@@ -1407,11 +1407,11 @@ impl<T: OpU> OpNode<T> {
         }
 
         // imms is now the initial stack pointer
-        (state.bytecode, aligned_slots)
+        (state.bytecode, aligned_state)
     }
 
-    /// Assuming we are Sym, patch the slots during a call
-    pub fn patch<U>(&self, slots: &mut [u8], v: U)
+    /// Assuming we are Sym, patch the state during a call
+    pub fn patch<U>(&self, state: &mut [u8], v: U)
     where
         T: From<U>
     {
@@ -1424,7 +1424,7 @@ impl<T: OpU> OpNode<T> {
         );
 
         let slot = self.slot.get().expect("patching with no slot?");
-        slots[
+        state[
             slot as usize * size_of::<T>()
                 .. (slot as usize + 1) * size_of::<T>()
         ].copy_from_slice(T::from(v).to_le_bytes().as_ref());
@@ -3071,11 +3071,11 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 self.slot.set(Some(slot));
 
                 // write imm to slots
-                if state.slots.len() < (usize::from(slot)+1) << T::NPW2 {
-                    state.slots.resize((usize::from(slot)+1) << T::NPW2, 0);
+                if state.state.len() < (usize::from(slot)+1) << T::NPW2 {
+                    state.state.resize((usize::from(slot)+1) << T::NPW2, 0);
                 }
 
-                state.slots[
+                state.state[
                     usize::from(slot) << T::NPW2
                         .. (usize::from(slot)+1) << T::NPW2
                 ].copy_from_slice(v.to_le_bytes().as_ref());
@@ -3092,13 +3092,13 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 self.slot.set(Some(slot));
 
-                if state.slots.len() < (usize::from(slot)+1) << T::NPW2 {
-                    state.slots.resize((usize::from(slot)+1) << T::NPW2, 0);
+                if state.state.len() < (usize::from(slot)+1) << T::NPW2 {
+                    state.state.resize((usize::from(slot)+1) << T::NPW2, 0);
                 }
 
                 // we'll fill this in later, use an arbitrary constant
                 // to hopefully help debugging
-                state.slots[
+                state.state[
                     usize::from(slot) << T::NPW2
                         .. (usize::from(slot)+1) << T::NPW2
                 ].fill(0xcc);

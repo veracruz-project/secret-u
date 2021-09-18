@@ -395,91 +395,91 @@ impl fmt::Display for OpIns {
         match self.opcode() {
             // extract/replace
             OpCode::Extract => {
-                write!(fmt, "{}.{} r{}, r{}[{}]",
+                write!(fmt, "{}.{} s{}, s{}[{}]",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d(),
-                    self.a(),
+                    self.d() << (self.npw2()-self.lnpw2()),
+                    self.a() << self.npw2(),
                     self.b()
                 )
             }
 
             OpCode::Replace => {
-                write!(fmt, "{}.{} r{}[{}], r{}",
+                write!(fmt, "{}.{} s{}[{}], s{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d(),
+                    self.d() << self.npw2(),
                     self.b(),
-                    self.a()
+                    self.a() << (self.npw2()-self.lnpw2())
                 )
             }
 
             // conversion ops
             OpCode::ExtendU | OpCode::ExtendS => {
-                write!(fmt, "{}.{} r{}, r{}, {}",
+                write!(fmt, "{}.{} s{}, s{}, {}",
                     prefix(self.npw2(), self.b_npw2()),
                     self.opcode(),
-                    self.d(),
-                    self.a(),
+                    self.d() << self.npw2(),
+                    self.a() << (self.npw2()-self.lnpw2()),
                     prefix(self.lane_npw2(), self.b_npw2())
                 )
             }
 
             OpCode::Truncate => {
-                write!(fmt, "{}.{} r{}, r{}, {}",
+                write!(fmt, "{}.{} s{}, s{}, {}",
                     prefix(self.lane_npw2(), self.b_npw2()),
                     self.opcode(),
-                    self.d(),
-                    self.a(),
+                    self.d() << (self.npw2()-self.lnpw2()),
+                    self.a() << self.npw2(),
                     prefix(self.npw2(), self.b_npw2())
                 )
             }
 
             // splats and moves (synonym)
             OpCode::Splat if self.lnpw2() == 0 => {
-                write!(fmt, "{}.move r{}, r{}",
+                write!(fmt, "{}.move s{}, s{}",
                     prefix(self.npw2(), self.lnpw2()),
-                    self.d(),
-                    self.a()
+                    self.d() << self.npw2(),
+                    self.a() << (self.npw2() - self.lnpw2())
                 )
             }
 
             OpCode::Splat => {
-                write!(fmt, "{}.{} r{}, r{}",
+                write!(fmt, "{}.{} s{}, s{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d(),
-                    self.a(),
+                    self.d() << self.npw2(),
+                    self.a() << (self.npw2() - self.lnpw2()),
                 )
             }
 
             OpCode::SplatC if self.lnpw2() == 0 => {
-                write!(fmt, "{}.move r{}",
+                write!(fmt, "{}.move s{}",
                     prefix(self.npw2(), self.lnpw2()),
-                    self.d()
+                    self.d() << self.npw2()
                 )
             }
 
             OpCode::SplatC => {
-                write!(fmt, "{}.{} r{}",
+                write!(fmt, "{}.{} s{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d()
+                    self.d() << self.npw2()
                 )
             }
 
             OpCode::SplatLongC if self.lnpw2() == 0 => {
-                write!(fmt, "{}.move r{}",
+                write!(fmt, "{}.move s{}",
                     prefix(self.npw2(), self.lnpw2()),
-                    self.d()
+                    self.d() << self.npw2()
                 )
             }
 
             OpCode::SplatLongC => {
-                write!(fmt, "{}.{} r{}",
+                write!(fmt, "{}.{} s{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d()
+                    self.d() << self.npw2()
                 )
             }
 
@@ -493,11 +493,11 @@ impl fmt::Display for OpIns {
                 | OpCode::Ctz
                 | OpCode::Popcnt
                 => {
-                write!(fmt, "{}.{} r{}, r{}",
+                write!(fmt, "{}.{} s{}, s{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d(),
-                    self.a()
+                    self.d() << self.npw2(),
+                    self.a() << self.npw2()
                 )
             }
 
@@ -531,12 +531,12 @@ impl fmt::Display for OpIns {
                 | OpCode::Rotl
                 | OpCode::Rotr
                 => {
-                write!(fmt, "{}.{} r{}, r{}, r{}",
+                write!(fmt, "{}.{} s{}, s{}, s{}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d(),
-                    self.a(),
-                    self.b()
+                    self.d() << self.npw2(),
+                    self.a() << self.npw2(),
+                    self.b() << self.npw2()
                 )
             }
 
@@ -568,11 +568,11 @@ impl fmt::Display for OpIns {
                 | OpCode::RotlC
                 | OpCode::RotrC
                 => {
-                write!(fmt, "{}.{} r{}, r{}, 0x{:0w$x}",
+                write!(fmt, "{}.{} s{}, s{}, 0x{:0w$x}",
                     prefix(self.npw2(), self.lnpw2()),
                     self.opcode(),
-                    self.d(),
-                    self.a(),
+                    self.d() << self.npw2(),
+                    self.a() << self.npw2(),
                     self.b()
                         & 1u16.checked_shl(8*(1 << self.lane_npw2()))
                             .map(|mask| mask-1)
