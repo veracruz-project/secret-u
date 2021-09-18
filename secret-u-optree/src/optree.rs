@@ -16,6 +16,7 @@ use std::hash::Hasher;
 use std::borrow::Borrow;
 #[cfg(feature="opt-color-slots")]
 use std::collections::BTreeSet;
+use std::cmp::Ordering;
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -448,13 +449,9 @@ impl ConstPool {
 /// Pool for allocating/reusing slots in a fictional blob of bytes
 #[derive(Debug)]
 struct SlotPool {
-    // pool of deallocated slots, note the reversed
-    // order so that we are sorted first by slot size,
-    // and second by decreasing slot numbers
+    // pool of deallocated slots
     #[cfg(feature="opt-color-slots")]
-    pool: BTreeSet<(u8, i32)>,
-    //              ^   ^- negative slot number
-    //              '----- slot npw2
+    pool: BTreeSet<SlotPoolSlot>,
 
     // current end of blob
     size: usize,
@@ -462,6 +459,27 @@ struct SlotPool {
     // aligned of blob
     max_npw2: u8,
 }
+
+/// Slot in the slot pool, ordered first by slot size,
+/// and second by decreasing slot numbers
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+struct SlotPoolSlot(u8, u16);
+//                  ^   ^- slot number
+//                  '----- slot npw2
+
+impl PartialOrd for SlotPoolSlot {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SlotPoolSlot {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+            .then_with(|| self.1.cmp(&other.1).reverse())
+    }
+}
+
 
 impl SlotPool {
     /// Create a new empty slot pool
@@ -502,20 +520,18 @@ impl SlotPool {
         #[cfg(feature="opt-color-slots")]
         {
             // find smallest slot where size >= npw2 but slot*size < 256
-            let best_slot = self.pool.range((npw2, i32::MIN)..)
+            let best_slot = self.pool.range(SlotPoolSlot(npw2, u16::MAX)..)
                 .copied()
-                .filter(|(best_npw2, best_islot)| {
+                .filter(|SlotPoolSlot(best_npw2, best_slot)| {
                     // fits in slot number?
                     u16::try_from(
-                        (usize::try_from(-best_islot).unwrap() << best_npw2)
-                            >> npw2
+                        (usize::from(*best_slot) << best_npw2) >> npw2
                     ).is_ok()
                 })
                 .next();
-            if let Some((mut best_npw2, best_islot)) = best_slot {
+            if let Some(SlotPoolSlot(mut best_npw2, mut best_slot)) = best_slot {
                 // remove from pool
-                self.pool.remove(&(best_npw2, best_islot));
-                let mut best_slot = u16::try_from(-best_islot).unwrap();
+                self.pool.remove(&SlotPoolSlot(best_npw2, best_slot));
 
                 // pad
                 while best_npw2 > npw2 {
@@ -523,7 +539,7 @@ impl SlotPool {
                     best_npw2 -= 1;
                     // return padding into pool
                     if let Some(padding_slot) = best_slot.checked_add(1) {
-                        self.dealloc(padding_slot, best_npw2);
+                        self.dealloc(best_npw2, padding_slot);
                     }
                 }
 
@@ -548,7 +564,7 @@ impl SlotPool {
             let padding_slot = self.size >> padding_npw2;
             self.size += 1 << padding_npw2;
             if let Ok(padding_slot) = u16::try_from(padding_slot) {
-                self.dealloc(padding_slot, u8::try_from(padding_npw2).unwrap());
+                self.dealloc(u8::try_from(padding_npw2).unwrap(), padding_slot);
             }
         }
 
@@ -567,8 +583,8 @@ impl SlotPool {
     /// Return a slot to the pool
     pub fn dealloc(
         &mut self,
-        #[allow(unused)] mut slot: u16,
-        #[allow(unused)] mut npw2: u8
+        #[allow(unused)] mut npw2: u8,
+        #[allow(unused)] mut slot: u16
     ) {
         // do nothing here if we aren't reusing slots
         #[cfg(feature="opt-color-slots")]
@@ -579,16 +595,16 @@ impl SlotPool {
             // big one
             if slot & !1 != 0 {
                 // try to defragment?
-                while self.pool.remove(&(npw2, -i32::from(slot ^ 1))) {
+                while self.pool.remove(&SlotPoolSlot(npw2, slot ^ 1)) {
                     slot /= 2;
                     npw2 += 1;
                 }
             }
 
             assert!(
-                self.pool.insert((npw2, -i32::from(slot))),
+                self.pool.insert(SlotPoolSlot(npw2, slot)),
                 "Found duplicate slot in pool!? ({}, {})\n{:?}",
-                slot, npw2,
+                npw2, slot,
                 self.pool
             )
         }
@@ -1355,7 +1371,7 @@ impl<T: OpU> OpNode<T> {
 
         // second pass now to compile the bytecode and stack, note sp now points
         // to end of immediates
-        let (slot, _) = self.compile_pass2(&mut state);
+        let (_, slot) = self.compile_pass2(&mut state);
 
         // to make lifetimes work in order to figure out slot reuse, reference
         // counting for is left up to the caller
@@ -1505,7 +1521,7 @@ pub trait DynOpNode: Debug {
 
     /// Second compile pass, used to actually compile both the
     /// immediates and bytecode. Returns the resulting slot + npw2.
-    fn compile_pass2(&self, state: &mut OpCompile) -> (u16, u8);
+    fn compile_pass2(&self, state: &mut OpCompile) -> (u8, u16);
 }
 
 
@@ -1520,8 +1536,8 @@ pub trait DynOpNode: Debug {
 #[cfg(feature="opt-schedule-slots")]
 macro_rules! schedule {
     (
-        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
-        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
+        let ($a_npw2:ident, $a_slot:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_npw2:ident, $b_slot:ident) = $b:ident.compile_pass2($b_state:ident);
     ) => {
         let a_tuple;
         let b_tuple;
@@ -1532,13 +1548,13 @@ macro_rules! schedule {
             b_tuple = $b.compile_pass2($b_state);
             a_tuple = $a.compile_pass2($a_state);
         }
-        let ($a_slot, $a_npw2) = a_tuple;
-        let ($b_slot, $b_npw2) = b_tuple;
+        let ($a_npw2, $a_slot) = a_tuple;
+        let ($b_npw2, $b_slot) = b_tuple;
     };
     (
-        let ($p_slot:ident, $p_npw2:ident) = $p:ident.compile_pass2($p_state:ident);
-        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
-        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
+        let ($p_npw2:ident, $p_slot:ident) = $p:ident.compile_pass2($p_state:ident);
+        let ($a_npw2:ident, $a_slot:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_npw2:ident, $b_slot:ident) = $b:ident.compile_pass2($b_state:ident);
     ) => {
         // this isn't perfect, but more efficient than fully sorting
         let a_tuple;
@@ -1550,30 +1566,30 @@ macro_rules! schedule {
             b_tuple = $b.compile_pass2($b_state);
             a_tuple = $a.compile_pass2($a_state);
         }
-        let ($a_slot, $a_npw2) = a_tuple;
-        let ($b_slot, $b_npw2) = b_tuple;
+        let ($a_npw2, $a_slot) = a_tuple;
+        let ($b_npw2, $b_slot) = b_tuple;
         // we're guessing predicates are usually more short lived
-        let ($p_slot, $p_npw2) = $p.compile_pass2($p_state);
+        let ($p_npw2, $p_slot) = $p.compile_pass2($p_state);
     };
 }
 #[cfg(not(feature="opt-schedule-slots"))]
 macro_rules! schedule {
     (
-        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
-        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
+        let ($a_npw2:ident, $a_slot:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_npw2:ident, $b_slot:ident) = $b:ident.compile_pass2($b_state:ident);
     ) => {
-        let ($a_slot, $a_npw2) = $a.compile_pass2($a_state);
-        let ($b_slot, $b_npw2) = $b.compile_pass2($b_state);
+        let ($a_npw2, $a_slot) = $a.compile_pass2($a_state);
+        let ($b_npw2, $b_slot) = $b.compile_pass2($b_state);
     };
     (
-        let ($p_slot:ident, $p_npw2:ident) = $p:ident.compile_pass2($p_state:ident);
-        let ($a_slot:ident, $a_npw2:ident) = $a:ident.compile_pass2($a_state:ident);
-        let ($b_slot:ident, $b_npw2:ident) = $b:ident.compile_pass2($b_state:ident);
+        let ($p_npw2:ident, $p_slot:ident) = $p:ident.compile_pass2($p_state:ident);
+        let ($a_npw2:ident, $a_slot:ident) = $a:ident.compile_pass2($a_state:ident);
+        let ($b_npw2:ident, $b_slot:ident) = $b:ident.compile_pass2($b_state:ident);
     ) => {
-        let ($a_slot, $a_npw2) = $a.compile_pass2($a_state);
-        let ($b_slot, $b_npw2) = $b.compile_pass2($b_state);
+        let ($a_npw2, $a_slot) = $a.compile_pass2($a_state);
+        let ($b_npw2, $b_slot) = $b.compile_pass2($b_state);
         // we're guessing predicates are usually more short lived
-        let ($p_slot, $p_npw2) = $p.compile_pass2($p_state);
+        let ($p_npw2, $p_slot) = $p.compile_pass2($p_state);
     };
 }
 
@@ -3250,10 +3266,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
     }
 
-    fn compile_pass2(&self, state: &mut OpCompile) -> (u16, u8) {
+    fn compile_pass2(&self, state: &mut OpCompile) -> (u8, u16) {
         // already computed?
         if let Some(slot) = self.slot.get() {
-            return (slot, T::NPW2);
+            return (T::NPW2, slot);
         }
 
         match &self.kind {
@@ -3298,7 +3314,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 }
 
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Imm(_) => {
                 // should be entirely handled in first pass
@@ -3314,9 +3330,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (p_slot, p_npw2) = p.compile_pass2(state);
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (p_npw2, p_slot) = p.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let p_refs = p.dec_refs();
                 let a_refs = a.dec_refs();
@@ -3327,10 +3343,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Select, p_slot, a_slot, b_slot
                     )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
                     self.slot.set(Some(p_slot));
-                    (p_slot, T::NPW2)
+                    (T::NPW2, p_slot)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
@@ -3339,11 +3355,11 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Select, slot, a_slot, b_slot
                     )));
-                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if p_refs == 0 { state.slot_pool.dealloc(p_npw2, p_slot); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2)
+                    (T::NPW2, slot)
                 }
             }
             OpKind::Shuffle(lnpw2, p, a, b) => {
@@ -3351,9 +3367,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (p_slot, p_npw2) = p.compile_pass2(state);
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (p_npw2, p_slot) = p.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let p_refs = p.dec_refs();
                 let a_refs = a.dec_refs();
@@ -3364,10 +3380,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Shuffle, p_slot, a_slot, b_slot
                     )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
                     self.slot.set(Some(p_slot));
-                    (p_slot, T::NPW2)
+                    (T::NPW2, p_slot)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
@@ -3376,34 +3392,34 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, *lnpw2, OpCode::Shuffle, slot, a_slot, b_slot
                     )));
-                    if p_refs == 0 { state.slot_pool.dealloc(p_slot, p_npw2); }
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if p_refs == 0 { state.slot_pool.dealloc(p_npw2, p_slot); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2)
+                    (T::NPW2, slot)
                 }
             }
             OpKind::Extract(lane, a) => {
                 let a = a.borrow();
                 assert!(T::NPW2 <= a.npw2());
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     a_npw2, a_npw2-T::NPW2, OpCode::Extract, slot, a_slot, *lane
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Replace(lane, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 assert!(T::NPW2 >= b.npw2());
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
@@ -3413,9 +3429,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, T::NPW2-b_npw2, OpCode::Replace, a_slot, b_slot, *lane
                     )));
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
                     self.slot.set(Some(a_slot));
-                    (a_slot, T::NPW2)
+                    (T::NPW2, a_slot)
                 } else {
                     let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                     state.bytecode.push(u64::from(OpIns::new(
@@ -3424,1083 +3440,1083 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     state.bytecode.push(u64::from(OpIns::new(
                         T::NPW2, T::NPW2-b_npw2, OpCode::Replace, slot, b_slot, *lane
                     )));
-                    if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                    if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                    if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                    if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
                     self.slot.set(Some(slot));
-                    (slot, T::NPW2)
+                    (T::NPW2, slot)
                 }
             }
 
             OpKind::ExtendU(lnpw2, a) => {
                 let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, T::NPW2-a_npw2, OpCode::ExtendU, slot, a_slot, u16::from(*lnpw2)
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::ExtendS(lnpw2, a) => {
                 let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, T::NPW2-a_npw2, OpCode::ExtendS, slot, a_slot, u16::from(*lnpw2)
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Truncate(lnpw2, a) => {
                 let a = a.borrow();
                 assert!(T::NPW2 <= a.npw2());
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     a_npw2, a_npw2-T::NPW2, OpCode::Truncate, slot, a_slot, u16::from(*lnpw2)
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Splat(a) => {
                 let a = a.borrow();
                 assert!(T::NPW2 >= a.npw2());
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, T::NPW2-a_npw2, OpCode::Splat, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
 
             #[cfg(feature="opt-compress-consts")]
             OpKind::Eq(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::EqC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Eq(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Eq, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Ne(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::NeC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Ne(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Ne, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::LtU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LtUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::LtU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LtU, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::LtS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LtSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::LtS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LtS, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::GtU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GtUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::GtU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GtU, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::GtS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GtSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::GtS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GtS, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::LeU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LeUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::LeU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LeU, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::LeS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LeSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::LeS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::LeS, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::GeU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GeUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::GeU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GeU, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::GeS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GeSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::GeS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::GeS, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::MinU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MinUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::MinU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MinU, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::MinS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MinSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::MinS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MinS, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::MaxU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MaxUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::MaxU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MaxU, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::MaxS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MaxSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::MaxS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MaxS, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Neg(lnpw2, a) => {
                 let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Neg, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Abs(lnpw2, a) => {
                 let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Abs, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Not(a) => {
                 let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::Not, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Clz(lnpw2, a) => {
                 let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Clz, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Ctz(lnpw2, a) => {
                 let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Ctz, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Popcnt(lnpw2, a) => {
                 let a = a.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let a_refs = a.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Popcnt, slot, a_slot, 0
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Add(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::AddC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Add(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Add, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Sub(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::SubC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Sub(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Sub, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Mul(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::MulC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Mul(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Mul, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::And(a, b) if b.borrow().is_const_u16(None) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, lnpw2, OpCode::AndC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::And(a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::And, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Andnot(a, b) if b.borrow().is_const_u16(None) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, lnpw2, OpCode::AndnotC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Andnot(a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::Andnot, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Or(a, b) if b.borrow().is_const_u16(None) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, lnpw2, OpCode::OrC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Or(a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::Or, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Xor(a, b) if b.borrow().is_const_u16(None) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (lnpw2, b_const) = b.get_const_u16(None).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, lnpw2, OpCode::XorC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Xor(a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::Xor, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Shl(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::ShlC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Shl(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Shl, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::ShrU(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::ShrUC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::ShrU(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::ShrU, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::ShrS(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::ShrSC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::ShrS(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::ShrS, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Rotl(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::RotlC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Rotl(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Rotl, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             #[cfg(feature="opt-compress-consts")]
             OpKind::Rotr(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
                 let a = a.borrow();
                 let b = b.borrow();
-                let (a_slot, a_npw2) = a.compile_pass2(state);
+                let (a_npw2, a_slot) = a.compile_pass2(state);
                 let (_, b_const) = b.get_const_u16(Some(*lnpw2)).unwrap();
                 let a_refs = a.dec_refs();
                 b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::RotrC, slot, a_slot, b_const
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
             OpKind::Rotr(lnpw2, a, b) => {
                 let a = a.borrow();
                 let b = b.borrow();
                 schedule! {
-                    let (a_slot, a_npw2) = a.compile_pass2(state);
-                    let (b_slot, b_npw2) = b.compile_pass2(state);
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
                 }
                 let a_refs = a.dec_refs();
                 let b_refs = b.dec_refs();
-                if a_refs == 0 { state.slot_pool.dealloc(a_slot, a_npw2); }
-                if b_refs == 0 { state.slot_pool.dealloc(b_slot, b_npw2); }
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
 
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, *lnpw2, OpCode::Rotr, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
-                (slot, T::NPW2)
+                (T::NPW2, slot)
             }
         }
     }
