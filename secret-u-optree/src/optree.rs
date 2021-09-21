@@ -873,7 +873,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn select(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let p = p.node();
         let a = a.node();
         let b = b.node();
@@ -883,7 +882,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shuffle(lnpw2: u8, p: Self, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let p = p.node();
         let a = a.node();
         let b = b.node();
@@ -921,7 +919,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn eq(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -930,7 +927,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ne(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -939,7 +935,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn lt_u(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -948,7 +943,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn lt_s(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -957,7 +951,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn gt_u(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -966,7 +959,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn gt_s(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -975,7 +967,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn le_u(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -984,7 +975,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn le_s(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -993,7 +983,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ge_u(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1002,7 +991,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ge_s(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1011,7 +999,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn min_u(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1020,7 +1007,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn min_s(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1029,7 +1015,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn max_u(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1038,7 +1023,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn max_s(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1047,7 +1031,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn neg(lnpw2: u8, a: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1055,7 +1038,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn abs(lnpw2: u8, a: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1070,7 +1052,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn clz(lnpw2: u8, a: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1078,7 +1059,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn ctz(lnpw2: u8, a: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1086,7 +1066,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn popcnt(lnpw2: u8, a: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let flags = a.flags();
         let depth = a.depth();
@@ -1094,7 +1073,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn add(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1103,7 +1081,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn sub(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1112,7 +1089,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn mul(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1153,7 +1129,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shl(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1162,7 +1137,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shr_u(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1171,7 +1145,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn shr_s(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1180,7 +1153,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn rotl(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();
@@ -1189,7 +1161,6 @@ impl<T: OpU> OpTree<T> {
     }
 
     pub fn rotr(lnpw2: u8, a: Self, b: Self) -> Self {
-        debug_assert!(lnpw2 <= 6);
         let a = a.node();
         let b = b.node();
         let flags = a.flags() | b.flags();

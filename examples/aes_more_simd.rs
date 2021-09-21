@@ -227,7 +227,7 @@ impl Aes {
             <_>::try_from(
                 (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
             ).ok().unwrap()
-        ).shuffle(state.clone(), state)
+        ).shuffle(state)
     }
 
     // MixColumns function mixes the columns of the state matrix
@@ -254,7 +254,7 @@ impl Aes {
             <_>::try_from(
                 (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
             ).ok().unwrap()
-        ).shuffle(sum.clone(), sum);
+        ).shuffle(sum);
 
         let rot = SecretU8x64::from_cast(
             SecretU32x16::from_cast(state.clone()).rotate_right(SecretU32x16::const_splat(8))

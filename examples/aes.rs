@@ -202,7 +202,7 @@ impl Aes {
              4,  9, 14,  3,
              8, 13,  2,  7,
             12,  1,  6, 11,
-        ]).shuffle(state.clone(), state)
+        ]).shuffle(state)
     }
 
     // MixColumns function mixes the columns of the state matrix
@@ -224,7 +224,7 @@ impl Aes {
              4,  4,  4,  4,
              8,  8,  8,  8,
             12, 12, 12, 12,
-        ]).shuffle(sum.clone(), sum);
+        ]).shuffle(sum);
 
         let rot = SecretU8x16::from_cast(
             SecretU32x4::from_cast(state.clone()).rotate_right(SecretU32x4::const_splat(8))

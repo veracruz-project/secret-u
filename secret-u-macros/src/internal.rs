@@ -186,6 +186,7 @@ fn secret_t_map<'a>(
                     (format!("__secret_ix{}", suffix),  ident!("SecretI{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
                     (format!("__secret_mx{}", suffix),  ident!("SecretM{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
                     (format!("__U{}", suffix),          ident!("U{}", 8 << npw2)),
+                    (format!("__half_U{}", suffix),     ident!("U{}", 8 << (npw2.saturating_sub(1)))),
                     (format!("__lane_U{}", suffix),     ident!("U{}", 8 << (npw2-lnpw2))),
                     (format!("__t{}", suffix),          lit!(Literal::string(t))),
                     (format!("__npw2{}", suffix),       lit!(Literal::u8_unsuffixed(npw2))),

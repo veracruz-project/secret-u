@@ -883,7 +883,7 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
                     }
                 } else if i == 0 {
                     parse_quote! {
-                        let #b = a0.clone().shuffle(#table1, #table2);
+                        let #b = a0.clone().shuffle2(#table1, #table2);
                     }
                 } else {
                     let n = lit!(i / MAX_SHUFFLE_SIZE);
@@ -891,7 +891,7 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
                         let #b = a1.clone().lt(#table_secret_ty_const(#n))
                             .select(
                                 b.clone(),
-                                a0.clone().shuffle(#table1, #table2)
+                                a0.clone().shuffle2(#table1, #table2)
                             );
                     }
                 }
@@ -952,6 +952,9 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
             use #crate_::traits::FromCast;
             use #crate_::traits::Eq;
             use #crate_::traits::Ord;
+            use #crate_::traits::Select;
+            use #crate_::traits::Shuffle;
+            use #crate_::traits::Shuffle2;
 
             #(#packs)*
 

@@ -32,14 +32,31 @@ pub trait Ord {
     }
 }
 
-/// A trait for objects that can be selected between
+/// A trait for objects that can select 
 pub trait Select<T> {
-    fn select(pred: T, a: Self, b: Self) -> Self;
+    /// Select operation for constant-time conditionals
+    fn select(self, a: T, b: T) -> T;
 }
 
-/// A trait for objects that can be shuffled
+/// A trait for objects that can shuffle
 pub trait Shuffle<T> {
-    fn shuffle(pred: T, a: Self, b: Self) -> Self;
+    /// Shuffle operation using this value as indices
+    ///
+    /// For each lane:
+    /// 0..lanes       <= lane from a
+    /// otherwise      <= 0
+    fn shuffle(self, a: T) -> T;
+}
+
+/// A trait for objects that can shuffle 
+pub trait Shuffle2<T> {
+    /// Shuffle operation using this value as indices
+    ///
+    /// For each lane:
+    /// 0..lanes       <= lane from a
+    /// lanes..2*lanes <= lane-lanes from b
+    /// otherwise      <= 0
+    fn shuffle2(self, a: T, b: T) -> T;
 }
 
 /// A trait for objects that can be flattened to reduce tree size

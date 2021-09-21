@@ -62,14 +62,9 @@ impl Sha256 {
     fn transform(state: SecretU32x8, data: SecretU8x64) -> SecretU32x8 {
         let m = {
             let mut m: Vec<SecretU32> = Vec::new();
-            let swap = SecretU8x4::const_lanes([3, 2, 1, 0]);
             for i in 0..16 {
                 let word = SecretU32x16::from_cast(data.clone()).extract(i);
-                m.push(SecretU32::from_cast(
-                    swap.clone().shuffle(
-                        SecretU8x4::from_cast(word.clone()),
-                        SecretU8x4::from_cast(word))
-                ));
+                m.push(word.reverse_bytes());
             }
             for i in 16..64 {
                 m.push(

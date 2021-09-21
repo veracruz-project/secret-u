@@ -311,5 +311,79 @@ mod tests {
         println!("{:?}", v);
         assert_eq!(v, [-1000, -2000]);
     }
+
+    #[cfg(feature="u262144")]
+    #[test]
+    fn int_really_big_reverse() {
+        println!();
+
+        let mut bytes = [0u8; 1024];
+        for i in 0..bytes.len() {
+            bytes[i] = i as u8;
+        }
+        let a = SecretU8x1024::new_lanes(bytes);
+        let x = a.clone().reverse_lanes();
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify_lanes();
+        println!("{:?}", v);
+        let mut bytes = [0u8; 1024];
+        for i in 0..bytes.len() {
+            bytes[i] = (bytes.len()-1-i) as u8;
+        }
+        assert_eq!(v, bytes);
+
+        let mut bytes = [0u8; 1024];
+        for i in 0..bytes.len() {
+            bytes[i] = i as u8;
+        }
+        let a = SecretU8192::from_le_bytes(bytes);
+        let x = a.clone().reverse_bytes();
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify_le_bytes();
+        println!("{:?}", v);
+        let mut bytes = [0u8; 1024];
+        for i in 0..bytes.len() {
+            bytes[i] = (bytes.len()-1-i) as u8;
+        }
+        assert_eq!(v, bytes);
+
+        let mut bytes = [0u8; 1024];
+        for i in (0..bytes.len()).step_by(2) {
+            bytes[i+0] = i as u8;
+            bytes[i+1] = (i+1) as u8;
+        }
+        let a = SecretU16x512::from_le_bytes(bytes);
+        let x = a.clone().reverse_bytes();
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify_le_bytes();
+        println!("{:?}", v);
+        let mut bytes = [0u8; 1024];
+        for i in (0..bytes.len()).step_by(2) {
+            bytes[i+0] = (i+1) as u8;
+            bytes[i+1] = i as u8;
+        }
+        assert_eq!(v, bytes);
+
+        let mut bytes = [0u8; 1024];
+        for i in 0..bytes.len()/4 {
+            bytes[i+  0] = 1;
+            bytes[i+256] = 2;
+            bytes[i+512] = 3;
+            bytes[i+768] = 4;
+        }
+        let a = SecretU4096x2::from_le_bytes(bytes);
+        let x = a.clone().reverse_bytes();
+        x.tree().disas(io::stdout()).unwrap();
+        let v = x.declassify_le_bytes();
+        println!("{:?}", v);
+        let mut bytes = [0u8; 1024];
+        for i in 0..bytes.len()/4 {
+            bytes[i+  0] = 2;
+            bytes[i+256] = 1;
+            bytes[i+512] = 4;
+            bytes[i+768] = 3;
+        }
+        assert_eq!(v, bytes);
+    }
 }
 

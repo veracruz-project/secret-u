@@ -86,17 +86,17 @@ impl ChaCha20 {
             c += d.clone(); b ^= c.clone(); b = b.clone().rotate_left(SecretU32x4::const_splat(12));
             a += b.clone(); d ^= a.clone(); d = d.clone().rotate_left(SecretU32x4::const_splat( 8));
             c += d.clone(); b ^= c.clone(); b = b.clone().rotate_left(SecretU32x4::const_splat( 7));
-            b = shuffle1.clone().shuffle(b.clone(), b);
-            c = shuffle2.clone().shuffle(c.clone(), c);
-            d = shuffle3.clone().shuffle(d.clone(), d);
+            b = shuffle1.clone().shuffle(b);
+            c = shuffle2.clone().shuffle(c);
+            d = shuffle3.clone().shuffle(d);
             // even round
             a += b.clone(); d ^= a.clone(); d = d.clone().rotate_left(SecretU32x4::const_splat(16));
             c += d.clone(); b ^= c.clone(); b = b.clone().rotate_left(SecretU32x4::const_splat(12));
             a += b.clone(); d ^= a.clone(); d = d.clone().rotate_left(SecretU32x4::const_splat( 8));
             c += d.clone(); b ^= c.clone(); b = b.clone().rotate_left(SecretU32x4::const_splat( 7));
-            b = shuffle3.clone().shuffle(b.clone(), b);
-            c = shuffle2.clone().shuffle(c.clone(), c);
-            d = shuffle1.clone().shuffle(d.clone(), d);
+            b = shuffle3.clone().shuffle(b);
+            c = shuffle2.clone().shuffle(c);
+            d = shuffle1.clone().shuffle(d);
         }
 
         // mix array
