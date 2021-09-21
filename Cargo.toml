@@ -7,7 +7,6 @@ edition = "2018"
 [features]
 default = [
     "u128",
-    "x1",
     "opt-color-slots",
     "opt-schedule-slots",
     "opt-fold-consts",
@@ -98,7 +97,7 @@ u65536  = ["secret-u-macros/u65536"]
 u131072 = ["secret-u-macros/u131072"]
 u262144 = ["secret-u-macros/u262144"]
 
-# Dependent crates should declare the minimum lane count required for
+# Dependent crates may also declare the minimum lane count required for
 # compilation, as this allows secret-u to only compile what is needed,
 # significantly decreasing compile-times. The total minimum is determined by
 # secret-u's build.rs.
@@ -110,7 +109,7 @@ u262144 = ["secret-u-macros/u262144"]
 # Note that you only need to specify one of these features, whichever one is
 # has the largest lane count required.
 #
-# By default only a single lane is enabled.
+# By default as many lanes as allowed by the integer width is enabled.
 #
 x1     = ["secret-u-macros/x1"]
 x2     = ["secret-u-macros/x2"]

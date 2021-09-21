@@ -38,9 +38,9 @@ const fn const_parse_u8(s: &str) -> u8 {
 }
 
 // MAX_NPW2/MAX_LNPW2/LIMB_NPW2 are all defined/overwritable in the build.rs
-const MAX_NPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_NPW2"));
-const MAX_LNPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_LNPW2"));
-const LIMB_NPW2: u8 = const_parse_u8(env!("SECRET_U_LIMB_NPW2"));
+pub const MAX_NPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_NPW2"));
+pub const MAX_LNPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_LNPW2"));
+pub const LIMB_NPW2: u8 = const_parse_u8(env!("SECRET_U_LIMB_NPW2"));
 
 
 macro_rules! ident {

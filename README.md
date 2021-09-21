@@ -622,9 +622,9 @@ $ make bench-sha256
 
 On my machine:
 ```
-sha256_reference  0m0.017s
-sha256            0m19.304s
-sha256_fast       0m0.110s
+sha256_reference  0m0.019s
+sha256            0m20.006s
+sha256_fast       0m0.114s
 ```
 
 `sha256_reference` provides a native, non-constant-time sha256 implementation,
@@ -638,11 +638,11 @@ $ make bench-aes
 
 On my machine:
 ```
-aes_reference           0m0.033s
-aes_shuffle             0m3.091s
-aes_bitslice            0m14.105s
-aes_more_simd_shuffle   0m1.649s
-aes_more_simd_bitslice  0m5.679s
+aes_reference           0m0.035s
+aes_shuffle             0m5.664s
+aes_bitslice            0m15.053s
+aes_more_simd_shuffle   0m1.983s
+aes_more_simd_bitslice  0m5.814s
 ```
 
 `aes_reference` again is not constant-time, and native, so it being the fastest
@@ -656,9 +656,9 @@ $ make bench-chacha20
 
 On my machine:
 ```
-chacha20_reference  0m0.023s
-chacha20            0m0.077s
-chacha20_simd       0m0.071s
+chacha20_reference  0m0.024s
+chacha20            0m0.080s
+chacha20_simd       0m0.079s
 ```
 
 chacha20 is both constant-time friendly and remarkably parallelizable,
@@ -670,9 +670,9 @@ $ make bench-sss
 
 On my machine:
 ```
-sss_shuffle        0m0.005s
-sss_simd_shuffle   0m0.001s
-sss_bitslice       0m0.041s
+sss_shuffle        0m0.011s
+sss_simd_shuffle   0m0.002s
+sss_bitslice       0m0.040s
 sss_simd_bitslice  0m0.020s
 ```
 
