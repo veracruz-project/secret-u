@@ -19,57 +19,29 @@ use std::cmp::min;
 use std::env;
 
 use evalexpr;
-use lazy_static::lazy_static;
 
-const DEFAULT_MAX_NPW2: u8 = 15;  // 2^15 bytes = u262144
-const DEFAULT_MAX_LNPW2: u8 = 15; // 2^15 lanes = 32768 lanes
-const LIMB_NPW2: u8 = 3;          // 2^3 bytes = u64
 
-// allow overwriting MAX_NPW2 and MAX_LNPW2 from environment to reduce the
-// number of generated types and speed up compile times
-lazy_static! {
-    static ref MAX_NPW2: u8 = {
-        match env::var("SECRET_U_MAX_NPW2") {
-            Ok(x) => {
-                match x.parse::<u8>() {
-                    Ok(x) if x < DEFAULT_MAX_NPW2 => {
-                        x
-                    }
-                    _ => {
-                        panic!("Bad value for SECRET_U_MAX_NPW2: {}", x);
-                    }
-                }
-            }
-            Err(env::VarError::NotPresent) => {
-                DEFAULT_MAX_NPW2
-            }
-            Err(err) => {
-                panic!("Bad value for SECRET_U_MAX_NPW2: {}", err);
-            }
+const fn const_parse_u8(s: &str) -> u8 {
+    let bytes = s.as_bytes();
+
+    let mut x = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if !(c >= b'0' && c <= b'9') {
+            // const panic not stabilized yet, so uh, don't use this wrong
         }
-    };
-
-    static ref MAX_LNPW2: u8 = {
-        match env::var("SECRET_U_MAX_LNPW2") {
-            Ok(x) => {
-                match x.parse::<u8>() {
-                    Ok(x) if x < DEFAULT_MAX_LNPW2 => {
-                        x
-                    }
-                    _ => {
-                        panic!("Bad value for SECRET_U_MAX_LNPW2: {}", x);
-                    }
-                }
-            }
-            Err(env::VarError::NotPresent) => {
-                DEFAULT_MAX_NPW2
-            }
-            Err(err) => {
-                panic!("Bad value for SECRET_U_MAX_LNPW2: {}", err);
-            }
-        }
-    };
+        x = x*10 + (c - b'0');
+        i += 1;
+    }
+    x
 }
+
+// MAX_NPW2/MAX_LNPW2/LIMB_NPW2 are all defined/overwritable in the build.rs
+const MAX_NPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_NPW2"));
+const MAX_LNPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_LNPW2"));
+const LIMB_NPW2: u8 = const_parse_u8(env!("SECRET_U_LIMB_NPW2"));
+
 
 macro_rules! ident {
     ($($fmt:tt)+) => {
@@ -192,10 +164,10 @@ fn token_if(input: TokenStream) -> TokenStream {
 fn secret_t_map<'a>(
     suffix: &'a str
 ) -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> + 'a {
-    (0..=*MAX_NPW2).map(move |npw2| {
+    (0..=MAX_NPW2).map(move |npw2| {
         std::array::IntoIter::new(["u", "i", "ux", "ix", "mx"]).map(move |t| {
             let has_lanes = t == "ux" || t == "ix" || t == "mx";
-            (0 ..= if has_lanes { min(*MAX_LNPW2, npw2) } else { 0 }).map(move |lnpw2| {
+            (0 ..= if has_lanes { min(MAX_LNPW2, npw2) } else { 0 }).map(move |lnpw2| {
                 (npw2, lnpw2, HashMap::from_iter([
                     (format!("__secret_t{}", suffix),
                         if has_lanes {

@@ -6,6 +6,8 @@ edition = "2018"
 
 [features]
 default = [
+    "u128",
+    "x1",
     "opt-color-slots",
     "opt-schedule-slots",
     "opt-fold-consts",
@@ -13,7 +15,7 @@ default = [
     "opt-simple-reductions",
     "opt-compress-consts",
     "opt-deduplicate-consts",
-    "bitslice-simplify-bdd"
+    "bitslice-simplify-bdd",
 ]
 
 # color slots in order to reuse slots, you probably want this
@@ -64,6 +66,68 @@ bitslice-simplify-bdd = ["secret-u-macros/bitslice-simplify-bdd"]
 # shuffle_tables is prefered for development
 example-bitslice-tables = []
 
+# Dependent crates should declare the minimum integer size required for
+# compilation, as this allows secret-u to only compile what is needed,
+# significantly decreasing compile-times. The total minimum is determined by
+# secret-u's build.rs.
+#
+# Rust unfortunately doesn't have a way to parameterize features with variables,
+# fortunately there's only log2(2^2^4) options here, so we can manually specify
+# the range of possible options.
+#
+# Note that you only need to specify one of these features, whichever one is
+# has the largest integer size required.
+#
+# By default integer types up to u128 are enabled (matching Rust's
+# primitive types).
+#
+u8      = ["secret-u-macros/u8"]
+u16     = ["secret-u-macros/u16"]
+u32     = ["secret-u-macros/u32"]
+u64     = ["secret-u-macros/u64"]
+u128    = ["secret-u-macros/u128"]
+u256    = ["secret-u-macros/u256"]
+u512    = ["secret-u-macros/u512"]
+u1024   = ["secret-u-macros/u1024"]
+u2048   = ["secret-u-macros/u2048"]
+u4096   = ["secret-u-macros/u4096"]
+u8192   = ["secret-u-macros/u8192"]
+u16384  = ["secret-u-macros/u16384"]
+u32768  = ["secret-u-macros/u32768"]
+u65536  = ["secret-u-macros/u65536"]
+u131072 = ["secret-u-macros/u131072"]
+u262144 = ["secret-u-macros/u262144"]
+
+# Dependent crates should declare the minimum lane count required for
+# compilation, as this allows secret-u to only compile what is needed,
+# significantly decreasing compile-times. The total minimum is determined by
+# secret-u's build.rs.
+#
+# Rust unfortunately doesn't have a way to parameterize features with variables,
+# fortunately there's only log2(2^2^4) options here, so we can manually specify
+# the range of possible options.
+#
+# Note that you only need to specify one of these features, whichever one is
+# has the largest lane count required.
+#
+# By default only a single lane is enabled.
+#
+x1     = ["secret-u-macros/x1"]
+x2     = ["secret-u-macros/x2"]
+x4     = ["secret-u-macros/x4"]
+x8     = ["secret-u-macros/x8"]
+x16    = ["secret-u-macros/x16"]
+x32    = ["secret-u-macros/x32"]
+x64    = ["secret-u-macros/x64"]
+x128   = ["secret-u-macros/x128"]
+x256   = ["secret-u-macros/x256"]
+x512   = ["secret-u-macros/x512"]
+x1024  = ["secret-u-macros/x1024"]
+x2048  = ["secret-u-macros/x2048"]
+x4096  = ["secret-u-macros/x4096"]
+x8192  = ["secret-u-macros/x8192"]
+x16384 = ["secret-u-macros/x16384"]
+x32768 = ["secret-u-macros/x32768"]
 
 [dependencies]
 secret-u-macros = {path="secret-u-macros"}
