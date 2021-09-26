@@ -15,7 +15,7 @@ all build:
 # note you may need to increase the default stack size to run some
 # of the heavier examples
 #
-# ulimit -s 131072
+# ulimit -s 1073741824
 #
 .PHONY: test
 define TEST_EXAMPLE
@@ -128,6 +128,19 @@ bench-sss:
 	time ./target/release/examples/sss_simd_shuffle
 	time ./target/release/examples/sss_bitslice
 	time ./target/release/examples/sss_simd_bitslice
+
+.PHONY: bench-rsa
+bench-rsa:
+	# build (assuming builds are cached)
+	$(ENV) cargo build --release --features u262144,x32768 --example rsa
+	# run measuring execution time
+	$(strip \
+		time ./target/release/examples/rsa \
+		encrypt \
+		<(echo "b418303ccf29da5dc43fc537ffd60be9008a8e5b663dfc00a244f1cacff13aecc9a3c4bcb2e247f580f98234372c5f26466deb7005e9fe15f710ad6109bbbcb5c0d28cb34cf5945b03277e5b459816d258b2af28faf339e287b0b468f75df8094376f38abc8b30a66a24b4167546d87ab724e4772f81f84bc2b6bd6f9928f97cb531aadf43e37b6ebc4bfd7b616711f06c83aa0fb0144fae379e236db21b8f0562f60c65b928fb3ca5f6fb722394a4b229db5076829bd86c6d22d03040dadfdad72edf753582b8a429c746966dd5ccb31a0a3c951d2e318585afe6d58de16de1079606c4f9c36e37f8f74a0f1fe28aa98473acd3b779b1860e41849a3d4eef6d" | xxd -r -p) \
+		<(echo "7f0ef5b1614318f1c08c713ae1ff84a59da123706e80dab323c8da8209151b4a85b44a100b70c3edfc518c400491048c3f723b81ec5a3ace0a6234c05a9a9e37e8d3633af8d7e61413f4a01c0acc938551d8b6e585af662e612715115d3c69cb3752cbde1cc962c875e87139cb01f1a71a6127e2c29cc2adc8b11e93868e36fd4a625aed7aef238cb89fb47013ce9c96074e3ffe890e567217eddd27045dcafd1ec8a5c0c127ed8c13889a07368309bd37d680a641e267b7a7ff8ea6d95db08baec52f59b81f230f5f796a00d3f61769691952d959ba8aa7cfda01ae2985d968df444d228079d0d7f1b97b30e0a592dc94233cec553c68b38c20a7cdf049c58d" | xxd -r -p) \
+		Cargo.toml \
+		target/test_rsa.encrypted)
 
 .PHONY: clean
 clean:

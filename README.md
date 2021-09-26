@@ -661,7 +661,7 @@ chacha20            0m0.080s
 chacha20_simd       0m0.079s
 ```
 
-chacha20 is both constant-time friendly and remarkably parallelizable,
+Chacha20 is both constant-time friendly and remarkably parallelizable,
 which shows in its performance.
 
 ``` bash
@@ -684,6 +684,23 @@ to note that the SIMD version has increased performance.
 This example is less interesting for benchmarking, more interesting for
 the issues it causes the Rust compiler (oom, stack overflow, etc) due to the
 large expressions the 510-byte bitsliced-table creates.
+
+``` bash
+$ make bench-rsa
+```
+
+On my machine:
+
+```
+rsa  0m5.856s
+```
+
+RSA leverages large integer operations, especially multiplication. This RSA
+examples uses Montgomery multiplication/exponentiation with u4096-u8192s, which
+is especially useful as secret-u does not provide a built-in division operation.
+Naturally as a part of providing constant-time operations, the multiply step of
+exponentiation is always performed, using a constant-time ternary select to
+decide if the result is used.
 
 
 ## Prior art

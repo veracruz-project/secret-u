@@ -1394,11 +1394,14 @@ impl<T: OpU> OpNode<T> {
             "patching non-sym?"
         );
 
-        let slot = self.slot.get().expect("patching with no slot?");
-        state[
-            slot as usize * size_of::<T>()
-                .. (slot as usize + 1) * size_of::<T>()
-        ].copy_from_slice(T::from(v).to_le_bytes().as_ref());
+        // if we have no slot that isn't an error, we may have
+        // just been optimized out
+        if let Some(slot) = self.slot.get() {
+            state[
+                slot as usize * size_of::<T>()
+                    .. (slot as usize + 1) * size_of::<T>()
+            ].copy_from_slice(T::from(v).to_le_bytes().as_ref());
+        }
     }
 
     /// compile and execute if value is not already an immediate or constant
