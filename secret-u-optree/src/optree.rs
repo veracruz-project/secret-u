@@ -8,19 +8,23 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::cell::Cell;
 use std::cmp::max;
-use std::mem::size_of;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::borrow::Borrow;
+use std::borrow::BorrowMut;
 #[cfg(feature="opt-color-slots")]
 use std::collections::BTreeSet;
 use std::cmp::Ordering;
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::ops::Index;
+use std::ops::IndexMut;
+use std::slice::SliceIndex;
 use std::borrow::Cow;
+use std::iter;
 
 use secret_u_opcode::Error;
 use secret_u_opcode::OpCode;
@@ -30,9 +34,13 @@ use secret_u_opcode::prefix;
 use secret_u_opcode::disas;
 use crate::engine::exec;
 
-use secret_u_macros::for_secret_t;
-
 use aligned_utils::bytes::AlignedBytes;
+
+use secret_u_macros::for_secret_t;
+use secret_u_macros::small_npw2;
+
+#[allow(non_upper_case_globals)]
+const __small_npw2: u8 = small_npw2!();
 
 
 /// Abritrary names for dissassembly
@@ -67,21 +75,30 @@ impl<'a, 'b, T> Reborrow for &'b mut Option<&'a mut T> {
 }
 
 /// Trait for the underlying raw types
-pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static {
+pub trait OpU
+    : Default
+    + Clone
+    + Eq
+    + Hash
+    + Debug
+    + LowerHex
+    + AsRef<[u8]>
+    + AsMut<[u8]>
+    + Borrow<[u8]>
+    + BorrowMut<[u8]>
+    + for<'a> TryFrom<&'a [u8], Error=&'a [u8]>
+    + TryFrom<Box<[u8]>, Error=Box<[u8]>>
+    + TryFrom<Vec<u8>, Error=Vec<u8>>
+    + 'static
+{
     /// npw2(size)
     const NPW2: u8;
 
-    /// raw byte representation
-    type Bytes: AsRef<[u8]> + AsMut<[u8]> + for<'a> TryFrom<&'a [u8]>;
+    /// size
+    const SIZE: usize;
 
-    /// access the underlying raw bytes
-    fn as_ne_bytes(&self) -> &[u8];
-
-    /// to raw byte representation
-    fn to_le_bytes(self) -> Self::Bytes;
-
-    /// from raw byte representation
-    fn from_le_bytes(bytes: Self::Bytes) -> Self;
+    /// Tries to copy, failing if a copy would be expensive
+    fn try_copy(&self) -> Option<Self>;
 
     /// Zero
     fn zero() -> Self;
@@ -103,23 +120,23 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
 
     /// Test if self is zero
     fn is_zero(&self) -> bool {
-        self == &Self::zero()
+        self.as_ref().iter().all(|b| *b == 0)
     }
 
     /// Test if self is one
     fn is_one(&self) -> bool {
-        self == &Self::one()
+        let bytes = self.as_ref();
+        bytes[0] == 1 && bytes[1..].iter().all(|b| *b == 0)
     }
 
     /// Test if self is ones
     fn is_ones(&self) -> bool {
-        self == &Self::ones()
+        self.as_ref().iter().all(|b| *b == 0xff)
     }
 
     /// Can we compress into a sign-extend followed by a splat?
     fn is_extend_splat(&self, extend_npw2: u8, splat_npw2: u8) -> bool {
-        let bytes = self.to_le_bytes();
-        let bytes = bytes.as_ref();
+        let bytes = self.as_ref();
         let splat_width = 1usize << splat_npw2;
         let extend_width = 1usize << extend_npw2;
 
@@ -153,117 +170,258 @@ pub trait OpU: Default + Copy + Clone + Debug + LowerHex + Eq + Sized + 'static 
     }
 }
 
-
-
-
 for_secret_t! {
     __if(__t == "u") {
-        #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-        pub struct __U([u8; __size]);
+        #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+        /// An internal type for representing underlying secret-u words,
+        /// note this is kept in le byte-order, simplifying a few things
+        pub struct __U(
+            __if(__npw2 <= __small_npw2) {
+                [u8; __size]
+            }
+            __if(__npw2 > __small_npw2) {
+                Box<[u8; __size]>
+            }
+        );
+
+        impl Default for __U {
+            fn default() -> Self {
+                Self::zero()
+            }
+        }
+
+        impl From<&[u8; __size]> for __U {
+            fn from(v: &[u8; __size]) -> Self {
+                __if(__npw2 <= __small_npw2) {
+                    Self(*v)
+                }
+                __if(__npw2 > __small_npw2) {
+                    // this bit of indirection is because there's no
+                    // &array -> Box<array> conversion
+                    Self(Box::try_from(Box::<[u8]>::from(v.as_ref())).unwrap())
+                }
+            }
+        }
 
         impl From<[u8; __size]> for __U {
             fn from(v: [u8; __size]) -> Self {
-                Self::from_le_bytes(v)
+                __if(__npw2 <= __small_npw2) {
+                    Self(v)
+                }
+                __if(__npw2 > __small_npw2) {
+                    Self(Box::new(v))
+                }
             }
         }
 
         impl From<__U> for [u8; __size] {
             fn from(v: __U) -> [u8; __size] {
-                v.to_le_bytes()
+                __if(__npw2 <= __small_npw2) {
+                    v.0
+                }
+                __if(__npw2 > __small_npw2) {
+                    *v.0
+                }
+            }
+        }
+
+        impl From<Box<[u8; __size]>> for __U {
+            fn from(v: Box<[u8; __size]>) -> Self {
+                __if(__npw2 <= __small_npw2) {
+                    Self(*v)
+                }
+                __if(__npw2 > __small_npw2) {
+                    Self(v)
+                }
+            }
+        }
+
+        impl From<__U> for Box<[u8; __size]> {
+            fn from(v: __U) -> Box<[u8; __size]> {
+                __if(__npw2 <= __small_npw2) {
+                    Box::new(v.0)
+                }
+                __if(__npw2 > __small_npw2) {
+                    v.0
+                }
             }
         }
 
         __if(__has_prim) {
             impl From<__prim_u> for __U {
                 fn from(v: __prim_u) -> Self {
-                    Self::from_le_bytes(v.to_le_bytes())
+                    Self::from(v.to_le_bytes())
                 }
             }
 
             impl From<__U> for __prim_u {
                 fn from(v: __U) -> __prim_u {
-                    <__prim_u>::from_le_bytes(v.to_le_bytes())
+                    <__prim_u>::from_le_bytes(<_>::from(v))
                 }
             }
 
             impl From<__prim_i> for __U {
                 fn from(v: __prim_i) -> Self {
-                    Self::from_le_bytes(v.to_le_bytes())
+                    Self::from(v.to_le_bytes())
                 }
             }
 
             impl From<__U> for __prim_i {
                 fn from(v: __U) -> __prim_i {
-                    <__prim_i>::from_le_bytes(v.to_le_bytes())
+                    <__prim_i>::from_le_bytes(<_>::from(v))
                 }
+            }
+        }
+
+        impl AsRef<[u8]> for __U {
+            fn as_ref(&self) -> &[u8] {
+                self.0.as_ref()
+            }
+        }
+
+        impl AsMut<[u8]> for __U {
+            fn as_mut(&mut self) -> &mut [u8] {
+                self.0.as_mut()
+            }
+        }
+
+        impl Borrow<[u8]> for __U {
+            fn borrow(&self) -> &[u8] {
+                self.0.as_ref()
+            }
+        }
+
+        impl BorrowMut<[u8]> for __U {
+            fn borrow_mut(&mut self) -> &mut [u8] {
+                self.0.as_mut()
+            }
+        }
+
+        impl Deref for __U {
+            type Target = [u8];
+            fn deref(&self) -> &[u8] {
+                self.0.as_ref()
+            }
+        }
+
+        impl DerefMut for __U {
+            fn deref_mut(&mut self) -> &mut [u8] {
+                self.0.as_mut()
+            }
+        }
+
+        impl<I: SliceIndex<[u8]>> Index<I> for __U {
+            type Output = <I as SliceIndex<[u8]>>::Output;
+            fn index(&self, index: I) -> &<Self as Index<I>>::Output {
+                self.0.index(index)
+            }
+        }
+
+        impl<I: SliceIndex<[u8]>> IndexMut<I> for __U {
+            fn index_mut(&mut self, index: I) -> &mut <Self as Index<I>>::Output {
+                self.0.index_mut(index)
+            }
+        }
+
+        impl<'a> TryFrom<&'a [u8]> for __U {
+            type Error = &'a [u8];
+            fn try_from(v: &'a [u8]) -> Result<Self, Self::Error> {
+                Ok(Self::from(
+                    <&[u8; __size]>::try_from(v)
+                        .map_err(|_| v)?
+                ))
+            }
+        }
+
+        impl TryFrom<Box<[u8]>> for __U {
+            type Error = Box<[u8]>;
+            fn try_from(v: Box<[u8]>) -> Result<Self, Self::Error> {
+                if v.len() != __size {
+                    return Err(v);
+                }
+
+                Ok(Self::from(Box::<[u8; __size]>::try_from(v).unwrap()))
+            }
+        }
+
+        impl TryFrom<Vec<u8>> for __U {
+            type Error = Vec<u8>;
+            fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
+                if v.len() != __size {
+                    return Err(v);
+                }
+
+                Ok(Self::try_from(Box::<[u8]>::from(v)).unwrap())
             }
         }
 
         impl OpU for __U {
             const NPW2: u8 = __npw2;
+            const SIZE: usize = __size;
 
-            type Bytes = [u8; __size];
-
-            fn as_ne_bytes(&self) -> &[u8] {
-                &self.0
-            }
-
-            fn to_le_bytes(self) -> Self::Bytes {
-                self.0
-            }
-
-            fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                Self(bytes)
+            fn try_copy(&self) -> Option<Self> {
+                __if(__npw2 <= __small_npw2) {
+                    Some(Self(self.0))
+                }
+                __if(__npw2 > __small_npw2) {
+                    None
+                }
             }
 
             fn zero() -> Self {
-                Self([0; __size])
+                __if(__has_prim) {
+                    Self::from(0 as __prim_u)
+                }
+                __if(!__has_prim) {
+                    Self::try_from(vec![0; __size]).unwrap()
+                }
             }
 
             fn one() -> Self {
-                let mut bytes = [0; __size];
-                bytes[0] = 1;
-                Self(bytes)
+                __if(__has_prim) {
+                    Self::from(1 as __prim_u)
+                }
+                __if(!__has_prim) {
+                    Self::try_from(
+                        iter::once(1)
+                            .chain(iter::repeat(0))
+                            .take(__size)
+                            .collect::<Vec<_>>()
+                    ).unwrap()
+                }
             }
 
             fn ones() -> Self {
-                Self([0xff; __size])
+                __if(__has_prim) {
+                    Self::from(<__prim_u>::MAX)
+                }
+                __if(!__has_prim) {
+                    Self::try_from(vec![0xff; __size]).unwrap()
+                }
             }
 
             fn extend_u<U: OpU>(other: U) -> Self {
-                let slice = other.to_le_bytes();
-                let slice = slice.as_ref();
-                let mut bytes = [0; __size];
-                bytes[..slice.len()].copy_from_slice(slice);
-                Self(bytes)
+                let mut self_ = Self::zero();
+                self_.as_mut()[..U::SIZE].copy_from_slice(other.as_ref());
+                self_
             }
 
             fn extend_s<U: OpU>(other: U) -> Self {
-                let slice = other.to_le_bytes();
-                let slice = slice.as_ref();
-                let mut bytes = if slice[slice.len()-1] & 0x80 == 0x80 {
-                    [0xff; __size]
+                let mut self_ = if other.as_ref()[U::SIZE-1] & 0x80 == 0x80 {
+                    Self::ones()
                 } else {
-                    [0x00; __size]
+                    Self::zero()
                 };
-                bytes[..slice.len()].copy_from_slice(slice);
-                Self(bytes)
+                self_.as_mut()[..U::SIZE].copy_from_slice(other.as_ref());
+                self_
             }
 
             fn splat<U: OpU>(other: U) -> Self {
-                let slice = other.to_le_bytes();
-                let slice = slice.as_ref();
-                let mut bytes = [0; __size];
-                for i in (0..__size).step_by(slice.len()) {
-                    bytes[i..i+slice.len()].copy_from_slice(slice);
+                let mut self_ = Self::zero();
+                for i in (0..__size).step_by(U::SIZE) {
+                    self_.as_mut()[i..i+U::SIZE].copy_from_slice(other.as_ref());
                 }
-                Self(bytes)
-            }
-        }
-
-        impl Default for __U {
-            fn default() -> Self {
-                Self::zero()
+                self_
             }
         }
 
@@ -280,137 +438,143 @@ for_secret_t! {
 }
 
 
-/// Kinds of operations in tree
-#[derive(Debug)]
-pub enum OpKind<T: OpU> {
-    Const(T),
-    Imm(T),
-    Sym(&'static str),
-
-    Extract(u16, RefCell<Rc<dyn DynOpNode>>),
-    Replace(u16, RefCell<Rc<OpNode<T>>>, RefCell<Rc<dyn DynOpNode>>),
-    Select(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Shuffle(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-
-    ExtendU(u8, RefCell<Rc<dyn DynOpNode>>),
-    ExtendS(u8, RefCell<Rc<dyn DynOpNode>>),
-    Truncate(u8, RefCell<Rc<dyn DynOpNode>>),
-    Splat(RefCell<Rc<dyn DynOpNode>>),
-
-    Eq(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Ne(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    LtU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    LtS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    GtU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    GtS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    LeU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    LeS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    GeU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    GeS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    MinU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    MinS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    MaxU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    MaxS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-
-    Neg(u8, RefCell<Rc<OpNode<T>>>),
-    Abs(u8, RefCell<Rc<OpNode<T>>>),
-    Not(RefCell<Rc<OpNode<T>>>),
-    Clz(u8, RefCell<Rc<OpNode<T>>>),
-    Ctz(u8, RefCell<Rc<OpNode<T>>>),
-    Popcnt(u8, RefCell<Rc<OpNode<T>>>),
-    Add(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Sub(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Mul(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    And(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Andnot(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Or(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Xor(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Shl(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    ShrU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    ShrS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Rotl(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-    Rotr(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
-}
-
-
-/// Tree of operations, including metadata to deduplicate
-/// common branches
-#[derive(Debug)]
-pub struct OpNode<T: OpU> {
-    kind: OpKind<T>,
-    refs: Cell<u32>,
-    slot: Cell<Option<u16>>,
-    flags: u8,
-    #[cfg(feature="opt-schedule-slots")]
-    depth: u32,
-    #[cfg(feature="opt-fold-consts")]
-    folded: Cell<bool>,
-}
-
-/// Root OpNode with additional small object optimization, which
-/// is useful for avoiding unnecessary allocations
-///
-/// Note this still participates in DAG deduplication by lazily
-/// allocating on demand, the result is a lot of RefCells...
-///
-/// Also not that Cell is not usable here because Rc does not
-/// implement Copy
-///
-#[derive(Debug)]
-pub struct OpTree<T: OpU>(RefCell<OpRoot<T>>);
-
-#[derive(Debug)]
-pub enum OpRoot<T: OpU> {
-    Const(T),
-    Imm(T),
-    Tree(Rc<OpNode<T>>),
-}
-
-impl<T: OpU> Default for OpTree<T> {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl<T: OpU> Clone for OpTree<T> {
-    // clone defers to tree, which ensures the backing tree is
-    // Rc before cloning
-    fn clone(&self) -> Self {
-        OpTree(RefCell::new(OpRoot::Tree(self.node())))
-    }
-}
-
-
 /// Pool of const OpNodes
 #[derive(Debug)]
 pub struct ConstPool {
     pool: HashSet<ConstPoolNode>
 }
 
+/// Trait to enable hashing of various borrow types into the const_pool
+pub trait ConstPoolRef {
+    fn const_pool_ref<'a>(&'a self) -> (u8, ConstPoolKind<'a>);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ConstPoolKind<'a> {
+    ConstZero,
+    ConstOne,
+    ConstOnes,
+    Const(&'a [u8]),
+}
+
+impl<'a> Hash for dyn ConstPoolRef + 'a {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let (npw2, kind) = self.const_pool_ref();
+
+        // we explicitly hash bytes here, so we can be sure ConstZero and
+        // Const(0) hash to the same value (see caveats in the Hash trait)
+        match kind {
+            ConstPoolKind::ConstZero => {
+                for _ in 0..(1 << npw2) {
+                    0u8.hash(state);
+                }
+            }
+            ConstPoolKind::ConstOne => {
+                1u8.hash(state);
+                for _ in 1..(1 << npw2) {
+                    0u8.hash(state);
+                }
+            }
+            ConstPoolKind::ConstOnes => {
+                for _ in 0..(1 << npw2) {
+                    0xffu8.hash(state);
+                }
+            }
+            ConstPoolKind::Const(v) => {
+                for i in 0..(1 << npw2) {
+                    v[i].hash(state);
+                }
+            }
+        }
+    }
+}
+
+impl<'a> PartialEq for dyn ConstPoolRef + 'a {
+    fn eq(&self, other: &dyn ConstPoolRef) -> bool {
+        let (self_npw2, self_kind) = self.const_pool_ref();
+        let (other_npw2, other_kind) = other.const_pool_ref();
+
+        self_npw2 == other_npw2 && match (self_kind, other_kind) {
+            (ConstPoolKind::ConstZero, ConstPoolKind::ConstZero) => true,
+            (ConstPoolKind::ConstOne,  ConstPoolKind::ConstOne ) => true,
+            (ConstPoolKind::ConstOnes, ConstPoolKind::ConstOnes) => true,
+            (ConstPoolKind::ConstZero, ConstPoolKind::Const(b) ) => b.iter().all(|x| *x == 0),
+            (ConstPoolKind::ConstOne,  ConstPoolKind::Const(b) ) => b[0] == 1 && b[1..].iter().all(|x| *x == 0),
+            (ConstPoolKind::ConstOnes, ConstPoolKind::Const(b) ) => b.iter().all(|x| *x == 0xff),
+            (ConstPoolKind::Const(a),  ConstPoolKind::ConstZero) => a.iter().all(|x| *x == 0),
+            (ConstPoolKind::Const(a),  ConstPoolKind::ConstOne ) => a[0] == 1 && a[1..].iter().all(|x| *x == 0),
+            (ConstPoolKind::Const(a),  ConstPoolKind::ConstOnes) => a.iter().all(|x| *x == 0xff),
+            (ConstPoolKind::Const(a),  ConstPoolKind::Const(b) ) => a.iter().zip(b.iter()).all(|(x, y)| x == y),
+            _                                                    => false,
+        }
+    }
+}
+
+impl<'a> Eq for dyn ConstPoolRef + 'a {}
+
+impl<T: OpU> ConstPoolRef for T {
+    fn const_pool_ref<'a>(&'a self) -> (u8, ConstPoolKind<'a>) {
+        (T::NPW2, ConstPoolKind::Const(self.as_ref()))
+    }
+}
+
+impl<T: OpU> ConstPoolRef for OpNode<T> {
+    fn const_pool_ref<'a>(&'a self) -> (u8, ConstPoolKind<'a>) {
+        match &self.kind {
+            OpKind::ConstZero => (self.npw2(), ConstPoolKind::ConstZero),
+            OpKind::ConstOne  => (self.npw2(), ConstPoolKind::ConstOne),
+            OpKind::ConstOnes => (self.npw2(), ConstPoolKind::ConstOnes),
+            OpKind::Const(v)  => (self.npw2(), ConstPoolKind::Const(v.as_ref())),
+            _                 => unreachable!(),
+        }
+    }
+}
+
+impl ConstPoolRef for Rc<dyn DynOpNode> {
+    fn const_pool_ref<'a>(&'a self) -> (u8, ConstPoolKind<'a>) {
+        self.deref().const_pool_ref()
+    }
+}
+
+impl ConstPoolRef for ConstPoolNode {
+    fn const_pool_ref<'a>(&'a self) -> (u8, ConstPoolKind<'a>) {
+        self.0.const_pool_ref()
+    }
+}
+
+impl ConstPoolRef for (u8, ConstPoolKind<'_>) {
+    fn const_pool_ref<'a>(&'a self) -> (u8, ConstPoolKind<'a>) {
+        *self
+    }
+}
+
+
 /// Wrapper around OpNode for hashing const nodes
 #[derive(Debug)]
 struct ConstPoolNode(Rc<dyn DynOpNode>);
 
+impl Hash for ConstPoolNode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        <dyn ConstPoolRef>::hash(&self.0, state)
+    }
+}
+
 impl PartialEq<ConstPoolNode> for ConstPoolNode {
     fn eq(&self, other: &ConstPoolNode) -> bool {
-        self.0.get_const_ne_bytes() == other.0.get_const_ne_bytes()
+        <dyn ConstPoolRef>::eq(&self.0, &other.0)
     }
 }
 
 impl Eq for ConstPoolNode {}
 
-impl Hash for ConstPoolNode {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.get_const_ne_bytes().hash(state)
+impl<'a> Borrow<dyn ConstPoolRef + 'a> for ConstPoolNode {
+    fn borrow(&self) -> &(dyn ConstPoolRef + 'a) {
+        self
     }
 }
 
-impl Borrow<[u8]> for ConstPoolNode {
-    fn borrow(&self) -> &[u8] {
-        self.0.get_const_ne_bytes().unwrap()
-    }
-}
 
+/// Constant pool for deduplication
 impl ConstPool {
     pub fn new() -> ConstPool {
         ConstPool {
@@ -418,22 +582,51 @@ impl ConstPool {
         }
     }
 
-    pub fn deduplicate(&mut self, node: &Rc<dyn DynOpNode>) -> Option<Rc<dyn DynOpNode>> {
-        debug_assert!(node.is_const());
-
+    pub fn deduplicate_zero<T: OpU>(&mut self) -> Rc<dyn DynOpNode> {
         // already exists?
-        if let Some(node) = self.pool.get(node.get_const_ne_bytes().unwrap()) {
-            return Some(node.0.clone());
+        if let Some(node) = self.pool.get(&(T::NPW2, ConstPoolKind::ConstZero) as &dyn ConstPoolRef) {
+            return node.0.clone();
         }
 
         // insert new node
+        let node = Rc::new(OpNode::<T>::new(
+            OpKind::ConstZero, 0, 0
+        ));
         self.pool.insert(ConstPoolNode(node.clone()));
-        None
+        node
     }
 
-    pub fn deduplicate_new<T: OpU>(&mut self, v: T) -> Rc<dyn DynOpNode> {
+    pub fn deduplicate_one<T: OpU>(&mut self) -> Rc<dyn DynOpNode> {
         // already exists?
-        if let Some(node) = self.pool.get(v.as_ne_bytes()) {
+        if let Some(node) = self.pool.get(&(T::NPW2, ConstPoolKind::ConstOne) as &dyn ConstPoolRef) {
+            return node.0.clone();
+        }
+
+        // insert new node
+        let node = Rc::new(OpNode::<T>::new(
+            OpKind::ConstOne, 0, 0
+        ));
+        self.pool.insert(ConstPoolNode(node.clone()));
+        node
+    }
+
+    pub fn deduplicate_ones<T: OpU>(&mut self) -> Rc<dyn DynOpNode> {
+        // already exists?
+        if let Some(node) = self.pool.get(&(T::NPW2, ConstPoolKind::ConstOnes) as &dyn ConstPoolRef) {
+            return node.0.clone();
+        }
+
+        // insert new node
+        let node = Rc::new(OpNode::<T>::new(
+            OpKind::ConstOnes, 0, 0
+        ));
+        self.pool.insert(ConstPoolNode(node.clone()));
+        node
+    }
+
+    pub fn deduplicate<T: OpU>(&mut self, v: T) -> Rc<dyn DynOpNode> {
+        // already exists?
+        if let Some(node) = self.pool.get(&v as &dyn ConstPoolRef) {
             return node.0.clone();
         }
 
@@ -445,6 +638,12 @@ impl ConstPool {
         node
     }
 }
+
+thread_local! {
+    /// Global constant pool
+    static CONST_POOL: RefCell<ConstPool> = RefCell::new(ConstPool::new());
+}
+
 
 /// Pool for allocating/reusing slots in a fictional blob of bytes
 #[derive(Debug)]
@@ -634,10 +833,197 @@ impl OpCompile {
 }
 
 
+/// Kinds of operations in tree
+#[derive(Debug)]
+pub enum OpKind<T: OpU> {
+    ConstZero,
+    ConstOne,
+    ConstOnes,
+    Const(T),
+    Imm(T),
+    Sym(&'static str),
+
+    Extract(u16, RefCell<Rc<dyn DynOpNode>>),
+    Replace(u16, RefCell<Rc<OpNode<T>>>, RefCell<Rc<dyn DynOpNode>>),
+    Select(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Shuffle(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+
+    ExtendU(u8, RefCell<Rc<dyn DynOpNode>>),
+    ExtendS(u8, RefCell<Rc<dyn DynOpNode>>),
+    Truncate(u8, RefCell<Rc<dyn DynOpNode>>),
+    Splat(RefCell<Rc<dyn DynOpNode>>),
+
+    Eq(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Ne(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LtU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LtS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GtU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GtS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LeU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    LeS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GeU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    GeS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MinU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MinS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MaxU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    MaxS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+
+    Neg(u8, RefCell<Rc<OpNode<T>>>),
+    Abs(u8, RefCell<Rc<OpNode<T>>>),
+    Not(RefCell<Rc<OpNode<T>>>),
+    Clz(u8, RefCell<Rc<OpNode<T>>>),
+    Ctz(u8, RefCell<Rc<OpNode<T>>>),
+    Popcnt(u8, RefCell<Rc<OpNode<T>>>),
+    Add(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Sub(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Mul(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    And(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Andnot(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Or(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Xor(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Shl(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    ShrU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    ShrS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Rotl(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Rotr(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+}
+
+
+/// Tree of operations, including metadata to deduplicate
+/// common branches
+#[derive(Debug)]
+pub struct OpNode<T: OpU> {
+    kind: OpKind<T>,
+    refs: Cell<u32>,
+    slot: Cell<Option<u16>>,
+    flags: u8,
+    #[cfg(feature="opt-schedule-slots")]
+    depth: u32,
+    #[cfg(feature="opt-fold-consts")]
+    folded: Cell<bool>,
+}
+
+/// Root OpNode with additional small object optimization, which
+/// is useful for avoiding unnecessary allocations
+///
+/// Note this still participates in DAG deduplication by lazily
+/// allocating on demand, the result is a lot of RefCells...
+///
+/// Also not that Cell is not usable here because Rc does not
+/// implement Copy
+///
+#[derive(Debug)]
+pub struct OpTree<T: OpU>(RefCell<OpRoot<T>>);
+
+#[derive(Debug)]
+pub enum OpRoot<T: OpU> {
+    ConstZero,
+    ConstOne,
+    ConstOnes,
+    Const(T),
+    Imm(T),
+    Tree(Rc<OpNode<T>>),
+}
+
+impl<T: OpU> Default for OpTree<T> {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+impl<T: OpU> Clone for OpTree<T> {
+    fn clone(&self) -> Self {
+        // clone defers to node, which ensures the backing tree is Rc
+        OpTree(RefCell::new(OpRoot::Tree(self.node())))
+    }
+}
+
+impl<T: OpU> OpTree<T> {
+    /// Create new tree
+    fn from_kind(kind: OpKind<T>, flags: u8, depth: u32) -> Self {
+        OpTree(RefCell::new(OpRoot::Tree(Rc::new(
+            OpNode::new(kind, flags, depth)
+        ))))
+    }
+
+    /// Get internal tree, potentially allocating if needed
+    fn node(&self) -> Rc<OpNode<T>> {
+        // convert to Rc if necessary
+        match self.0.replace(OpRoot::ConstZero) {
+            OpRoot::ConstZero => {
+                #[cfg(feature="opt-deduplicate-consts")]
+                let node = OpNode::dyn_downcast(
+                    CONST_POOL.with(|x| x.borrow_mut().deduplicate_zero::<T>())
+                );
+                #[cfg(not(feature="opt-deduplicate-consts"))]
+                let node = Rc::new(OpNode::new(
+                    OpKind::ConstZero, 0, 0
+                ));
+
+                self.0.replace(OpRoot::Tree(node.clone()));
+                node
+            }
+            OpRoot::ConstOne => {
+                #[cfg(feature="opt-deduplicate-consts")]
+                let node = OpNode::dyn_downcast(
+                    CONST_POOL.with(|x| x.borrow_mut().deduplicate_one::<T>())
+                );
+                #[cfg(not(feature="opt-deduplicate-consts"))]
+                let node = Rc::new(OpNode::new(
+                    OpKind::ConstOne, 0, 0
+                ));
+
+                self.0.replace(OpRoot::Tree(node.clone()));
+                node
+            }
+            OpRoot::ConstOnes => {
+                #[cfg(feature="opt-deduplicate-consts")]
+                let node = OpNode::dyn_downcast(
+                    CONST_POOL.with(|x| x.borrow_mut().deduplicate_ones::<T>())
+                );
+                #[cfg(not(feature="opt-deduplicate-consts"))]
+                let node = Rc::new(OpNode::new(
+                    OpKind::ConstOnes, 0, 0
+                ));
+
+                self.0.replace(OpRoot::Tree(node.clone()));
+                node
+            }
+            OpRoot::Const(v) => {
+                #[cfg(feature="opt-deduplicate-consts")]
+                let node = OpNode::dyn_downcast(
+                    CONST_POOL.with(|x| x.borrow_mut().deduplicate(v))
+                );
+                #[cfg(not(feature="opt-deduplicate-consts"))]
+                let node = Rc::new(OpNode::new(
+                    OpKind::Const(v), 0, 0
+                ));
+
+                self.0.replace(OpRoot::Tree(node.clone()));
+                node
+            }
+            OpRoot::Imm(v) => {
+                let node = Rc::new(OpNode::new(
+                    OpKind::Imm(v), OpNode::<T>::SECRET, 0
+                ));
+                self.0.replace(OpRoot::Tree(node.clone()));
+                node
+            }
+            OpRoot::Tree(node) => {
+                // can just increment reference count here
+                self.0.replace(OpRoot::Tree(node.clone()));
+                node
+            }
+        }
+    }
+}
+
 /// A trait to help with conversions between trees of different types
 pub trait DynOpTree {
     /// get NPW2 of the underlying tree
     fn npw2(&self) -> u8;
+    /// get SIZE of the underlying tree
+    fn size(&self) -> usize;
 
     /// get the underlying DynOpNode
     fn dyn_node(&self) -> Rc<dyn DynOpNode>;
@@ -654,6 +1040,10 @@ pub trait DynOpTree {
 impl<T: OpU> DynOpTree for OpTree<T> {
     fn npw2(&self) -> u8 {
         T::NPW2
+    }
+
+    fn size(&self) -> usize {
+        T::SIZE
     }
 
     fn dyn_node(&self) -> Rc<dyn DynOpNode> {
@@ -712,6 +1102,7 @@ impl<T: OpU> DynOpTree for OpTree<T> {
     }
 }
 
+
 /// Core of the OpTree
 impl<T: OpU> OpTree<T> {
     /// Create an immediate, secret value
@@ -732,51 +1123,17 @@ impl<T: OpU> OpTree<T> {
 
     /// A constant 0
     pub fn zero() -> Self {
-        Self::const_(T::zero())
+        OpTree(RefCell::new(OpRoot::ConstZero))
     }
 
     /// A constant 1
     pub fn one() -> Self {
-        Self::const_(T::one())
+        OpTree(RefCell::new(OpRoot::ConstOne))
     }
 
     /// A constant with all bits set to 1
     pub fn ones() -> Self {
-        Self::const_(T::ones())
-    }
-
-    /// Create new tree
-    fn from_kind(kind: OpKind<T>, flags: u8, depth: u32) -> Self {
-        OpTree(RefCell::new(OpRoot::Tree(Rc::new(
-            OpNode::new(kind, flags, depth)
-        ))))
-    }
-
-    /// Get internal tree, potentially allocating if needed
-    fn node(&self) -> Rc<OpNode<T>> {
-        let mut tree = self.0.borrow_mut();
-        match tree.deref() {
-            OpRoot::Const(v) => {
-                // convert to Rc if necessary
-                let node = Rc::new(OpNode::new(
-                    OpKind::Const(*v), 0, 0
-                ));
-                *tree = OpRoot::Tree(node.clone());
-                node
-            }
-            OpRoot::Imm(v) => {
-                // convert to Rc if necessary
-                let node = Rc::new(OpNode::new(
-                    OpKind::Imm(*v), OpNode::<T>::SECRET, 0
-                ));
-                *tree = OpRoot::Tree(node.clone());
-                node
-            }
-            OpRoot::Tree(node) => {
-                // can just increment reference count here
-                node.clone()
-            }
-        }
+        OpTree(RefCell::new(OpRoot::ConstOnes))
     }
 
     /// Forcefully downcast into a different OpTree, panicking if types
@@ -827,6 +1184,9 @@ impl<T: OpU> OpTree<T> {
     /// is expression an immediate?
     pub fn is_imm(&self) -> bool {
         match self.0.borrow().deref() {
+            OpRoot::ConstZero => true,
+            OpRoot::ConstOne => true,
+            OpRoot::ConstOnes => true,
             OpRoot::Const(_) => true,
             OpRoot::Imm(_) => true,
             OpRoot::Tree(tree) => tree.is_imm(),
@@ -836,6 +1196,9 @@ impl<T: OpU> OpTree<T> {
     /// is expression a symbol?
     pub fn is_sym(&self) -> bool {
         match self.0.borrow().deref() {
+            OpRoot::ConstZero => false,
+            OpRoot::ConstOne => false,
+            OpRoot::ConstOnes => false,
             OpRoot::Const(_) => false,
             OpRoot::Imm(_) => false,
             OpRoot::Tree(tree) => tree.is_sym(),
@@ -845,6 +1208,9 @@ impl<T: OpU> OpTree<T> {
     /// is expression const?
     pub fn is_const(&self) -> bool {
         match self.0.borrow().deref() {
+            OpRoot::ConstZero => true,
+            OpRoot::ConstOne => true,
+            OpRoot::ConstOnes => true,
             OpRoot::Const(_) => true,
             OpRoot::Imm(_) => false,
             OpRoot::Tree(tree) => tree.is_const(),
@@ -1171,8 +1537,11 @@ impl<T: OpU> OpTree<T> {
     /// display tree for debugging
     pub fn disas<W: io::Write>(&self, mut out: W) -> Result<(), io::Error> {
         match self.0.borrow().deref() {
-            OpRoot::Const(v) => writeln!(out, "    (u{}.const {:x}", 8 << T::NPW2, v),
-            OpRoot::Imm(v)   => writeln!(out, "    (u{}.imm {:x})",  8 << T::NPW2, v),
+            OpRoot::ConstZero  => writeln!(out, "    (u{}.const 0x{:0>w$x}", prefix(T::NPW2, 0), 0,   w=2<<T::NPW2),
+            OpRoot::ConstOne   => writeln!(out, "    (u{}.const 0x{:0>w$x}", prefix(T::NPW2, 0), 1,   w=2<<T::NPW2),
+            OpRoot::ConstOnes  => writeln!(out, "    (u{}.const 0x{:f>w$x}", prefix(T::NPW2, 0), 0xf, w=2<<T::NPW2),
+            OpRoot::Const(v)   => writeln!(out, "    (u{}.const {:x})",      prefix(T::NPW2, 0), v),
+            OpRoot::Imm(v)     => writeln!(out, "    (u{}.imm {:x})",        prefix(T::NPW2, 0), v),
             OpRoot::Tree(tree) => tree.disas(out),
         }
     }
@@ -1225,21 +1594,24 @@ impl<T: OpU> OpTree<T> {
     /// execute bytecode, resulting in an immediate OpTree
     pub fn try_exec(bytecode: &[u64], state: &mut [u8]) -> Result<Self, Error> {
         let res = exec(bytecode, state)?;
-        Ok(OpTree(RefCell::new(OpRoot::Imm(T::from_le_bytes(
-            T::Bytes::try_from(res).map_err(|_| Error::InvalidReturn)?
-        )))))
+        Ok(OpTree(RefCell::new(OpRoot::Imm(
+            T::try_from(res).map_err(|_| Error::InvalidReturn)?
+        ))))
     }
 
     /// compile and execute if OpTree is not already an immediate
-    pub fn eval(&self) -> Self {
+    pub fn eval(self) -> Self {
         self.try_eval().unwrap()
     }
 
     /// compile and execute if OpTree is not already an immediate
-    pub fn try_eval(&self) -> Result<Self, Error> {
-        match self.0.borrow().deref() {
-            OpRoot::Const(v) => Ok(Self::const_(*v)),
-            OpRoot::Imm(v)   => Ok(Self::imm(*v)),
+    pub fn try_eval(self) -> Result<Self, Error> {
+        match self.0.into_inner() {
+            OpRoot::ConstZero => Ok(Self::zero()),
+            OpRoot::ConstOne  => Ok(Self::one()),
+            OpRoot::ConstOnes => Ok(Self::ones()),
+            OpRoot::Const(v)  => Ok(Self::const_(v)),
+            OpRoot::Imm(v)    => Ok(Self::imm(v)),
             OpRoot::Tree(tree) => {
                 if tree.is_sym() {
                     Err(Error::DeclassifyInCompile)?;
@@ -1266,9 +1638,12 @@ impl<T: OpU> OpTree<T> {
         U: From<T>
     {
         match self.0.into_inner() {
-            OpRoot::Const(v) => Some(U::from(v)),
-            OpRoot::Imm(v)   => Some(U::from(v)),
-            OpRoot::Tree(_)  => None,
+            OpRoot::ConstZero => Some(U::from(T::zero())),
+            OpRoot::ConstOne  => Some(U::from(T::one())),
+            OpRoot::ConstOnes => Some(U::from(T::ones())),
+            OpRoot::Const(v)  => Some(U::from(v)),
+            OpRoot::Imm(v)    => Some(U::from(v)),
+            OpRoot::Tree(_)   => None,
         }
     }
 }
@@ -1398,9 +1773,9 @@ impl<T: OpU> OpNode<T> {
         // just been optimized out
         if let Some(slot) = self.slot.get() {
             state[
-                slot as usize * size_of::<T>()
-                    .. (slot as usize + 1) * size_of::<T>()
-            ].copy_from_slice(T::from(v).to_le_bytes().as_ref());
+                slot as usize * T::SIZE
+                    .. (slot as usize + 1) * T::SIZE
+            ].copy_from_slice(T::from(v).as_ref());
         }
     }
 
@@ -1417,7 +1792,7 @@ impl<T: OpU> OpNode<T> {
 }
 
 // dyn-compatible wrapping trait
-pub trait DynOpNode: Debug {
+pub trait DynOpNode: Debug + ConstPoolRef {
     /// npw2(size), used as a part of instruction encoding
     fn npw2(&self) -> u8;
 
@@ -1450,12 +1825,6 @@ pub trait DynOpNode: Debug {
 
     /// checks if expression is compressable into a u16
     fn get_const_u16(&self, lnpw2: Option<u8>) -> Option<(u8, u16)>;
-
-    /// get raw value of underlying const if node is const, note
-    /// because of trait object limitations we can't get the
-    /// type-safe type, so this should only be used for things like
-    /// hashing/equality checking
-    fn get_const_ne_bytes<'a>(&'a self) -> Option<&'a [u8]>;
 
     /// Increment tree-internal reference count
     fn inc_refs(&self) -> u32;
@@ -1589,6 +1958,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
     fn is_imm(&self) -> bool {
         match self.kind {
+            OpKind::ConstZero => true,
+            OpKind::ConstOne => true,
+            OpKind::ConstOnes => true,
             OpKind::Const(_) => true,
             OpKind::Imm(_) => true,
             _ => false,
@@ -1604,23 +1976,26 @@ impl<T: OpU> DynOpNode for OpNode<T> {
     }
 
     fn is_const_zero(&self) -> bool {
-        match (self.is_const(), &self.kind) {
-            (true, OpKind::Const(v)) => v.is_zero(),
-            _                        => false,
+        match &self.kind {
+            OpKind::ConstZero => true,
+            OpKind::Const(v)  => v.is_zero(),
+            _                 => false,
         }
     }
 
     fn is_const_one(&self) -> bool {
-        match (self.is_const(), &self.kind) {
-            (true, OpKind::Const(v)) => v.is_one(),
-            _                        => false,
+        match &self.kind {
+            OpKind::ConstOne => true,
+            OpKind::Const(v) => v.is_one(),
+            _                => false,
         }
     }
 
     fn is_const_ones(&self) -> bool {
-        match (self.is_const(), &self.kind) {
-            (true, OpKind::Const(v)) => v.is_ones(),
-            _                        => false,
+        match &self.kind {
+            OpKind::ConstOnes => true,
+            OpKind::Const(v)  => v.is_ones(),
+            _                 => false,
         }
     }
 
@@ -1629,38 +2004,35 @@ impl<T: OpU> DynOpNode for OpNode<T> {
     }
 
     fn get_const_u16(&self, lnpw2: Option<u8>) -> Option<(u8, u16)> {
-        match (self.is_const(), &self.kind, lnpw2) {
-            (true, OpKind::Const(v), Some(lnpw2)) => {
-                if v.is_extend_splat(0, T::NPW2-lnpw2) {
-                    Some((lnpw2, i16::from(v.to_le_bytes().as_ref()[0] as i8) as u16))
-                } else if v.is_extend_splat(1, T::NPW2-lnpw2) {
-                    Some((lnpw2, u16::from_le_bytes(
-                        <_>::try_from(&v.to_le_bytes().as_ref()[..2]).unwrap()
-                    )))
-                } else {
-                    None
-                }
+        match &self.kind {
+            OpKind::ConstZero => {
+                Some((lnpw2.unwrap_or(0), 0))
             }
-            (true, OpKind::Const(v), None) => {
-                for lnpw2 in (0..=T::NPW2).rev() {
+            // const one can't splat to any lanes
+            OpKind::ConstOne if lnpw2.unwrap_or(0) == 0 => {
+                Some((0, 1))
+            }
+            OpKind::ConstOnes => {
+                Some((lnpw2.unwrap_or(0), u16::MAX))
+            }
+            OpKind::Const(v) => {
+                for lnpw2 in lnpw2
+                    .map(|lnpw2| lnpw2..=lnpw2)
+                    .unwrap_or_else(|| 0..=T::NPW2)
+                    .rev()
+                {
                     if v.is_extend_splat(0, T::NPW2-lnpw2) {
-                        return Some((lnpw2, i16::from(v.to_le_bytes().as_ref()[0] as i8) as u16));
+                        return Some((lnpw2, i16::from(v.as_ref()[0] as i8) as u16))
                     } else if v.is_extend_splat(1, T::NPW2-lnpw2) {
                         return Some((lnpw2, u16::from_le_bytes(
-                            <_>::try_from(&v.to_le_bytes().as_ref()[..2]).unwrap()
-                        )));
+                            <_>::try_from(&v.as_ref()[..2]).unwrap()
+                        )))
                     }
                 }
+
                 None
             }
             _ => None,
-        }
-    }
-
-    fn get_const_ne_bytes<'a>(&'a self) -> Option<&'a [u8]> {
-        match (self.is_const(), &self.kind) {
-            (true, OpKind::Const(v)) => Some(v.as_ne_bytes()),
-            _                        => None,
         }
     }
 
@@ -1685,6 +2057,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
 
         match &self.kind {
+            OpKind::ConstZero => {},
+            OpKind::ConstOne => {},
+            OpKind::ConstOnes => {},
             OpKind::Const(_) => {},
             OpKind::Imm(_) => {},
             OpKind::Sym(_) => {},
@@ -1862,6 +2237,18 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
 
         let expr = match &self.kind {
+            OpKind::ConstZero => format!("({}.const {:0>w$x})",
+                prefix(T::NPW2, 0),
+                0, w=2 << T::NPW2,
+            ),
+            OpKind::ConstOne => format!("({}.const {:0>w$x})",
+                prefix(T::NPW2, 0),
+                1, w=2 << T::NPW2,
+            ),
+            OpKind::ConstOnes => format!("({}.const {:f>w$x})",
+                prefix(T::NPW2, 0),
+                0xf, w=2 << T::NPW2,
+            ),
             OpKind::Const(v) => format!("({}.const {:x})",
                 prefix(T::NPW2, 0),
                 v
@@ -2275,10 +2662,9 @@ impl<T: OpU> DynOpNode for OpNode<T> {
             if let Ok(v) = self.try_eval() {
                 // check for duplicate consts?
                 #[cfg(feature="opt-deduplicate-consts")]
-                if let Some(const_pool) = const_pool {
-                    return Some(const_pool.deduplicate_new(v));
-                }
+                return Some(CONST_POOL.with(|x| x.borrow_mut().deduplicate(v)));
 
+                #[cfg(not(feature="opt-deduplicate-consts"))]
                 return Some(Rc::new(Self::new(
                     OpKind::Const(v), 0, 0
                 )));
@@ -2286,16 +2672,13 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
 
         match &self.kind {
-            OpKind::Const(_) => {
-                // check for duplicate consts?
-                #[cfg(feature="opt-deduplicate-consts")]
-                if let Some(const_pool) = const_pool {
-                    return const_pool.deduplicate(&rc);
-                }
-            },
-
-            OpKind::Imm(_) => {},
-            OpKind::Sym(_) => {},
+            // consts should already be deduplicated
+            OpKind::ConstZero => {}
+            OpKind::ConstOne => {}
+            OpKind::ConstOnes => {}
+            OpKind::Const(_) => {}
+            OpKind::Imm(_) => {}
+            OpKind::Sym(_) => {}
 
             OpKind::Extract(_, a) => {
                 let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
@@ -3036,9 +3419,11 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         self.slot.set(None);
 
         match &self.kind {
-            OpKind::Const(_) => {
-                // handle consts later
-            }
+            // handle consts later
+            OpKind::ConstZero => {}
+            OpKind::ConstOne => {}
+            OpKind::ConstOnes => {}
+            OpKind::Const(_) => {}
             OpKind::Imm(v) => {
                 // allocate slot
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
@@ -3052,7 +3437,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 state.state[
                     usize::from(slot) << T::NPW2
                         .. (usize::from(slot)+1) << T::NPW2
-                ].copy_from_slice(v.to_le_bytes().as_ref());
+                ].copy_from_slice(v.as_ref());
 
                 // initialize arg in bytecode
                 state.bytecode.push(u64::from(OpIns::new(
@@ -3247,6 +3632,30 @@ impl<T: OpU> DynOpNode for OpNode<T> {
         }
 
         match &self.kind {
+            OpKind::ConstZero => {
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::with_ab(
+                    T::NPW2, 0, OpCode::SplatC, slot, 0
+                )));
+                self.slot.set(Some(slot));
+                (T::NPW2, slot)
+            }
+            OpKind::ConstOne => {
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::with_ab(
+                    T::NPW2, 0, OpCode::SplatC, slot, 1
+                )));
+                self.slot.set(Some(slot));
+                (T::NPW2, slot)
+            }
+            OpKind::ConstOnes => {
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::with_ab(
+                    T::NPW2, 0, OpCode::SplatC, slot, u32::MAX
+                )));
+                self.slot.set(Some(slot));
+                (T::NPW2, slot)
+            }
             OpKind::Const(v) => {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 #[allow(unused_mut, unused_assignments)] let mut extend_npw2 = T::NPW2;
@@ -3263,7 +3672,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 // fall back to uncompressed encodings
                 if extend_npw2 <= 2 {
                     // fits in a splat_const (32-bit immediate)
-                    let mut buf = Vec::from(v.to_le_bytes().as_ref());
+                    let mut buf = Vec::from(v.as_ref());
                     buf.truncate(1 << extend_npw2);
                     buf.resize(4, if buf[buf.len()-1] & 0x80 == 0x80 { 0xff } else { 0x00 });
 
@@ -3278,7 +3687,7 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                         0, u16::from(extend_npw2), 
                     )));
 
-                    let mut buf = Vec::from(v.to_le_bytes().as_ref());
+                    let mut buf = Vec::from(v.as_ref());
                     buf.truncate(1 << extend_npw2);
                     for i in (0..buf.len()).step_by(8) {
                         state.bytecode.push(

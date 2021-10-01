@@ -15,6 +15,18 @@ pub use lambda::*;
 
 // introduce traits, but prefix to avoid names collisions, this
 // is useful if all of the crate is imported
+pub use traits::Classify as SecretClassify;
+pub use traits::TryClassify as SecretTryClassify;
+pub use traits::FromDeclassify as SecretFromDeclassify;
+pub use traits::ClassifyLeBytes as SecretClassifyLeBytes;
+pub use traits::TryClassifyLeBytes as SecretTryClassifyLeBytes;
+pub use traits::FromDeclassifyLeBytes as SecretFromDeclassifyLeBytes;
+pub use traits::ClassifyBeBytes as SecretClassifyBeBytes;
+pub use traits::TryClassifyBeBytes as SecretTryClassifyBeBytes;
+pub use traits::FromDeclassifyBeBytes as SecretFromDeclassifyBeBytes;
+pub use traits::ClassifyNeBytes as SecretClassifyNeBytes;
+pub use traits::TryClassifyNeBytes as SecretTryClassifyNeBytes;
+pub use traits::FromDeclassifyNeBytes as SecretFromDeclassifyNeBytes;
 pub use traits::Eq as SecretEq;
 pub use traits::Ord as SecretOrd;
 pub use traits::Select as SecretSelect;

@@ -127,6 +127,11 @@ pub fn lazy_compile(args: TokenStream, input: TokenStream) -> TokenStream {
     compile::lazy_compile(args, input)
 }
 
+/// Quick macro to get the underlying __small_npw2
+#[proc_macro]
+pub fn small_npw2(input: TokenStream) -> TokenStream {
+    internal::small_npw2(input)
+}
 
 /// A heavy-weight macro to generate variable number of secret-u items
 ///
@@ -172,6 +177,12 @@ pub fn for_secret_t(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn for_secret_t_2(input: TokenStream) -> TokenStream {
     internal::for_secret_t_2(input)
+}
+
+/// Quick macro to get the engine's underlying __limb_npw2
+#[proc_macro]
+pub fn engine_limb_npw2(input: TokenStream) -> TokenStream {
+    internal::engine_limb_npw2(input)
 }
 
 /// Quick macro to get the engine's underlying limb type

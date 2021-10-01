@@ -146,8 +146,8 @@ fn modpow(a: SecretU2048, e: SecretU2048, n: SecretU2048) -> SecretU2048 {
 
 /// Simple 2048-bit RSA implementation
 struct Rsa {
-    compiled_encrypt: Box<dyn Fn(&SecretU2048) -> SecretU2048>,
-    compiled_decrypt: Option<Box<dyn Fn(&SecretU2048) -> SecretU2048>>,
+    compiled_encrypt: Box<dyn Fn(SecretU2048) -> SecretU2048>,
+    compiled_decrypt: Option<Box<dyn Fn(SecretU2048) -> SecretU2048>>,
 }
 
 impl Rsa {
@@ -174,7 +174,7 @@ impl Rsa {
             SecretU2048::from_cast(mont_mul(c_m, SecretU4096::one(), n.clone(), n_i.clone()))
         }));
 
-        let decrypt = d.clone().map(|d| -> Box<dyn Fn(&SecretU2048) -> SecretU2048> {
+        let decrypt = d.clone().map(|d| -> Box<dyn Fn(SecretU2048) -> SecretU2048> {
             Box::new(compile!(|c: SecretU2048| -> SecretU2048 {
                 let c_m = mont_from(SecretU4096::from(c), n.clone());
                 let m_m = mont_pow(c_m, d.clone(), n.clone(), n_i.clone());
@@ -202,7 +202,7 @@ impl Rsa {
                 // reverse endianess here
                 m = m.replace(256-1-j, p);
             }
-            let c = SecretU8x256::from_cast((self.compiled_encrypt)(&SecretU2048::from_cast(m)));
+            let c = SecretU8x256::from_cast((self.compiled_encrypt)(SecretU2048::from_cast(m)));
             for j in 0..256 {
                 // reverse endianess here
                 ciphertext.push(c.clone().extract(256-1-j));
@@ -228,7 +228,7 @@ impl Rsa {
                 // reverse endianess here
                 c = c.replace(j, ciphertext[i+256-1-j].clone());
             }
-            let m = SecretU8x256::from_cast((decrypt)(&SecretU2048::from_cast(c)));
+            let m = SecretU8x256::from_cast((decrypt)(SecretU2048::from_cast(c)));
             let mut padded = Vec::new();
             for j in 0..256 {
                 // reverse endianess here
@@ -251,7 +251,7 @@ fn bench(mode: &str, public_key: &str, private_key: &str, in_path: &str, out_pat
     match mode {
         "encrypt" => {
             let public_key = std::fs::read(public_key).unwrap();
-            let public_key = SecretU8x256::new_lanes(<_>::try_from(public_key).ok().unwrap());
+            let public_key = SecretU8x256::try_from(public_key).ok().unwrap();
             let public_key = SecretU2048::from_cast(public_key.reverse_lanes());
 
             let mut in_file = std::fs::File::open(in_path).unwrap();
@@ -276,10 +276,10 @@ fn bench(mode: &str, public_key: &str, private_key: &str, in_path: &str, out_pat
         }
         "decrypt" => {
             let public_key = std::fs::read(public_key).unwrap();
-            let public_key = SecretU8x256::new_lanes(<_>::try_from(public_key).ok().unwrap());
+            let public_key = SecretU8x256::try_from(public_key).ok().unwrap();
             let public_key = SecretU2048::from_cast(public_key.reverse_lanes());
             let private_key = std::fs::read(private_key).unwrap();
-            let private_key = SecretU8x256::new_lanes(<_>::try_from(private_key).ok().unwrap());
+            let private_key = SecretU8x256::try_from(private_key).ok().unwrap();
             let private_key = SecretU2048::from_cast(private_key.reverse_lanes());
 
             let mut in_file = std::fs::File::open(in_path).unwrap();
@@ -417,18 +417,18 @@ fn main() {
     }
 
     // note we need to convert from big-endian to little-endian here
-    let public_key  = SecretU2048::from_cast(SecretU8x256::new_lanes(RSA_PUBLIC_KEY).reverse_lanes());
-    let private_key = SecretU2048::from_cast(SecretU8x256::new_lanes(RSA_PRIVATE_KEY).reverse_lanes());
+    let public_key  = SecretU2048::from_cast(SecretU8x256::from(RSA_PUBLIC_KEY).reverse_lanes());
+    let private_key = SecretU2048::from_cast(SecretU8x256::from(RSA_PRIVATE_KEY).reverse_lanes());
     let mut rsa = Rsa::new(public_key, Some(private_key));
     let message = RSA_MESSAGE.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
     let ciphertext = rsa.encrypt(&message);
     let message = rsa.decrypt(&ciphertext);
-    let ciphertext = ciphertext.iter()
+    let ciphertext = ciphertext.into_iter()
         .map(|b| b.declassify())
         .collect::<Vec<_>>();
-    let message = message.iter()
+    let message = message.into_iter()
         .map(|b| b.declassify())
         .collect::<Vec<_>>();
 

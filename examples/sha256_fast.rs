@@ -55,7 +55,7 @@ struct Sha256 {
     data: Vec<SecretU8>,
     bitlen: usize,
     state: SecretU32x8,
-    transform_lambda: Box<dyn Fn(&SecretU32x8, &SecretU8x64) -> SecretU32x8>,
+    transform_lambda: Box<dyn Fn(SecretU32x8, SecretU8x64) -> SecretU32x8>,
 }
 
 impl Sha256 {
@@ -104,7 +104,7 @@ impl Sha256 {
             a = t1 + t2;
         }
 
-        state + SecretU32x8::from_lanes([a, b, c, d, e, f, g, h])
+        state + SecretU32x8::from([a, b, c, d, e, f, g, h])
     }
 
     pub fn new() -> Sha256 {
@@ -118,7 +118,7 @@ impl Sha256 {
         Sha256 {
             data: Vec::with_capacity(64),
             bitlen: 0,
-            state: SecretU32x8::new_lanes([
+            state: SecretU32x8::from([
                 0x6a09e667,
                 0xbb67ae85,
                 0x3c6ef372,
@@ -137,8 +137,8 @@ impl Sha256 {
             self.data.push(b.clone());
             if self.data.len() == 64 {
                 self.state = (self.transform_lambda)(
-                    &self.state,
-                    &SecretU8x64::from_lanes(<_>::try_from(self.data.clone()).ok().unwrap())
+                    self.state.clone(),
+                    SecretU8x64::try_from(self.data.clone()).ok().unwrap()
                 );
                 self.bitlen += 512;
             }
@@ -151,8 +151,8 @@ impl Sha256 {
         assert!(self.data.len() == 0);
         for chunk in data {
             self.state = (self.transform_lambda)(
-                &self.state,
-                &chunk
+                self.state.clone(),
+                chunk.clone()
             );
             self.bitlen += 512;
         }
@@ -174,8 +174,8 @@ impl Sha256 {
                 self.data.push(SecretU8::zero());
             }
             self.state = (self.transform_lambda)(
-                &self.state,
-                &SecretU8x64::from_lanes(<_>::try_from(self.data.clone()).ok().unwrap())
+                self.state.clone(),
+                SecretU8x64::try_from(self.data.clone()).ok().unwrap()
             );
             self.data.clear();
             while self.data.len() < 56 {
@@ -193,8 +193,8 @@ impl Sha256 {
         self.data.push(SecretU8::new((bitlen >>  8) as u8));
         self.data.push(SecretU8::new((bitlen >>  0) as u8));
         self.state = (self.transform_lambda)(
-            &self.state,
-            &SecretU8x64::from_lanes(<_>::try_from(self.data.clone()).ok().unwrap())
+            self.state.clone(),
+            SecretU8x64::try_from(self.data.clone()).ok().unwrap()
         );
 
         // Since this implementation uses little endian byte ordering and SHA uses big endian,
@@ -229,7 +229,7 @@ fn bench(path: &str) -> ! {
         let mut block = [0; 64];
         let diff = file.read(&mut block).unwrap();
         if diff == 64 {
-            state.update_aligned(&[SecretU8x64::new_lanes(block)]);
+            state.update_aligned(&[SecretU8x64::from(block)]);
         } else {
             state.update(&block[..diff].into_iter()
                 .map(|b| SecretU8::new(*b))

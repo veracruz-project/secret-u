@@ -17,9 +17,9 @@ struct ChaCha20 {
     i: usize,
 
     // compile bytecode
-    compiled_cipher: Option<Box<dyn Fn(&SecretU32x16) -> SecretU8x64>>,
-    compiled_inc: Option<Box<dyn Fn(&SecretU32x16) -> SecretU32x16>>,
-    compiled_xor: Option<Box<dyn Fn(&SecretU8x64, &SecretU8x64) -> SecretU8x64>>,
+    compiled_cipher: Option<Box<dyn Fn(SecretU32x16) -> SecretU8x64>>,
+    compiled_inc: Option<Box<dyn Fn(SecretU32x16) -> SecretU32x16>>,
+    compiled_xor: Option<Box<dyn Fn(SecretU8x64, SecretU8x64) -> SecretU8x64>>,
 }
 
 impl ChaCha20 {
@@ -29,7 +29,7 @@ impl ChaCha20 {
         let iv = SecretU32x2::from_cast(iv);
 
         let mut self_ = ChaCha20 {
-            state: SecretU32x16::from_lanes([
+            state: SecretU32x16::from([
                 consts.clone().extract(0), consts.clone().extract(1), consts.clone().extract(2), consts.clone().extract(3),
                 key.clone().extract(0),    key.clone().extract(1),    key.clone().extract(2),    key.clone().extract(3),
                 key.clone().extract(4),    key.clone().extract(5),    key.clone().extract(6),    key.clone().extract(7),
@@ -70,15 +70,15 @@ impl ChaCha20 {
     /// cipher with 20 rounds + mix array
     fn cipher(&self, state: SecretU32x16) -> SecretU8x64 {
         // lanes
-        let [a, b, c, d] = SecretU128x4::from_cast(state.clone()).to_lanes();
+        let [a, b, c, d] = <[SecretU128; 4]>::from(SecretU128x4::from_cast(state.clone()));
         let mut a = SecretU32x4::from_cast(a);
         let mut b = SecretU32x4::from_cast(b);
         let mut c = SecretU32x4::from_cast(c);
         let mut d = SecretU32x4::from_cast(d);
         // shuffles
-        let shuffle1 = SecretU32x4::const_lanes([1, 2, 3, 0]);
-        let shuffle2 = SecretU32x4::const_lanes([2, 3, 0, 1]);
-        let shuffle3 = SecretU32x4::const_lanes([3, 0, 1, 2]);
+        let shuffle1 = SecretU32x4::const_([1, 2, 3, 0]);
+        let shuffle2 = SecretU32x4::const_([2, 3, 0, 1]);
+        let shuffle3 = SecretU32x4::const_([3, 0, 1, 2]);
 
         for _ in (0..20).step_by(2) {
             // odd round
@@ -100,7 +100,7 @@ impl ChaCha20 {
         }
 
         // mix array
-        let mut x = SecretU32x16::from_cast(SecretU128x4::from_lanes([
+        let mut x = SecretU32x16::from_cast(SecretU128x4::from([
             SecretU128::from_cast(a),
             SecretU128::from_cast(b),
             SecretU128::from_cast(c),
@@ -117,13 +117,13 @@ impl ChaCha20 {
 
         for i in 0..data.len() {
             // encrypt state
-            self.x = (self.compiled_cipher.as_ref().unwrap())(&self.state);
+            self.x = (self.compiled_cipher.as_ref().unwrap())(self.state.clone());
 
             // increment ctr
-            self.state = (self.compiled_inc.as_ref().unwrap())(&self.state);
+            self.state = (self.compiled_inc.as_ref().unwrap())(self.state.clone());
 
             // xor result
-            data[i] = (self.compiled_xor.as_ref().unwrap())(&data[i], &self.x);
+            data[i] = (self.compiled_xor.as_ref().unwrap())(data[i].clone(), self.x.clone());
         }
     }
 
@@ -134,10 +134,10 @@ impl ChaCha20 {
                 self.i = 0;
 
                 // encrypt state
-                self.x = (self.compiled_cipher.as_ref().unwrap())(&self.state);
+                self.x = (self.compiled_cipher.as_ref().unwrap())(self.state.clone());
 
                 // increment ctr
-                self.state = (self.compiled_inc.as_ref().unwrap())(&self.state);
+                self.state = (self.compiled_inc.as_ref().unwrap())(self.state.clone());
             }
 
             // xor result
@@ -176,9 +176,9 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
     use std::io::Write;
 
     let key = std::fs::read(key).unwrap();
-    let key = SecretU8x32::new_lanes(<_>::try_from(key).unwrap());
+    let key = SecretU8x32::try_from(key).unwrap();
     let iv = std::fs::read(iv).unwrap();
-    let iv = SecretU8x8::new_lanes(<_>::try_from(iv).unwrap());
+    let iv = SecretU8x8::try_from(iv).unwrap();
 
     let mut in_file = std::fs::File::open(in_path).unwrap();
     let mut out_file = std::fs::File::create(out_path).unwrap();
@@ -187,16 +187,16 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         let mut block = [0; 64];
         let diff = in_file.read(&mut block).unwrap();
         if diff == 64 {
-            let mut block_s = [SecretU8x64::new_lanes(block)];
+            let mut block_s = [SecretU8x64::from(block)];
             state.encrypt_aligned(&mut block_s);
-            block[..].copy_from_slice(&block_s[0].declassify_le_bytes());
+            block[..].copy_from_slice(&block_s[0].clone().declassify_le_bytes::<[u8; 64]>());
         } else {
             let mut block_s = block[..diff].into_iter()
                 .map(|b| SecretU8::new(*b))
                 .collect::<Vec<_>>();
             state.encrypt(&mut block_s[..]);
             for i in 0..diff {
-                block[i] = block_s[i].declassify();
+                block[i] = block_s[i].clone().declassify();
             }
         }
         out_file.write_all(&block[0..diff]).unwrap();
@@ -250,8 +250,8 @@ fn main() {
     }
 
     // test chacha20
-    let key = SecretU8x32::new_lanes(KEY);
-    let iv = SecretU8x8::new_lanes(IV);
+    let key = SecretU8x32::from(KEY);
+    let iv = SecretU8x8::from(IV);
     let mut buf = IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();

@@ -31,7 +31,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..4 {
-            a.push(f.call(&SecretU8::new(i)).declassify());
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -56,12 +56,12 @@ mod tests {
 
         f.disas(io::stdout()).unwrap();
 
-        let a = f.call(&SecretU8x4::new_lanes([
+        let a = f.call(SecretU8x4::from([
             0,
             1,
             2,
             3
-        ])).declassify_lanes();
+        ])).declassify::<[u8; 4]>();
         println!("{:?}", a);
         assert_eq!(a, [0x12, 0x34, 0x56, 0x78]);
     }
@@ -95,7 +95,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..16 {
-            a.push(f.call(&SecretU32::new(i)).declassify());
+            a.push(f.call(SecretU32::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -131,7 +131,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..2 {
-            a.push(f.call(&SecretU8::new(i)).declassify());
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -167,7 +167,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..12 {
-            a.push(f.call(&SecretU8::new(i)).declassify());
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -189,7 +189,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..12 {
-            a.push(f.call(&SecretU8::new(i), &SecretU8::new((i+1)%12)).declassify());
+            a.push(f.call(SecretU8::new(i), SecretU8::new((i+1)%12)).declassify());
         }
         println!("{:?}", String::from_utf8_lossy(&a));
         assert_eq!(
@@ -247,7 +247,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in (0..16).step_by(4) {
-            let p = f.call(&SecretU8x4::new_lanes([i, i+1, i+2, i+3])).declassify_lanes();
+            let p = f.call(SecretU8x4::from([i, i+1, i+2, i+3])).declassify::<[bool; 4]>();
             if p[0] { a.push(i)   }
             if p[1] { a.push(i+1) }
             if p[2] { a.push(i+2) }
@@ -281,7 +281,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..4 {
-            a.push(f.call(&SecretU8::new(i)).declassify());
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -306,12 +306,12 @@ mod tests {
 
         f.disas(io::stdout()).unwrap();
 
-        let a = f.call(&SecretU8x4::new_lanes([
+        let a = f.call(SecretU8x4::from([
             0,
             1,
             2,
             3
-        ])).declassify_lanes();
+        ])).declassify::<[u8; 4]>();
         println!("{:?}", a);
         assert_eq!(a, [0x12, 0x34, 0x56, 0x78]);
     }
@@ -345,7 +345,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..16 {
-            a.push(f.call(&SecretU32::new(i)).declassify());
+            a.push(f.call(SecretU32::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -381,7 +381,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..2 {
-            a.push(f.call(&SecretU8::new(i)).declassify());
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -417,7 +417,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..12 {
-            a.push(f.call(&SecretU8::new(i)).declassify());
+            a.push(f.call(SecretU8::new(i)).declassify());
         }
         println!("{:?}", a);
         assert_eq!(
@@ -439,7 +439,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in 0..12 {
-            a.push(f.call(&SecretU8::new(i), &SecretU8::new((i+1)%12)).declassify());
+            a.push(f.call(SecretU8::new(i), SecretU8::new((i+1)%12)).declassify());
         }
         println!("{:?}", String::from_utf8_lossy(&a));
         assert_eq!(
@@ -497,7 +497,7 @@ mod tests {
 
         let mut a = Vec::new();
         for i in (0..16).step_by(4) {
-            let p = f.call(&SecretU8x4::new_lanes([i, i+1, i+2, i+3])).declassify_lanes();
+            let p = f.call(SecretU8x4::from([i, i+1, i+2, i+3])).declassify::<[bool; 4]>();
             if p[0] { a.push(i)   }
             if p[1] { a.push(i+1) }
             if p[2] { a.push(i+2) }

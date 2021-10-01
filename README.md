@@ -622,9 +622,9 @@ $ make bench-sha256
 
 On my machine:
 ```
-sha256_reference  0m0.019s
-sha256            0m20.006s
-sha256_fast       0m0.114s
+sha256_reference  0m0.017s
+sha256            0m23.433s
+sha256_fast       0m0.128s
 ```
 
 `sha256_reference` provides a native, non-constant-time sha256 implementation,
@@ -638,11 +638,11 @@ $ make bench-aes
 
 On my machine:
 ```
-aes_reference           0m0.035s
-aes_shuffle             0m5.664s
-aes_bitslice            0m15.053s
-aes_more_simd_shuffle   0m1.983s
-aes_more_simd_bitslice  0m5.814s
+aes_reference           0m0.037s
+aes_shuffle             0m5.418s
+aes_bitslice            0m17.102s
+aes_more_simd_shuffle   0m2.198s
+aes_more_simd_bitslice  0m6.179s
 ```
 
 `aes_reference` again is not constant-time, and native, so it being the fastest
@@ -656,9 +656,9 @@ $ make bench-chacha20
 
 On my machine:
 ```
-chacha20_reference  0m0.024s
-chacha20            0m0.080s
-chacha20_simd       0m0.079s
+chacha20_reference  0m0.025s
+chacha20            0m0.106s
+chacha20_simd       0m0.098s
 ```
 
 Chacha20 is both constant-time friendly and remarkably parallelizable,
@@ -670,10 +670,10 @@ $ make bench-sss
 
 On my machine:
 ```
-sss_shuffle        0m0.011s
+sss_shuffle        0m0.009s
 sss_simd_shuffle   0m0.002s
 sss_bitslice       0m0.040s
-sss_simd_bitslice  0m0.020s
+sss_simd_bitslice  0m0.021s
 ```
 
 This byte-wise implementation of Shamir's secret sharing is immensely
@@ -692,15 +692,15 @@ $ make bench-rsa
 On my machine:
 
 ```
-rsa  0m5.856s
+rsa  0m5.717s
 ```
 
 RSA leverages large integer operations, especially multiplication. This RSA
 examples uses Montgomery multiplication/exponentiation with u4096-u8192s, which
 is especially useful as secret-u does not provide a built-in division operation.
-Naturally as a part of providing constant-time operations, the multiply step of
-exponentiation is always performed, using a constant-time ternary select to
-decide if the result is used.
+Since we must be constant-time, the multiply step of exponentiation is always
+performed and a constant-time ternary select is used to decide if the result
+is used.
 
 
 ## Prior art

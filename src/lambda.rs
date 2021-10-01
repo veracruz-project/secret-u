@@ -67,7 +67,7 @@ macro_rules! compile_object {
                     );
 
                     // compile tree
-                    let (bytecode, state) = v.tree().compile(true);
+                    let (bytecode, state) = v.into_tree().compile(true);
 
                     // working state (copied from init state at runtime
                     let working_state = AlignedBytes::new_zeroed(state.len(), state.align());
@@ -114,18 +114,21 @@ macro_rules! compile_object {
                 #[allow(dead_code)]
                 pub fn try_call(
                     &self,
-                    $(compile_object!(@ident $($a)+): &$t),*
+                    $(compile_object!(@ident $($a)+): $t),*
                 ) -> Result<$r, $crate::error::Error> {
                     // copy since we don't watch to patch the common stack
                     let mut state = self.__state.borrow_mut();
                     state.copy_from_slice(&self.__init);
 
-                    // patch arguments
+                    // patch arguments, note we use the tree directly here
+                    // since we can assume the underlying bytes are le (users can't)
                     $(
                         self.[<__sym_$($a)+>].patch(
                             &mut state,
-                            compile_object!(@ident $($a)+)
-                                .declassify_le_bytes()
+                            &compile_object!(@ident $($a)+)
+                                .into_tree()
+                                .try_eval()?
+                                .result()
                         );
                     )*
 
@@ -137,7 +140,7 @@ macro_rules! compile_object {
                 #[allow(dead_code)]
                 pub fn call(
                     &self,
-                    $(compile_object!(@ident $($a)+): &$t),*
+                    $(compile_object!(@ident $($a)+): $t),*
                 ) -> $r {
                     self.try_call($(compile_object!(@ident $($a)+)),*).unwrap()
                 }
@@ -166,7 +169,7 @@ macro_rules! compile {
         // defer to compile_object and wrap in closure
         let object = compile_object!($($move)? |$($($a)+: $t),*| -> $r {$($block)*});
 
-        move |$(compile!(@ident $($a)+): &$t),*| -> $r {
+        move |$(compile!(@ident $($a)+): $t),*| -> $r {
             object.call($(compile!(@ident $($a)+)),*)
         }
     }}
@@ -187,7 +190,7 @@ mod tests {
         });
         l.disas(io::stdout()).unwrap();
         println!("call:");
-        let v = l.call(&SecretU32::new(1), &SecretU32::new(2)).declassify();
+        let v = l.call(SecretU32::new(1), SecretU32::new(2)).declassify();
         println!("{:?}", v);
         assert_eq!(v, 3);
 
@@ -195,11 +198,11 @@ mod tests {
             x + y
         });
 
-        let v = l(&SecretU32::new(1), &SecretU32::new(2)).declassify();
+        let v = l(SecretU32::new(1), SecretU32::new(2)).declassify();
         println!("{}", v);
         assert_eq!(v, 3);
 
-        let v = l(&SecretU32::new(3), &SecretU32::new(4)).declassify();
+        let v = l(SecretU32::new(3), SecretU32::new(4)).declassify();
         println!("{}", v);
         assert_eq!(v, 7);
     }
@@ -215,7 +218,7 @@ mod tests {
         });
         l.disas(io::stdout()).unwrap();
         println!("call:");
-        let v = l.call(&SecretU32::new(3), &SecretU32::new(4), &SecretU32::new(5)).declassify();
+        let v = l.call(SecretU32::new(3), SecretU32::new(4), SecretU32::new(5)).declassify();
         println!("{:?}", v);
 
         let l = compile!(|x: SecretU32, y: SecretU32, z: SecretU32| -> SecretBool {
@@ -224,11 +227,11 @@ mod tests {
             a.eq(b)
         });
 
-        let v = l(&SecretU32::new(3), &SecretU32::new(4), &SecretU32::new(5)).declassify();
+        let v = l(SecretU32::new(3), SecretU32::new(4), SecretU32::new(5)).declassify();
         println!("{}", v);
         assert_eq!(v, true);
 
-        let v = l(&SecretU32::new(6), &SecretU32::new(7), &SecretU32::new(8)).declassify();
+        let v = l(SecretU32::new(6), SecretU32::new(7), SecretU32::new(8)).declassify();
         println!("{}", v);
         assert_eq!(v, false);
     }
@@ -260,12 +263,12 @@ mod tests {
         });
         l.disas(io::stdout()).unwrap();
         println!("call:");
-        let v = l.call(&SecretU32::new(100)).declassify();
+        let v = l.call(SecretU32::new(100)).declassify();
         println!("{:?}", v);
         assert_eq!(v, 10);
 
         println!("  call:");
-        let v = l.call(&SecretU32::new(10000)).declassify();
+        let v = l.call(SecretU32::new(10000)).declassify();
         println!("{:?}", v);
         assert_eq!(v, 100);
     }
@@ -280,6 +283,6 @@ mod tests {
             SecretU32::new(x.declassify())
         });
 
-        l(&SecretU32::new(123));
+        l(SecretU32::new(123));
     }
 }

@@ -153,11 +153,11 @@ fn gf256_interpolate(xs: &[SecretU8], ys: &[SecretU8x32]) -> SecretU8x32 {
         let mut li = SecretU8x32::one();
         for (j, (x1, _y1)) in xs.iter().zip(ys).enumerate() {
             if i != j {
-                li = gf256_interpolate_step(&li, &x0, &x1);
+                li = gf256_interpolate_step(li.clone(), x0.clone(), x1.clone());
             }
         }
 
-        y = gf256_interpolate_sum(&y, &li, &y0);
+        y = gf256_interpolate_sum(y, li, y0.clone());
     }
 
     y
@@ -184,21 +184,17 @@ fn shares_reconstruct<S: AsRef<[SecretU8]>>(shares: &[S]) -> Vec<SecretU8> {
         let ys: Vec<SecretU8x32> = shares.iter()
             .map(|v| {
                 let slice = &v.as_ref()[i..];
-                SecretU8x32::from_lanes(
-                    <_>::try_from(
-                        slice.iter()
-                            .chain(iter::repeat(&SecretU8::zero()))
-                            .take(32)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    ).ok().unwrap()
-                )
+                SecretU8x32::try_from(
+                    slice.iter()
+                        .chain(iter::repeat(&SecretU8::zero()))
+                        .take(32)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                ).ok().unwrap()
             })
             .collect();
         secret.append(
-            &mut IntoIterator::into_iter(
-                gf256_interpolate(&xs, &ys).to_lanes()
-            ).collect()
+            &mut gf256_interpolate(&xs, &ys).into_iter().collect()
         );
     }
 

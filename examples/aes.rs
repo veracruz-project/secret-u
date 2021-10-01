@@ -55,9 +55,9 @@ struct Aes {
     si: usize,
 
     // compiled bytecode
-    compiled_cipher: Option<Box<dyn Fn(&SecretU8x16) -> SecretU8x16>>,
-    compiled_inc: Option<Box<dyn Fn(&SecretU8x16) -> SecretU8x16>>,
-    compiled_xor: Option<Box<dyn Fn(&SecretU8x16, &SecretU8x16) -> SecretU8x16>>,
+    compiled_cipher: Option<Box<dyn Fn(SecretU8x16) -> SecretU8x16>>,
+    compiled_inc: Option<Box<dyn Fn(SecretU8x16) -> SecretU8x16>>,
+    compiled_xor: Option<Box<dyn Fn(SecretU8x16, SecretU8x16) -> SecretU8x16>>,
 }
 
 impl Aes {
@@ -120,7 +120,7 @@ impl Aes {
 
         // The first round key is the key itself.
         for i in 0..self.words {
-            round_key.push(SecretU8x4::from_lanes([
+            round_key.push(SecretU8x4::from([
                 key[4*i+0].clone(),
                 key[4*i+1].clone(),
                 key[4*i+2].clone(),
@@ -148,7 +148,7 @@ impl Aes {
                 // Function Subword()
                 temp = SecretU8x4::from_cast(SBOX(SecretU8x16::from(temp)));
 
-                temp ^= SecretU8x4::const_lanes([RCON[i/self.words], 0, 0, 0]);
+                temp ^= SecretU8x4::const_([RCON[i/self.words], 0, 0, 0]);
             }
 
             if key.len() == 32 && i % self.words == 4 {
@@ -163,7 +163,7 @@ impl Aes {
         // convert to U8x16s for easier computation later
         let mut round_key = round_key.chunks_exact(4)
             .map(|c| {
-                SecretU8x16::from_cast(SecretU32x4::from_lanes([
+                SecretU8x16::from_cast(SecretU32x4::from([
                     SecretU32::from_cast(c[0].clone()),
                     SecretU32::from_cast(c[1].clone()),
                     SecretU32::from_cast(c[2].clone()),
@@ -174,7 +174,7 @@ impl Aes {
 
         // eval to keep from repeatedly computing this
         for i in 0..round_key.len() {
-            round_key[i] = round_key[i].eval()
+            round_key[i] = round_key[i].clone().eval()
         }
 
         round_key
@@ -197,7 +197,7 @@ impl Aes {
     // Offset = Row number. So the first row is not shifted.
     fn shift_rows(&self, state: SecretU8x16) -> SecretU8x16 {
         // we can use a complex shuffle here
-        SecretU8x16::const_lanes([
+        SecretU8x16::const_([
              0,  5, 10, 15,
              4,  9, 14,  3,
              8, 13,  2,  7,
@@ -219,7 +219,7 @@ impl Aes {
         let sum = (sum.clone() >> SecretU32x4::const_splat(8)) ^ sum;
         let sum = (sum.clone() >> SecretU32x4::const_splat(16)) ^ sum;
         let sum = SecretU8x16::from_cast(sum);
-        let sum = SecretU8x16::const_lanes([
+        let sum = SecretU8x16::const_([
              0,  0,  0,  0,
              4,  4,  4,  4,
              8,  8,  8,  8,
@@ -262,12 +262,12 @@ impl Aes {
 
         for i in 0..data.len() {
             // encrypt ctr
-            self.state = (self.compiled_cipher.as_ref().unwrap())(&self.iv);
+            self.state = (self.compiled_cipher.as_ref().unwrap())(self.iv.clone());
             // increment ctr
-            self.iv = (self.compiled_inc.as_ref().unwrap())(&self.iv);
+            self.iv = (self.compiled_inc.as_ref().unwrap())(self.iv.clone());
 
             // xor result
-            data[i] = (self.compiled_xor.as_ref().unwrap())(&data[i], &self.state);
+            data[i] = (self.compiled_xor.as_ref().unwrap())(data[i].clone(), self.state.clone());
         }
     }
 
@@ -278,9 +278,9 @@ impl Aes {
                 self.si = 0;
 
                 // encrypt ctr
-                self.state = (self.compiled_cipher.as_ref().unwrap())(&self.iv);
+                self.state = (self.compiled_cipher.as_ref().unwrap())(self.iv.clone());
                 // increment ctr
-                self.iv = (self.compiled_inc.as_ref().unwrap())(&self.iv);
+                self.iv = (self.compiled_inc.as_ref().unwrap())(self.iv.clone());
             }
 
             // xor result
@@ -323,7 +323,7 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         .map(|b| SecretU8::new(b))
         .collect::<Vec<_>>();
     let iv = std::fs::read(iv).unwrap();
-    let iv = SecretU8x16::new_lanes(<_>::try_from(iv).ok().unwrap());
+    let iv = SecretU8x16::try_from(iv).ok().unwrap();
 
     let mut in_file = std::fs::File::open(in_path).unwrap();
     let mut out_file = std::fs::File::create(out_path).unwrap();
@@ -333,23 +333,23 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         let diff = in_file.read(&mut block).unwrap();
         if diff == 64 {
             let mut block_s = [
-                SecretU8x16::new_lanes(<_>::try_from(&block[ 0..16]).ok().unwrap()),
-                SecretU8x16::new_lanes(<_>::try_from(&block[16..32]).ok().unwrap()),
-                SecretU8x16::new_lanes(<_>::try_from(&block[32..48]).ok().unwrap()),
-                SecretU8x16::new_lanes(<_>::try_from(&block[48..64]).ok().unwrap()),
+                SecretU8x16::try_from(&block[ 0..16]).ok().unwrap(),
+                SecretU8x16::try_from(&block[16..32]).ok().unwrap(),
+                SecretU8x16::try_from(&block[32..48]).ok().unwrap(),
+                SecretU8x16::try_from(&block[48..64]).ok().unwrap(),
             ];
             state.encrypt_aligned(&mut block_s);
-            block[ 0..16].copy_from_slice(&block_s[0].declassify_le_bytes());
-            block[16..32].copy_from_slice(&block_s[1].declassify_le_bytes());
-            block[32..48].copy_from_slice(&block_s[2].declassify_le_bytes());
-            block[48..64].copy_from_slice(&block_s[3].declassify_le_bytes());
+            block[ 0..16].copy_from_slice(&block_s[0].clone().declassify_le_bytes::<[u8; 16]>());
+            block[16..32].copy_from_slice(&block_s[1].clone().declassify_le_bytes::<[u8; 16]>());
+            block[32..48].copy_from_slice(&block_s[2].clone().declassify_le_bytes::<[u8; 16]>());
+            block[48..64].copy_from_slice(&block_s[3].clone().declassify_le_bytes::<[u8; 16]>());
         } else {
             let mut block_s = block[..diff].into_iter()
                 .map(|b| SecretU8::new(*b))
                 .collect::<Vec<_>>();
             state.encrypt(&mut block_s[..]);
             for i in 0..diff {
-                block[i] = block_s[i].declassify();
+                block[i] = block_s[i].clone().declassify();
             }
         }
         out_file.write_all(&block[0..diff]).unwrap();
@@ -425,7 +425,7 @@ fn main() {
     let key = AES128_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_lanes(IV);
+    let iv = SecretU8x16::from(IV);
     let mut buf = AES128_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
@@ -444,7 +444,7 @@ fn main() {
     let key = AES192_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_lanes(IV);
+    let iv = SecretU8x16::from(IV);
     let mut buf = AES192_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
@@ -463,7 +463,7 @@ fn main() {
     let key = AES256_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_lanes(IV);
+    let iv = SecretU8x16::from(IV);
     let mut buf = AES256_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();

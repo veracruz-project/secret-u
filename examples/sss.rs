@@ -151,11 +151,11 @@ fn gf256_interpolate(xs: &[SecretU8], ys: &[SecretU8]) -> SecretU8 {
         let mut li = SecretU8::one();
         for (j, (x1, _y1)) in xs.iter().zip(ys).enumerate() {
             if i != j {
-                li = gf256_interpolate_step(&li, &x0, &x1);
+                li = gf256_interpolate_step(li.clone(), x0.clone(), x1.clone());
             }
         }
 
-        y = gf256_interpolate_sum(&y, &li, &y0);
+        y = gf256_interpolate_sum(y, li, y0.clone());
     }
 
     y

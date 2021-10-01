@@ -40,8 +40,8 @@ const fn const_parse_u8(s: &str) -> u8 {
 // MAX_NPW2/MAX_LNPW2/LIMB_NPW2 are all defined/overwritable in the build.rs
 pub const MAX_NPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_NPW2"));
 pub const MAX_LNPW2: u8 = const_parse_u8(env!("SECRET_U_MAX_LNPW2"));
+pub const SMALL_NPW2: u8 = const_parse_u8(env!("SECRET_U_SMALL_NPW2"));
 pub const LIMB_NPW2: u8 = const_parse_u8(env!("SECRET_U_LIMB_NPW2"));
-
 
 macro_rules! ident {
     ($($fmt:tt)+) => {
@@ -54,6 +54,16 @@ macro_rules! lit {
         TokenTree::Literal($lit)
     }
 }
+
+// quick macros for access to __small_npw2 and __limb_npw2
+pub fn small_npw2(_input: TokenStream) -> TokenStream {
+    TokenStream::from(lit!(Literal::u8_unsuffixed(SMALL_NPW2)))
+}
+
+pub fn engine_limb_npw2(_input: TokenStream) -> TokenStream {
+    TokenStream::from(lit!(Literal::u8_unsuffixed(LIMB_NPW2)))
+}
+
 
 fn token_replace(input: TokenStream, map: &HashMap<String, TokenTree>) -> TokenStream {
     // helper function to set span recursively
@@ -180,6 +190,11 @@ fn secret_t_map<'a>(
                                 t.to_uppercase(),
                                 8 << npw2)
                         }),
+                    (format!("__iter_t{}", suffix),
+                        ident!("Secret{}{}x{}Iter",
+                            t.chars().next().unwrap().to_uppercase(),
+                            8 << npw2-lnpw2,
+                            1 << lnpw2)),
                     (format!("__secret_u{}", suffix),   ident!("SecretU{}", 8 << npw2)),
                     (format!("__secret_i{}", suffix),   ident!("SecretI{}", 8 << npw2)),
                     (format!("__secret_ux{}", suffix),  ident!("SecretU{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
@@ -192,6 +207,7 @@ fn secret_t_map<'a>(
                     (format!("__npw2{}", suffix),       lit!(Literal::u8_unsuffixed(npw2))),
                     (format!("__lnpw2{}", suffix),      lit!(Literal::u8_unsuffixed(lnpw2))),
                     (format!("__lane_npw2{}", suffix),  lit!(Literal::u8_unsuffixed(npw2-lnpw2))),
+                    (format!("__small_npw2{}", suffix), lit!(Literal::u8_unsuffixed(SMALL_NPW2))),
                     (format!("__size{}", suffix),       lit!(Literal::usize_unsuffixed(1 << npw2))),
                     (format!("__lane_size{}", suffix),  lit!(Literal::usize_unsuffixed(1 << (npw2-lnpw2)))),
                     (format!("__lanes{}", suffix),      lit!(Literal::usize_unsuffixed(1 << lnpw2))),

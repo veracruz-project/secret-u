@@ -94,12 +94,12 @@ pub fn lazy_compile(args: TokenStream, input: TokenStream) -> TokenStream {
     let q = quote! {
         #(#attrs)*
         #vis fn #(#constness)* #(#asyncness)* #(#unsafety)* #(#abi)*
-        #fn_name(#(#arg_names: &#arg_types),*) -> #ret_type {
+        #fn_name(#(#arg_names: #arg_types),*) -> #ret_type {
             use #crate_::compile;
 
             thread_local! {
                 static LAZY_CLOSURE: Box<
-                    dyn Fn(#(&#arg_types),*) -> #ret_type
+                    dyn Fn(#(#arg_types),*) -> #ret_type
                 > = {
                     Box::new(compile!(
                         |#(#arg_muts #arg_names: #arg_types),*| -> #ret_type {

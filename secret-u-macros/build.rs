@@ -11,6 +11,10 @@ use std::cmp::min;
 const DEFAULT_MAX_NPW2: u8 = 15;  // 2^15 bytes = u262144
 const DEFAULT_MAX_LNPW2: u8 = 15; // 2^15 lanes = 32768 lanes
 
+// Default cutoff for small-object-optimization, types larger than
+// this will always be boxed
+const DEFAULT_SMALL_NPW2: u8 = 3; // 2^3 bytes = u64
+
 // Defaults of engine's limb size, note the engine has some expectations of
 // being able to fit u16/u32s into limbs, and needs a 2 x wide limb for
 // multiplication, so I'm not sure what will happen if SECRET_U_LIMB_NPW2
@@ -33,11 +37,13 @@ fn main() {
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-env-changed=SECRET_U_MAX_NPW2");
     println!("cargo:rerun-if-env-changed=SECRET_U_MAX_LNPW2");
+    println!("cargo:rerun-if-env-changed=SECRET_U_SMALL_NPW2");
     println!("cargo:rerun-if-env-changed=SECRET_U_LIMB_NPW2");
 
     // allow explicit configuration through environment variables
     let mut max_npw2  = npw2_env("SECRET_U_MAX_NPW2", DEFAULT_MAX_NPW2);
     let mut max_lnpw2 = npw2_env("SECRET_U_MAX_LNPW2", DEFAULT_MAX_LNPW2);
+    let small_npw2 = npw2_env("SECRET_U_SMALL_NPW2", DEFAULT_MAX_NPW2);
     let limb_npw2 = npw2_env("SECRET_U_LIMB_NPW2", DEFAULT_MAX_NPW2);
 
     // find best npw2/lnpw2 based on feature flags
@@ -63,10 +69,12 @@ fn main() {
     // should always be set by secret-u's root crate
     let max_npw2 = max_npw2.unwrap_or(DEFAULT_MAX_NPW2);
     let max_lnpw2 = min(max_lnpw2.unwrap_or(DEFAULT_MAX_LNPW2), max_npw2);
+    let small_npw2 = small_npw2.unwrap_or(DEFAULT_SMALL_NPW2);
     let limb_npw2 = limb_npw2.unwrap_or(DEFAULT_LIMB_NPW2);
 
     // make sure env variables are always defined
     println!("cargo:rustc-env=SECRET_U_MAX_NPW2={}", max_npw2);
     println!("cargo:rustc-env=SECRET_U_MAX_LNPW2={}", max_lnpw2);
+    println!("cargo:rustc-env=SECRET_U_SMALL_NPW2={}", small_npw2);
     println!("cargo:rustc-env=SECRET_U_LIMB_NPW2={}", limb_npw2);
 }

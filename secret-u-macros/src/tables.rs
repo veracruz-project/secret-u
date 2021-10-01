@@ -677,7 +677,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
         });
     let ret: syn::Expr = if parallel > 1 {
         parse_quote! { 
-            #ret_secret_ty::from_lanes([#(#b_rets),*])
+            #ret_secret_ty::from([#(#b_rets),*])
         }
     } else {
         parse_quote! { 
@@ -723,6 +723,7 @@ pub fn bitslice_table(args: TokenStream, input: TokenStream) -> TokenStream {
         #vis fn #name(a: #index_secret_ty) -> #ret_secret_ty {
             use #crate_::traits::FromCast;
             use #crate_::traits::Eq;
+            use #crate_::traits::Classify;
 
             let mut a: [#secret_ty; #a_par_width] = [
                 #(#a_args),*
@@ -969,8 +970,8 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
                 table1 = parse_quote! { #table_secret_ty::const_(#(#prim_table1),*) };
                 table2 = parse_quote! { #table_secret_ty::const_(#(#prim_table2),*) };
             } else {
-                table1 = parse_quote! { #table_secret_ty::const_lanes([#(#prim_table1),*]) };
-                table2 = parse_quote! { #table_secret_ty::const_lanes([#(#prim_table2),*]) };
+                table1 = parse_quote! { #table_secret_ty::const_([#(#prim_table1),*]) };
+                table2 = parse_quote! { #table_secret_ty::const_([#(#prim_table2),*]) };
             }
 
             // select between shuffle tables
@@ -1059,6 +1060,7 @@ pub fn shuffle_table(args: TokenStream, input: TokenStream) -> TokenStream {
             use #crate_::traits::Select;
             use #crate_::traits::Shuffle;
             use #crate_::traits::Shuffle2;
+            use #crate_::traits::Classify;
 
             #(#packs)*
 

@@ -55,9 +55,9 @@ struct Aes {
     si: usize,
 
     // compiled bytecode
-    compiled_cipher: Option<Box<dyn Fn(&SecretU8x16) -> SecretU8x64>>,
-    compiled_inc: Option<Box<dyn Fn(&SecretU8x16) -> SecretU8x16>>,
-    compiled_xor: Option<Box<dyn Fn(&SecretU8x64, &SecretU8x64) -> SecretU8x64>>,
+    compiled_cipher: Option<Box<dyn Fn(SecretU8x16) -> SecretU8x64>>,
+    compiled_inc: Option<Box<dyn Fn(SecretU8x16) -> SecretU8x16>>,
+    compiled_xor: Option<Box<dyn Fn(SecretU8x64, SecretU8x64) -> SecretU8x64>>,
 }
 
 impl Aes {
@@ -97,7 +97,7 @@ impl Aes {
                 let x1 = SecretU8x16::from_cast(x1).reverse_lanes();
                 let x2 = SecretU8x16::from_cast(x2).reverse_lanes();
                 let x3 = SecretU8x16::from_cast(x3).reverse_lanes();
-                let x = SecretU8x64::from_cast(SecretU128x4::from_lanes([
+                let x = SecretU8x64::from_cast(SecretU128x4::from([
                     SecretU128::from_cast(x0),
                     SecretU128::from_cast(x1),
                     SecretU128::from_cast(x2),
@@ -136,7 +136,7 @@ impl Aes {
 
         // The first round key is the key itself.
         for i in 0..self.words {
-            round_key.push(SecretU8x4::from_lanes([
+            round_key.push(SecretU8x4::from([
                 key[4*i+0].clone(),
                 key[4*i+1].clone(),
                 key[4*i+2].clone(),
@@ -164,7 +164,7 @@ impl Aes {
                 // Function Subword()
                 temp = SecretU8x4::from_cast(SBOX(SecretU8x64::from(temp)));
 
-                temp ^= SecretU8x4::const_lanes([RCON[i/self.words], 0, 0, 0]);
+                temp ^= SecretU8x4::const_([RCON[i/self.words], 0, 0, 0]);
             }
 
             if key.len() == 32 && i % self.words == 4 {
@@ -179,7 +179,7 @@ impl Aes {
         // convert to U8x16s for easier computation later
         let mut round_key = round_key.chunks_exact(4)
             .map(|c| {
-                SecretU8x16::from_cast(SecretU32x4::from_lanes([
+                SecretU8x16::from_cast(SecretU32x4::from([
                     SecretU32::from_cast(c[0].clone()),
                     SecretU32::from_cast(c[1].clone()),
                     SecretU32::from_cast(c[2].clone()),
@@ -190,7 +190,7 @@ impl Aes {
 
         // eval to keep from repeatedly computing this
         for i in 0..round_key.len() {
-            round_key[i] = round_key[i].eval()
+            round_key[i] = round_key[i].clone().eval()
         }
 
         round_key
@@ -223,11 +223,9 @@ impl Aes {
         ];
 
         // do 4 in parallel
-        SecretU8x64::const_lanes(
-            <_>::try_from(
-                (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
-            ).ok().unwrap()
-        ).shuffle(state)
+        SecretU8x64::try_const(
+            (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
+        ).ok().unwrap().shuffle(state)
     }
 
     // MixColumns function mixes the columns of the state matrix
@@ -250,11 +248,9 @@ impl Aes {
              8,  8,  8,  8,
             12, 12, 12, 12,
         ];
-        let sum = SecretU8x64::const_lanes(
-            <_>::try_from(
-                (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
-            ).ok().unwrap()
-        ).shuffle(sum);
+        let sum = SecretU8x64::try_const(
+            (0..64).map(|i| 16*(i/16) + lanes[(i%16) as usize]).collect::<Vec<_>>()
+        ).ok().unwrap().shuffle(sum);
 
         let rot = SecretU8x64::from_cast(
             SecretU32x16::from_cast(state.clone()).rotate_right(SecretU32x16::const_splat(8))
@@ -293,12 +289,12 @@ impl Aes {
 
         for i in 0..data.len() {
             // encrypt ctr
-            self.state = (self.compiled_cipher.as_ref().unwrap())(&self.iv);
+            self.state = (self.compiled_cipher.as_ref().unwrap())(self.iv.clone());
             // increment ctr
-            self.iv = (self.compiled_inc.as_ref().unwrap())(&self.iv);
+            self.iv = (self.compiled_inc.as_ref().unwrap())(self.iv.clone());
 
             // xor result
-            data[i] = (self.compiled_xor.as_ref().unwrap())(&data[i], &self.state);
+            data[i] = (self.compiled_xor.as_ref().unwrap())(data[i].clone(), self.state.clone());
         }
     }
 
@@ -309,9 +305,9 @@ impl Aes {
                 self.si = 0;
 
                 // encrypt ctr
-                self.state = (self.compiled_cipher.as_ref().unwrap())(&self.iv);
+                self.state = (self.compiled_cipher.as_ref().unwrap())(self.iv.clone());
                 // increment ctr
-                self.iv = (self.compiled_inc.as_ref().unwrap())(&self.iv);
+                self.iv = (self.compiled_inc.as_ref().unwrap())(self.iv.clone());
             }
 
             // xor result
@@ -354,7 +350,7 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         .map(|b| SecretU8::new(b))
         .collect::<Vec<_>>();
     let iv = std::fs::read(iv).unwrap();
-    let iv = SecretU8x16::new_lanes(<_>::try_from(iv).ok().unwrap());
+    let iv = SecretU8x16::try_from(iv).ok().unwrap();
 
     let mut in_file = std::fs::File::open(in_path).unwrap();
     let mut out_file = std::fs::File::create(out_path).unwrap();
@@ -363,16 +359,16 @@ fn bench(key: &str, iv: &str, in_path: &str, out_path: &str) -> ! {
         let mut block = [0; 64];
         let diff = in_file.read(&mut block).unwrap();
         if diff == 64 {
-            let mut block_s = [SecretU8x64::new_lanes(block)];
+            let mut block_s = [SecretU8x64::from(block)];
             state.encrypt_aligned(&mut block_s);
-            block.copy_from_slice(&block_s[0].declassify_le_bytes());
+            block.copy_from_slice(&block_s[0].clone().declassify_le_bytes::<[u8; 64]>());
         } else {
             let mut block_s = block[..diff].into_iter()
                 .map(|b| SecretU8::new(*b))
                 .collect::<Vec<_>>();
             state.encrypt(&mut block_s[..]);
             for i in 0..diff {
-                block[i] = block_s[i].declassify();
+                block[i] = block_s[i].clone().declassify();
             }
         }
         out_file.write_all(&block[0..diff]).unwrap();
@@ -448,7 +444,7 @@ fn main() {
     let key = AES128_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_lanes(IV);
+    let iv = SecretU8x16::from(IV);
     let mut buf = AES128_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
@@ -467,7 +463,7 @@ fn main() {
     let key = AES192_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_lanes(IV);
+    let iv = SecretU8x16::from(IV);
     let mut buf = AES192_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
@@ -486,7 +482,7 @@ fn main() {
     let key = AES256_KEY.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();
-    let iv = SecretU8x16::new_lanes(IV);
+    let iv = SecretU8x16::from(IV);
     let mut buf = AES256_IN.iter()
         .map(|b| SecretU8::new(*b))
         .collect::<Vec<_>>();

@@ -15,6 +15,7 @@ use secret_u_opcode::OpIns;
 #[cfg(feature="debug-cycle-count")]
 use std::cell::Cell;
 
+use secret_u_macros::engine_limb_npw2;
 use secret_u_macros::engine_limb_t;
 use secret_u_macros::engine_limbi_t;
 use secret_u_macros::engine_limb2_t;
@@ -22,7 +23,7 @@ use secret_u_macros::engine_for_short_t;
 use secret_u_macros::engine_match;
 
 #[allow(non_upper_case_globals)]
-const __limb_size: usize = size_of::<__limb_t>();
+const __limb_size: usize = 1 << engine_limb_npw2!(); 
 #[allow(non_camel_case_types)]
 type __limb_t = engine_limb_t!();
 #[allow(non_camel_case_types)]

@@ -2,9 +2,10 @@
 
 use std::rc::Rc;
 use std::convert::TryFrom;
-use std::borrow::Cow;
 use std::mem::transmute;
 use std::mem::MaybeUninit;
+use std::ops::Range;
+use std::iter::FusedIterator;
 
 use std::ops::Not;
 use std::ops::BitAnd;
@@ -52,13 +53,6 @@ enum DeferredTree {
     Deferred(Rc<dyn DynOpTree>),
 }
 
-impl From<bool> for SecretBool {
-    #[inline]
-    fn from(v: bool) -> SecretBool {
-        Self::classify(v)
-    }
-}
-
 impl Default for SecretBool {
     #[inline]
     fn default() -> Self {
@@ -66,40 +60,41 @@ impl Default for SecretBool {
     }
 }
 
-impl SecretBool {
-    pub const SIZE: usize = 1;
-
-    /// Wraps a non-secret value as a secret value
+impl Classify<bool> for SecretBool {
     #[inline]
-    pub fn classify(v: bool) -> SecretBool {
+    fn classify(v: bool) -> SecretBool {
         Self::from_tree(OpTree::<U8>::imm(if v { 0xffu8 } else { 0x00u8 }))
     }
 
-    /// Extracts the secret value into a non-secret value, this
-    /// effectively "leaks" the secret value, but is necessary
-    /// to actually do anything
     #[inline]
-    pub fn declassify(&self) -> bool {
-        self.try_declassify().unwrap()
+    fn const_(v: bool) -> SecretBool {
+        Self::from_tree(if v { OpTree::<U8>::ones() } else { OpTree::<U8>::zero() })
     }
+}
 
-    /// Same as declassify but propagating internal VM errors
+impl FromDeclassify<SecretBool> for bool {
+    type Error = Error;
+
     #[inline]
-    pub fn try_declassify(&self) -> Result<bool, Error> {
-        Ok(self.resolve::<U8>().try_eval()?.result::<u8>() != 0)
+    fn try_from_declassify(v: SecretBool) -> Result<bool, Error> {
+        Ok(v.resolve::<U8>().try_eval()?.result::<u8>() != 0)
     }
+}
 
-    /// Wraps a non-secret value as a secret value
+impl From<bool> for SecretBool {
     #[inline]
-    pub fn new(v: bool) -> SecretBool {
+    fn from(v: bool) -> SecretBool {
         Self::classify(v)
     }
+}
 
-    /// Create a non-secret constant value, these are available for
-    /// more optimizations than secret values
+impl SecretBool {
+    pub const SIZE: usize = 1;
+
+    /// Alias for classify
     #[inline]
-    pub fn const_(v: bool) -> SecretBool {
-        Self::from_tree(if v { OpTree::<U8>::ones() } else { OpTree::<U8>::zero() })
+    pub fn new(v: bool) -> Self {
+        Self::classify(v)
     }
 
     /// A constant, non-secret false
@@ -112,6 +107,20 @@ impl SecretBool {
     #[inline]
     pub fn true_() -> Self {
         Self::from_tree(OpTree::ones())
+    }
+
+    /// Extracts the secret value into a non-secret value, this
+    /// effectively "leaks" the secret value, but is necessary
+    /// to actually do anything with it.
+    #[inline]
+    pub fn declassify(self) -> bool {
+        bool::from_declassify(self)
+    }
+
+    /// Same as declassify but propagating internal VM errors
+    #[inline] 
+    pub fn try_declassify(self) -> Result<bool, Error> {
+        bool::try_from_declassify(self)
     }
 
     /// Create a deferred SecretBool, the actual type will resolved until
@@ -132,16 +141,15 @@ impl SecretBool {
 
     /// Reduce a deferred SecretBool down into a U8 if necessary
     #[inline]
-    fn resolve<'a, U: OpU>(&'a self) -> Cow<'a, OpTree<U>> {
-        OpTree::dyn_cast_s(self.deferred())
+    fn resolve<U: OpU>(self) -> OpTree<U> {
+        OpTree::dyn_cast_s(self.deferred()).into_owned()
     }
 }
 
 impl Eval for SecretBool {
     #[inline]
-    fn try_eval(&self) -> Result<Self, Error> {
-        let tree = self.resolve::<U8>();
-        Ok(Self::from_tree(tree.try_eval()?))
+    fn try_eval(self) -> Result<Self, Error> {
+        Ok(Self::from_tree(self.resolve::<U8>().try_eval()?))
     }
 }
 
@@ -154,7 +162,7 @@ impl Tree for SecretBool {
     }
 
     #[inline]
-    fn tree(&self) -> Cow<'_, OpTree<U8>> {
+    fn into_tree(self) -> OpTree<U8> {
         self.resolve::<U8>()
     }
 }
@@ -267,9 +275,9 @@ impl Select<SecretBool> for SecretBool {
     #[inline]
     fn select(self, a: SecretBool, b: SecretBool) -> SecretBool {
         SecretBool::from_tree(OpTree::select(0,
-            self.resolve::<U8>().into_owned(),
-            a.resolve::<U8>().into_owned(),
-            b.resolve::<U8>().into_owned()
+            self.resolve::<U8>(),
+            a.resolve::<U8>(),
+            b.resolve::<U8>()
         ))
     }
 }
@@ -286,6 +294,280 @@ for_secret_t! {
         #[derive(Clone)]
         pub struct __secret_t(OpTree<__U>);
 
+        impl Default for __secret_t {
+            #[inline]
+            fn default() -> Self {
+                Self::zero()
+            }
+        }
+
+        __if(__has_prim) {
+            impl Classify<__prim_t> for __secret_t {
+                #[inline]
+                fn classify(v: __prim_t) -> __secret_t {
+                    Self(OpTree::imm(v))
+                }
+
+                #[inline]
+                fn const_(v: __prim_t) -> __secret_t {
+                    Self(OpTree::const_(v))
+                }
+            }
+
+            impl FromDeclassify<__secret_t> for __prim_t {
+                type Error = Error;
+
+                #[inline]
+                fn try_from_declassify(v: __secret_t) -> Result<__prim_t, Error> {
+                    Ok(v.try_eval()?.0.result())
+                }
+            }
+        }
+
+        impl ClassifyLeBytes<[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_le_bytes(v: [u8; __size]) -> __secret_t {
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_le_bytes(v: [u8; __size]) -> __secret_t {
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for [u8; __size] {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<[u8; __size], Error> {
+                Ok(v.try_eval()?.0.result())
+            }
+        }
+
+        impl ClassifyLeBytes<Box<[u8; __size]>> for __secret_t {
+            #[inline]
+            fn classify_le_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_le_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for Box<[u8; __size]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<Box<[u8; __size]>, Error> {
+                Ok(v.try_eval()?.0.result())
+            }
+        }
+
+        impl TryClassifyLeBytes<Box<[u8]>> for __secret_t {
+            type Error = Box<[u8]>;
+
+            #[inline]
+            fn try_classify_le_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_le_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+
+            #[inline]
+            fn try_const_le_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_le_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for Box<[u8]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<Box<[u8]>, Error> {
+                Ok(Box::<[u8; __size]>::try_from_declassify_le_bytes(v)? as Box<[u8]>)
+            }
+        }
+
+        impl TryClassifyLeBytes<Vec<u8>> for __secret_t {
+            type Error = Vec<u8>;
+
+            #[inline]
+            fn try_classify_le_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_classify_le_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+
+            #[inline]
+            fn try_const_le_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_const_le_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for Vec<u8> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<Vec<u8>, Error> {
+                Ok(Vec::<u8>::from(Box::<[u8]>::try_from_declassify_le_bytes(v)?))
+            }
+        }
+
+        impl ClassifyLeBytes<&[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_le_bytes(v: &[u8; __size]) -> __secret_t {
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_le_bytes(v: &[u8; __size]) -> __secret_t {
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl<'a> TryClassifyLeBytes<&'a [u8]> for __secret_t {
+            type Error = &'a [u8];
+
+            #[inline]
+            fn try_classify_le_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_le_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+
+            #[inline]
+            fn try_const_le_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_le_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+        }
+
+        impl ClassifyBeBytes<[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_be_bytes(v: [u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_be_bytes(v: [u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for [u8; __size] {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<[u8; __size], Error> {
+                let mut v = v.try_eval()?.0.result::<__U>();
+                v.reverse();
+                Ok(v.into())
+            }
+        }
+
+        impl ClassifyBeBytes<Box<[u8; __size]>> for __secret_t {
+            #[inline]
+            fn classify_be_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_be_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for Box<[u8; __size]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<Box<[u8; __size]>, Error> {
+                let mut v = v.try_eval()?.0.result::<__U>();
+                v.reverse();
+                Ok(v.into())
+            }
+        }
+
+        impl TryClassifyBeBytes<Box<[u8]>> for __secret_t {
+            type Error = Box<[u8]>;
+
+            #[inline]
+            fn try_classify_be_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_be_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+
+            #[inline]
+            fn try_const_be_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_be_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for Box<[u8]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<Box<[u8]>, Error> {
+                Ok(Box::<[u8; __size]>::try_from_declassify_be_bytes(v)? as Box<[u8]>)
+            }
+        }
+
+        impl TryClassifyBeBytes<Vec<u8>> for __secret_t {
+            type Error = Vec<u8>;
+
+            #[inline]
+            fn try_classify_be_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_classify_be_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+
+            #[inline]
+            fn try_const_be_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_const_be_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for Vec<u8> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<Vec<u8>, Error> {
+                Ok(Vec::<u8>::from(Box::<[u8]>::try_from_declassify_be_bytes(v)?))
+            }
+        }
+
+        impl ClassifyBeBytes<&[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_be_bytes(v: &[u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_be_bytes(v: &[u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl<'a> TryClassifyBeBytes<&'a [u8]> for __secret_t {
+            type Error = &'a [u8];
+
+            #[inline]
+            fn try_classify_be_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_be_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+
+            #[inline]
+            fn try_const_be_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_be_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+        }
+
         __if(__has_prim) {
             impl From<__prim_t> for __secret_t {
                 #[inline]
@@ -295,82 +577,69 @@ for_secret_t! {
             }
         }
 
-        impl Default for __secret_t {
-            #[inline]
-            fn default() -> Self {
-                Self::zero()
-            }
-        }
-
         impl __secret_t {
             pub const SIZE: usize = __size;
 
-            /// Wraps a non-secret value as a secret value
-            #[inline]
-            pub fn classify_le_bytes(v: [u8; __size]) -> Self {
-                Self(OpTree::imm(v))
-            }
-
-            /// Extracts the secret value into a non-secret value, this
-            /// effectively "leaks" the secret value, but is necessary
-            /// to actually do anything
-            #[inline]
-            pub fn declassify_le_bytes(&self) -> [u8; __size] {
-                self.try_declassify_le_bytes().unwrap()
-            }
-
-            /// Same as declassify but propagating internal VM errors
-            #[inline]
-            pub fn try_declassify_le_bytes(&self) -> Result<[u8; __size], Error> {
-                Ok(self.try_eval()?.0.result())
-            }
-
-            /// Wraps a non-secret value as a secret value
-            #[inline]
-            pub fn from_le_bytes(v: [u8; __size]) -> Self {
-                Self::classify_le_bytes(v)
-            }
-
-            /// Create a non-secret constant value, these are available
-            /// for more optimizations than secret values
-            #[inline]
-            pub fn const_le_bytes(v: [u8; __size]) -> Self {
-                Self(OpTree::const_(v))
-            }
-
             __if(__has_prim) {
-                /// Wraps a non-secret value as a secret value
-                #[inline]
-                pub fn classify(v: __prim_t) -> Self {
-                    Self(OpTree::imm(v.to_le_bytes()))
-                }
-
-                /// Extracts the secret value into a non-secret value, this
-                /// effectively "leaks" the secret value, but is necessary
-                /// to actually do anything
-                #[inline]
-                pub fn declassify(&self) -> __prim_t {
-                    self.try_declassify().unwrap()
-                }
-
-                /// Same as declassify but propagating internal VM errors
-                #[inline]
-                pub fn try_declassify(&self) -> Result<__prim_t, Error> {
-                    Ok(self.try_eval()?.0.result())
-                }
-
-                /// Wraps a non-secret value as a secret value
+                /// Alias for classify
                 #[inline]
                 pub fn new(v: __prim_t) -> Self {
                     Self::classify(v)
                 }
+            }
 
-                /// Create a non-secret constant value, these are available
-                /// for more optimizations than secret values
-                #[inline]
-                pub fn const_(v: __prim_t) -> Self {
-                    Self::const_le_bytes(v.to_le_bytes())
-                }
+            /// Alias for classify_le_bytes
+            #[inline]
+            pub fn from_le_bytes<T>(v: T) -> Self
+            where
+                Self: ClassifyLeBytes<T>
+            {
+                Self::classify_le_bytes(v)
+            }
+
+            /// Alias for try_classify_le_bytes
+            #[inline]
+            pub fn try_from_le_bytes<T>(v: T) -> Result<Self, <Self as TryClassifyLeBytes<T>>::Error>
+            where
+                Self: TryClassifyLeBytes<T>
+            {
+                Self::try_classify_le_bytes(v)
+            }
+
+            /// Alias for classify_be_bytes
+            #[inline]
+            pub fn from_be_bytes<T>(v: T) -> Self
+            where
+                Self: ClassifyBeBytes<T>
+            {
+                Self::classify_be_bytes(v)
+            }
+
+            /// Alias for try_classify_be_bytes
+            #[inline]
+            pub fn try_from_be_bytes<T>(v: T) -> Result<Self, <Self as TryClassifyBeBytes<T>>::Error>
+            where
+                Self: TryClassifyBeBytes<T>
+            {
+                Self::try_classify_be_bytes(v)
+            }
+
+            /// Alias for classify_ne_bytes
+            #[inline]
+            pub fn from_ne_bytes<T>(v: T) -> Self
+            where
+                Self: ClassifyNeBytes<T>
+            {
+                Self::classify_ne_bytes(v)
+            }
+
+            /// Alias for try_classify_ne_bytes
+            #[inline]
+            pub fn try_from_ne_bytes<T>(v: T) -> Result<Self, <Self as TryClassifyNeBytes<T>>::Error>
+            where
+                Self: TryClassifyNeBytes<T>
+            {
+                Self::try_classify_ne_bytes(v)
             }
 
             /// A constant, non-secret 0
@@ -389,6 +658,82 @@ for_secret_t! {
             #[inline]
             pub fn ones() -> Self {
                 Self(OpTree::ones())
+            }
+
+            __if(__has_prim) {
+                /// Extracts the secret value into a non-secret value, this
+                /// effectively "leaks" the secret value, but is necessary
+                /// to actually do anything with it.
+                #[inline]
+                pub fn declassify(self) -> __prim_t {
+                    __prim_t::from_declassify(self)
+                }
+
+                /// Same as declassify but propagating internal VM errors
+                #[inline] 
+                pub fn try_declassify(self) -> Result<__prim_t, Error> {
+                    __prim_t::try_from_declassify(self)
+                }
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_le_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyLeBytes<Self>
+            {
+                T::from_declassify_le_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_le_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyLeBytes<Self>
+            {
+                T::try_from_declassify_le_bytes(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_be_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyBeBytes<Self>
+            {
+                T::from_declassify_be_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_be_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyBeBytes<Self>
+            {
+                T::try_from_declassify_be_bytes(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_ne_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyNeBytes<Self>
+            {
+                T::from_declassify_ne_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_ne_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyNeBytes<Self>
+            {
+                T::try_from_declassify_ne_bytes(self)
             }
 
             // abs only available on signed types
@@ -555,8 +900,8 @@ for_secret_t! {
 
         impl Eval for __secret_t {
             #[inline]
-            fn try_eval(&self) -> Result<Self, Error> {
-                Ok(Self::from_tree(self.tree().try_eval()?))
+            fn try_eval(self) -> Result<Self, Error> {
+                Ok(Self::from_tree(self.0.try_eval()?))
             }
         }
 
@@ -569,8 +914,8 @@ for_secret_t! {
             }
 
             #[inline]
-            fn tree<'a>(&'a self) -> Cow<'a, OpTree<__U>> {
-                Cow::Borrowed(&self.0)
+            fn into_tree(self) -> OpTree<__U> {
+                self.0
             }
         }
 
@@ -803,7 +1148,7 @@ for_secret_t! {
             #[inline]
             fn select(self, a: __secret_t, b: __secret_t) -> __secret_t {
                 __secret_t(OpTree::select(0,
-                    self.resolve().into_owned(),
+                    self.resolve(),
                     a.0,
                     b.0
                 ))
@@ -836,14 +1181,114 @@ for_secret_t! {
             }
         }
 
-        impl __secret_t {
-            pub const SIZE: usize = __size;
-            pub const LANES: usize = __lanes;
-
-            /// Wraps a non-secret value as a secret value
+        impl Classify<[bool; __lanes]> for __secret_t {
             #[inline]
-            pub fn classify_lanes(lanes: [bool; __lanes]) -> Self {
-                let mut bytes = [0; __size];
+            fn classify(v: [bool; __lanes]) -> __secret_t {
+                Self::classify(&v)
+            }
+
+            #[inline]
+            fn const_(v: [bool; __lanes]) -> __secret_t {
+                Self::const_(&v)
+            }
+        }
+
+        impl FromDeclassify<__secret_t> for [bool; __lanes] {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify(v: __secret_t) -> Result<[bool; __lanes], Error> {
+                let bytes = v.try_eval()?.0.result::<__U>();
+                let mut lanes = [false; __lanes];
+                for i in 0..__lanes {
+                    lanes[i] = !<__lane_U>::try_from(
+                        &bytes[i*__lane_size .. (i+1)*__lane_size]
+                    ).unwrap().is_zero();
+                }
+                Ok(lanes)
+            }
+        }
+
+        impl Classify<Box<[bool; __lanes]>> for __secret_t {
+            #[inline]
+            fn classify(v: Box<[bool; __lanes]>) -> __secret_t {
+                Self::classify(v.as_ref())
+            }
+
+            #[inline]
+            fn const_(v: Box<[bool; __lanes]>) -> __secret_t {
+                Self::const_(v.as_ref())
+            }
+        }
+
+        impl FromDeclassify<__secret_t> for Box<[bool; __lanes]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify(v: __secret_t) -> Result<Box<[bool; __lanes]>, Error> {
+                let bytes = v.try_eval()?.0.result::<__U>();
+                let mut lanes = Vec::with_capacity(__lanes);
+                for i in 0..__lanes {
+                    lanes.push(!<__lane_U>::try_from(
+                        &bytes[i*__lane_size .. (i+1)*__lane_size]
+                    ).unwrap().is_zero());
+                }
+                Ok(Box::<[bool; __lanes]>::try_from(
+                    Box::<[bool]>::from(lanes)
+                ).unwrap())
+            }
+        }
+
+        impl TryClassify<Box<[bool]>> for __secret_t {
+            type Error = Box<[bool]>;
+
+            #[inline]
+            fn try_classify(v: Box<[bool]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify(Box::<[bool; __lanes]>::try_from(v)?))
+            }
+
+            #[inline]
+            fn try_const(v: Box<[bool]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_(Box::<[bool; __lanes]>::try_from(v)?))
+            }
+        }
+
+        impl FromDeclassify<__secret_t> for Box<[bool]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify(v: __secret_t) -> Result<Box<[bool]>, Error> {
+                Ok(Box::<[bool; __lanes]>::try_from_declassify(v)? as Box<[bool]>)
+            }
+        }
+
+        impl TryClassify<Vec<bool>> for __secret_t {
+            type Error = Vec<bool>;
+
+            #[inline]
+            fn try_classify(v: Vec<bool>) -> Result<__secret_t, Self::Error> {
+                Self::try_classify(Box::<[bool]>::from(v)).map_err(Vec::<bool>::from)
+            }
+
+            #[inline]
+            fn try_const(v: Vec<bool>) -> Result<__secret_t, Self::Error> {
+                Self::try_const(Box::<[bool]>::from(v)).map_err(Vec::<bool>::from)
+            }
+        }
+
+        impl FromDeclassify<__secret_t> for Vec<bool> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify(v: __secret_t) -> Result<Vec<bool>, Error> {
+                Ok(Vec::from(Box::<[bool]>::try_from_declassify(v)?))
+            }
+        }
+
+        impl Classify<&[bool; __lanes]> for __secret_t {
+            #[inline]
+            fn classify(lanes: &[bool; __lanes]) -> __secret_t {
+                let mut bytes = <__U>::zero();
                 for (i, lane) in lanes.iter().enumerate() {
                     bytes[i*__lane_size .. (i+1)*__lane_size]
                         .copy_from_slice(
@@ -851,45 +1296,15 @@ for_secret_t! {
                                 <__lane_U>::ones()
                             } else {
                                 <__lane_U>::zero()
-                            }.to_le_bytes()
+                            }
                         )
                 }
                 Self(OpTree::imm(bytes))
             }
 
-            /// Extracts the secret value into a non-secret value, this
-            /// effectively "leaks" the secret value, but is necessary
-            /// to actually do anything
             #[inline]
-            pub fn declassify_lanes(&self) -> [bool; __lanes] {
-                self.try_declassify_lanes().unwrap()
-            }
-
-            /// Same as declassify but propagating internal VM errors
-            #[inline]
-            pub fn try_declassify_lanes(&self) -> Result<[bool; __lanes], Error> {
-                let bytes: [u8; __size] = self.try_eval()?.0.result();
-                let mut lanes = [false; __lanes];
-                for i in 0..__lanes {
-                    lanes[i] = !<__lane_U>::from_le_bytes(
-                        <_>::try_from(
-                            &bytes[i*__lane_size .. (i+1)*__lane_size]
-                        ).unwrap()
-                    ).is_zero();
-                }
-                Ok(lanes)
-            }
-
-            /// Wraps a non-secret value as a secret value
-            #[inline]
-            pub fn new_lanes(lanes: [bool; __lanes]) -> Self {
-                Self::classify_lanes(lanes)
-            }
-
-            /// Wraps a non-secret value as a secret value
-            #[inline]
-            pub fn const_lanes(lanes: [bool; __lanes]) -> Self {
-                let mut bytes = [0; __size];
+            fn const_(lanes: &[bool; __lanes]) -> __secret_t {
+                let mut bytes = <__U>::zero();
                 for (i, lane) in lanes.iter().enumerate() {
                     bytes[i*__lane_size .. (i+1)*__lane_size]
                         .copy_from_slice(
@@ -897,11 +1312,230 @@ for_secret_t! {
                                 <__lane_U>::ones()
                             } else {
                                 <__lane_U>::zero()
-                            }.to_le_bytes()
+                            }
                         )
                 }
                 Self(OpTree::const_(bytes))
             }
+        }
+
+        impl<'a> TryClassify<&'a [bool]> for __secret_t {
+            type Error = &'a [bool];
+
+            #[inline]
+            fn try_classify(v: &'a [bool]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify(<&[bool; __lanes]>::try_from(v).map_err(|_| v)?))
+            }
+
+            #[inline]
+            fn try_const(v: &'a [bool]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_(<&[bool; __lanes]>::try_from(v).map_err(|_| v)?))
+            }
+        }
+
+        impl From<[bool; __lanes]> for __secret_t {
+            #[inline]
+            fn from(v: [bool; __lanes]) -> __secret_t {
+                Self::classify(v)
+            }
+        }
+
+        impl From<Box<[bool; __lanes]>> for __secret_t {
+            #[inline]
+            fn from(v: Box<[bool; __lanes]>) -> __secret_t {
+                Self::classify(v)
+            }
+        }
+
+        impl TryFrom<Box<[bool]>> for __secret_t {
+            type Error = Box<[bool]>;
+
+            #[inline]
+            fn try_from(v: Box<[bool]>) -> Result<__secret_t, Self::Error> {
+                Self::try_classify(v)
+            }
+        }
+
+        impl TryFrom<Vec<bool>> for __secret_t {
+            type Error = Vec<bool>;
+
+            #[inline]
+            fn try_from(v: Vec<bool>) -> Result<__secret_t, Self::Error> {
+                Self::try_classify(v)
+            }
+        }
+
+        impl From<&[bool; __lanes]> for __secret_t {
+            #[inline]
+            fn from(v: &[bool; __lanes]) -> __secret_t {
+                Self::classify(v)
+            }
+        }
+
+        impl<'a> TryFrom<&'a [bool]> for __secret_t {
+            type Error = &'a [bool];
+
+            #[inline]
+            fn try_from(v: &'a [bool]) -> Result<__secret_t, Self::Error> {
+                Self::try_classify(v)
+            }
+        }
+
+        impl From<[SecretBool; __lanes]> for __secret_t {
+            /// Build from lanes
+            #[inline]
+            fn from(lanes: [SecretBool; __lanes]) -> Self {
+                // into iter here to avoid cloning
+                let mut lanes = IntoIterator::into_iter(lanes);
+                let mut x = Self(lanes.next().unwrap().resolve());
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap())
+                }
+                x
+            }
+        }
+
+        impl From<Box<[SecretBool; __lanes]>> for __secret_t {
+            /// Build from lanes
+            #[inline]
+            fn from(lanes: Box<[SecretBool; __lanes]>) -> Self {
+                // into iter here to avoid cloning
+                let mut lanes = Vec::from(lanes as Box<[SecretBool]>).into_iter();
+                let mut x = Self(lanes.next().unwrap().resolve());
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap())
+                }
+                x
+            }
+        }
+
+        impl TryFrom<Box<[SecretBool]>> for __secret_t {
+            type Error = Box<[SecretBool]>;
+
+            /// Build from lanes
+            #[inline]
+            fn try_from(lanes: Box<[SecretBool]>) -> Result<Self, Self::Error> {
+                Ok(Self::from(Box::<[SecretBool; __lanes]>::try_from(lanes)?))
+            }
+        }
+
+        impl TryFrom<Vec<SecretBool>> for __secret_t {
+            type Error = Vec<SecretBool>;
+
+            /// Build from lanes
+            #[inline]
+            fn try_from(lanes: Vec<SecretBool>) -> Result<Self, Self::Error> {
+                Ok(Self::try_from(Box::<[SecretBool]>::from(lanes)).map_err(Vec::<SecretBool>::from)?)
+            }
+        }
+
+        impl From<&[SecretBool; __lanes]> for __secret_t {
+            /// Build from lanes
+            #[inline]
+            fn from(lanes: &[SecretBool; __lanes]) -> Self {
+                let mut lanes = lanes.iter();
+                let mut x = Self(lanes.next().unwrap().clone().resolve());
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap().clone())
+                }
+                x
+            }
+        }
+
+        impl<'a> TryFrom<&'a [SecretBool]> for __secret_t {
+            type Error = &'a [SecretBool];
+
+            /// Build from lanes
+            #[inline]
+            fn try_from(lanes: &'a [SecretBool]) -> Result<Self, Self::Error> {
+                Ok(Self::from(<&[SecretBool; __lanes]>::try_from(lanes).map_err(|_| lanes)?))
+            }
+        }
+
+        impl From<__secret_t> for [SecretBool; __lanes] {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                let mut lanes: [MaybeUninit<SecretBool>; __lanes]
+                    = unsafe { MaybeUninit::uninit().assume_init() };
+                for i in 0..__lanes {
+                    lanes[i] = MaybeUninit::new(self_.clone().extract(i))
+                }
+                unsafe { transmute(lanes) }
+            }
+        }
+
+        impl From<__secret_t> for Box<[SecretBool; __lanes]> {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                let mut lanes = Vec::<SecretBool>::with_capacity(__lanes);
+                for i in 0..__lanes {
+                    lanes.push(self_.clone().extract(i));
+                }
+                Box::<[SecretBool; __lanes]>::try_from(Box::<[SecretBool]>::from(lanes)).ok().unwrap()
+            }
+        }
+
+        impl From<__secret_t> for Box<[SecretBool]> {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                Box::<[SecretBool; __lanes]>::from(self_) as Box<[SecretBool]>
+            }
+        }
+
+        impl From<__secret_t> for Vec<SecretBool> {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                Vec::<SecretBool>::from(Box::<[SecretBool]>::from(self_))
+            }
+        }
+
+        /// Lane iteration
+        #[derive(Clone)]
+        pub struct __iter_t {
+            lanes: __secret_t,
+            range: Range<u16>,
+        }
+
+        impl IntoIterator for __secret_t {
+            type Item = SecretBool;
+            type IntoIter = __iter_t;
+
+            fn into_iter(self) -> __iter_t {
+                __iter_t {
+                    lanes: self,
+                    range: 0..__lanes,
+                }
+            }
+        }
+
+        impl Iterator for __iter_t {
+            type Item = SecretBool;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.range.next().map(|i| self.lanes.clone().extract(usize::from(i)))
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (__lanes, Some(__lanes))
+            }
+        }
+
+        impl DoubleEndedIterator for __iter_t {
+            fn next_back(&mut self) -> Option<Self::Item> {
+                self.range.next_back().map(|i| self.lanes.clone().extract(usize::from(i)))
+            }
+        }
+
+        impl ExactSizeIterator for __iter_t {}
+        impl FusedIterator for __iter_t {}
+
+        impl __secret_t {
+            pub const SIZE: usize = __size;
+            pub const LANES: usize = __lanes;
 
             /// Wraps a non-secret value as a secret value
             #[inline]
@@ -916,33 +1550,102 @@ for_secret_t! {
                 Self(OpTree::const_(<__U>::splat(if v { <__U>::ones() } else { <__U>::zero() })))
             }
 
-            /// Build from lanes
+            /// A constant, non-secret false in each lane
             #[inline]
-            pub fn from_lanes(lanes: [SecretBool; __lanes]) -> Self {
-                // into iter here to avoid cloning
-                let mut lanes = IntoIterator::into_iter(lanes);
-                let mut x = Self(lanes.next().unwrap().resolve().into_owned());
-                for i in 1..__lanes {
-                    x = x.replace(i, lanes.next().unwrap())
-                }
-                x
+            pub fn false_() -> Self {
+                Self(OpTree::zero())
             }
 
-            /// Extract all lanes
+            /// A constant, non-secret true in each lane
             #[inline]
-            pub fn to_lanes(self) -> [SecretBool; __lanes] {
-                let mut lanes: [MaybeUninit<SecretBool>; __lanes]
-                    = unsafe { MaybeUninit::uninit().assume_init() };
-                for i in 0..__lanes {
-                    lanes[i] = MaybeUninit::new(self.clone().extract(i))
-                }
-                unsafe { transmute(lanes) }
+            pub fn true_() -> Self {
+                Self(OpTree::ones())
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify<T>(self) -> T
+            where
+                T: FromDeclassify<Self>
+            {
+                T::from_declassify(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassify<Self>
+            {
+                T::try_from_declassify(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_le_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyLeBytes<Self>
+            {
+                T::from_declassify_le_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_le_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyLeBytes<Self>
+            {
+                T::try_from_declassify_le_bytes(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_be_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyBeBytes<Self>
+            {
+                T::from_declassify_be_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_be_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyBeBytes<Self>
+            {
+                T::try_from_declassify_be_bytes(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_ne_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyNeBytes<Self>
+            {
+                T::from_declassify_ne_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_ne_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyNeBytes<Self>
+            {
+                T::try_from_declassify_ne_bytes(self)
             }
 
             /// Splat a given value to all lanes
             #[inline]
             pub fn splat(value: SecretBool) -> Self {
-                Self(OpTree::splat(value.resolve::<__lane_U>().into_owned()))
+                Self(OpTree::splat(value.resolve::<__lane_U>()))
             }
 
             /// Extract a specific lane
@@ -959,7 +1662,7 @@ for_secret_t! {
             pub fn replace(self, lane: usize, value: SecretBool) -> Self {
                 assert!(lane < __lanes);
                 Self(OpTree::replace::<__lane_U>(
-                    u16::try_from(lane).unwrap(), self.0, value.resolve().into_owned()
+                    u16::try_from(lane).unwrap(), self.0, value.resolve()
                 ))
             }
 
@@ -1043,18 +1746,6 @@ for_secret_t! {
                 }
             }
 
-            /// A constant, non-secret false in each lane
-            #[inline]
-            pub fn false_() -> Self {
-                Self(OpTree::zero())
-            }
-
-            /// A constant, non-secret true in each lane
-            #[inline]
-            pub fn true_() -> Self {
-                Self(OpTree::ones())
-            }
-
             /// Apply an operation horizontally, reducing the input to a single lane
             ///
             /// Note that this runs in log2(number of lanes)
@@ -1111,8 +1802,8 @@ for_secret_t! {
 
         impl Eval for __secret_t {
             #[inline]
-            fn try_eval(&self) -> Result<Self, Error> {
-                Ok(Self::from_tree(self.tree().try_eval()?))
+            fn try_eval(self) -> Result<Self, Error> {
+                Ok(Self::from_tree(self.0.try_eval()?))
             }
         }
 
@@ -1125,8 +1816,8 @@ for_secret_t! {
             }
 
             #[inline]
-            fn tree<'a>(&'a self) -> Cow<'a, OpTree<__U>> {
-                Cow::Borrowed(&self.0)
+            fn into_tree(self) -> OpTree<__U> {
+                self.0
             }
         }
 
@@ -1304,95 +1995,667 @@ for_secret_t! {
             }
         }
 
+        __if(__has_prim) {
+            impl Classify<[__prim_t; __lanes]> for __secret_t {
+                #[inline]
+                fn classify(v: [__prim_t; __lanes]) -> __secret_t {
+                    let mut v = v;
+                    for i in 0..__lanes {
+                        v[i] = v[i].to_le();
+                    }
+                    let bytes = unsafe { transmute::<_, [u8; __size]>(v) };
+                    Self(OpTree::imm(bytes))
+                }
+
+                #[inline]
+                fn const_(v: [__prim_t; __lanes]) -> __secret_t {
+                    let mut v = v;
+                    for i in 0..__lanes {
+                        v[i] = v[i].to_le();
+                    }
+                    let bytes = unsafe { transmute::<_, [u8; __size]>(v) };
+                    Self(OpTree::const_(bytes))
+                }
+            }
+
+            impl FromDeclassify<__secret_t> for [__prim_t; __lanes] {
+                type Error = Error;
+
+                #[inline]
+                fn try_from_declassify(v: __secret_t) -> Result<[__prim_t; __lanes], Error> {
+                    let bytes = v.try_eval()?.0.result::<[u8; __size]>();
+                    let mut v = unsafe { transmute::<_, [__prim_t; __lanes]>(bytes) };
+                    for i in 0..__lanes {
+                        v[i] = __prim_t::from_le(v[i]);
+                    }
+                    Ok(v)
+                }
+            }
+
+            impl Classify<Box<[__prim_t; __lanes]>> for __secret_t {
+                #[inline]
+                fn classify(v: Box<[__prim_t; __lanes]>) -> __secret_t {
+                    let mut v = v;
+                    for i in 0..__lanes {
+                        v[i] = v[i].to_le();
+                    }
+                    let bytes = unsafe { Box::from_raw(Box::into_raw(v) as *mut [u8; __size]) };
+                    Self(OpTree::imm(bytes))
+                }
+
+                #[inline]
+                fn const_(v: Box<[__prim_t; __lanes]>) -> __secret_t {
+                    let mut v = v;
+                    for i in 0..__lanes {
+                        v[i] = v[i].to_le();
+                    }
+                    let bytes = unsafe { Box::from_raw(Box::into_raw(v) as *mut [u8; __size]) };
+                    Self(OpTree::const_(bytes))
+                }
+            }
+
+            impl FromDeclassify<__secret_t> for Box<[__prim_t; __lanes]> {
+                type Error = Error;
+
+                #[inline]
+                fn try_from_declassify(v: __secret_t) -> Result<Box<[__prim_t; __lanes]>, Error> {
+                    let bytes = v.try_eval()?.0.result::<Box<[u8; __size]>>();
+                    let mut v = unsafe { Box::from_raw(Box::into_raw(bytes) as *mut [__prim_t; __lanes]) };
+                    for i in 0..__lanes {
+                        v[i] = __prim_t::from_le(v[i]);
+                    }
+                    Ok(v)
+                }
+            }
+
+            impl TryClassify<Box<[__prim_t]>> for __secret_t {
+                type Error = Box<[__prim_t]>;
+
+                #[inline]
+                fn try_classify(v: Box<[__prim_t]>) -> Result<__secret_t, Self::Error> {
+                    Ok(Self::classify(Box::<[__prim_t; __lanes]>::try_from(v)?))
+                }
+
+                #[inline]
+                fn try_const(v: Box<[__prim_t]>) -> Result<__secret_t, Self::Error> {
+                    Ok(Self::const_(Box::<[__prim_t; __lanes]>::try_from(v)?))
+                }
+            }
+
+            impl FromDeclassify<__secret_t> for Box<[__prim_t]> {
+                type Error = Error;
+
+                #[inline]
+                fn try_from_declassify(v: __secret_t) -> Result<Box<[__prim_t]>, Error> {
+                    Ok(Box::<[__prim_t; __lanes]>::try_from_declassify(v)? as Box<[__prim_t]>)
+                }
+            }
+
+            impl TryClassify<Vec<__prim_t>> for __secret_t {
+                type Error = Vec<__prim_t>;
+
+                #[inline]
+                fn try_classify(v: Vec<__prim_t>) -> Result<__secret_t, Self::Error> {
+                    Self::try_classify(Box::<[__prim_t]>::from(v)).map_err(Vec::<__prim_t>::from)
+                }
+
+                #[inline]
+                fn try_const(v: Vec<__prim_t>) -> Result<__secret_t, Self::Error> {
+                    Self::try_const(Box::<[__prim_t]>::from(v)).map_err(Vec::<__prim_t>::from)
+                }
+            }
+
+            impl FromDeclassify<__secret_t> for Vec<__prim_t> {
+                type Error = Error;
+
+                #[inline]
+                fn try_from_declassify(v: __secret_t) -> Result<Vec<__prim_t>, Error> {
+                    Ok(Vec::from(Box::<[__prim_t]>::try_from_declassify(v)?))
+                }
+            }
+
+            impl Classify<&[__prim_t; __lanes]> for __secret_t {
+                #[inline]
+                fn classify(lanes: &[__prim_t; __lanes]) -> __secret_t {
+                    let mut bytes = <__U>::zero();
+                    for (i, lane) in lanes.iter().enumerate() {
+                        bytes[i*__lane_size .. (i+1)*__lane_size]
+                            .copy_from_slice(&<__lane_U>::from(*lane))
+                    }
+                    Self(OpTree::imm(bytes))
+                }
+
+                #[inline]
+                fn const_(lanes: &[__prim_t; __lanes]) -> __secret_t {
+                    let mut bytes = <__U>::zero();
+                    for (i, lane) in lanes.iter().enumerate() {
+                        bytes[i*__lane_size .. (i+1)*__lane_size]
+                            .copy_from_slice(&<__lane_U>::from(*lane))
+                    }
+                    Self(OpTree::const_(bytes))
+                }
+            }
+
+            impl<'a> TryClassify<&'a [__prim_t]> for __secret_t {
+                type Error = &'a [__prim_t];
+
+                #[inline]
+                fn try_classify(v: &'a [__prim_t]) -> Result<__secret_t, Self::Error> {
+                    Ok(Self::classify(<&[__prim_t; __lanes]>::try_from(v).map_err(|_| v)?))
+                }
+
+                #[inline]
+                fn try_const(v: &'a [__prim_t]) -> Result<__secret_t, Self::Error> {
+                    Ok(Self::const_(<&[__prim_t; __lanes]>::try_from(v).map_err(|_| v)?))
+                }
+            }
+        }
+
+        impl ClassifyLeBytes<[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_le_bytes(v: [u8; __size]) -> __secret_t {
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_le_bytes(v: [u8; __size]) -> __secret_t {
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for [u8; __size] {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<[u8; __size], Error> {
+                Ok(v.try_eval()?.0.result())
+            }
+        }
+
+        impl ClassifyLeBytes<Box<[u8; __size]>> for __secret_t {
+            #[inline]
+            fn classify_le_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_le_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for Box<[u8; __size]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<Box<[u8; __size]>, Error> {
+                Ok(v.try_eval()?.0.result())
+            }
+        }
+
+        impl TryClassifyLeBytes<Box<[u8]>> for __secret_t {
+            type Error = Box<[u8]>;
+
+            #[inline]
+            fn try_classify_le_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_le_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+
+            #[inline]
+            fn try_const_le_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_le_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for Box<[u8]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<Box<[u8]>, Error> {
+                Ok(Box::<[u8; __size]>::try_from_declassify_le_bytes(v)? as Box<[u8]>)
+            }
+        }
+
+        impl TryClassifyLeBytes<Vec<u8>> for __secret_t {
+            type Error = Vec<u8>;
+
+            #[inline]
+            fn try_classify_le_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_classify_le_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+
+            #[inline]
+            fn try_const_le_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_const_le_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+        }
+
+        impl FromDeclassifyLeBytes<__secret_t> for Vec<u8> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_le_bytes(v: __secret_t) -> Result<Vec<u8>, Error> {
+                Ok(Vec::<u8>::from(Box::<[u8]>::try_from_declassify_le_bytes(v)?))
+            }
+        }
+
+        impl ClassifyLeBytes<&[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_le_bytes(v: &[u8; __size]) -> __secret_t {
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_le_bytes(v: &[u8; __size]) -> __secret_t {
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl<'a> TryClassifyLeBytes<&'a [u8]> for __secret_t {
+            type Error = &'a [u8];
+
+            #[inline]
+            fn try_classify_le_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_le_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+
+            #[inline]
+            fn try_const_le_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_le_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+        }
+
+        impl ClassifyBeBytes<[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_be_bytes(v: [u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_be_bytes(v: [u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for [u8; __size] {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<[u8; __size], Error> {
+                let mut v = v.try_eval()?.0.result::<__U>();
+                v.reverse();
+                Ok(v.into())
+            }
+        }
+
+        impl ClassifyBeBytes<Box<[u8; __size]>> for __secret_t {
+            #[inline]
+            fn classify_be_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_be_bytes(v: Box<[u8; __size]>) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for Box<[u8; __size]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<Box<[u8; __size]>, Error> {
+                let mut v = v.try_eval()?.0.result::<__U>();
+                v.reverse();
+                Ok(v.into())
+            }
+        }
+
+        impl TryClassifyBeBytes<Box<[u8]>> for __secret_t {
+            type Error = Box<[u8]>;
+
+            #[inline]
+            fn try_classify_be_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_be_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+
+            #[inline]
+            fn try_const_be_bytes(v: Box<[u8]>) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_be_bytes(Box::<[u8; __size]>::try_from(v)?))
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for Box<[u8]> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<Box<[u8]>, Error> {
+                Ok(Box::<[u8; __size]>::try_from_declassify_be_bytes(v)? as Box<[u8]>)
+            }
+        }
+
+        impl TryClassifyBeBytes<Vec<u8>> for __secret_t {
+            type Error = Vec<u8>;
+
+            #[inline]
+            fn try_classify_be_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_classify_be_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+
+            #[inline]
+            fn try_const_be_bytes(v: Vec<u8>) -> Result<__secret_t, Self::Error> {
+                Self::try_const_be_bytes(Box::<[u8]>::from(v)).map_err(Vec::<u8>::from)
+            }
+        }
+
+        impl FromDeclassifyBeBytes<__secret_t> for Vec<u8> {
+            type Error = Error;
+
+            #[inline]
+            fn try_from_declassify_be_bytes(v: __secret_t) -> Result<Vec<u8>, Error> {
+                Ok(Vec::<u8>::from(Box::<[u8]>::try_from_declassify_be_bytes(v)?))
+            }
+        }
+
+        impl ClassifyBeBytes<&[u8; __size]> for __secret_t {
+            #[inline]
+            fn classify_be_bytes(v: &[u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::imm(v))
+            }
+
+            #[inline]
+            fn const_be_bytes(v: &[u8; __size]) -> __secret_t {
+                let mut v = __U::from(v);
+                v.reverse();
+                Self(OpTree::const_(v))
+            }
+        }
+
+        impl<'a> TryClassifyBeBytes<&'a [u8]> for __secret_t {
+            type Error = &'a [u8];
+
+            #[inline]
+            fn try_classify_be_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::classify_be_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+
+            #[inline]
+            fn try_const_be_bytes(v: &'a [u8]) -> Result<__secret_t, Self::Error> {
+                Ok(Self::const_be_bytes(<&[u8; __size]>::try_from(v).map_err(|_| v)?))
+            }
+        }
+
+        __if(__has_prim) {
+            impl From<[__prim_t; __lanes]> for __secret_t {
+                #[inline]
+                fn from(v: [__prim_t; __lanes]) -> __secret_t {
+                    Self::classify(v)
+                }
+            }
+
+            impl From<Box<[__prim_t; __lanes]>> for __secret_t {
+                #[inline]
+                fn from(v: Box<[__prim_t; __lanes]>) -> __secret_t {
+                    Self::classify(v)
+                }
+            }
+
+            impl TryFrom<Box<[__prim_t]>> for __secret_t {
+                type Error = Box<[__prim_t]>;
+
+                #[inline]
+                fn try_from(v: Box<[__prim_t]>) -> Result<__secret_t, Self::Error> {
+                    Self::try_classify(v)
+                }
+            }
+
+            impl TryFrom<Vec<__prim_t>> for __secret_t {
+                type Error = Vec<__prim_t>;
+
+                #[inline]
+                fn try_from(v: Vec<__prim_t>) -> Result<__secret_t, Self::Error> {
+                    Self::try_classify(v)
+                }
+            }
+
+            impl From<&[__prim_t; __lanes]> for __secret_t {
+                #[inline]
+                fn from(v: &[__prim_t; __lanes]) -> __secret_t {
+                    Self::classify(v)
+                }
+            }
+
+            impl<'a> TryFrom<&'a [__prim_t]> for __secret_t {
+                type Error = &'a [__prim_t];
+
+                #[inline]
+                fn try_from(v: &'a [__prim_t]) -> Result<__secret_t, Self::Error> {
+                    Self::try_classify(v)
+                }
+            }
+        }
+
+        impl From<[__lane_t; __lanes]> for __secret_t {
+            /// Build from lanes
+            #[inline]
+            fn from(lanes: [__lane_t; __lanes]) -> Self {
+                // into iter here to avoid cloning
+                let mut lanes = IntoIterator::into_iter(lanes);
+                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().0));
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap())
+                }
+                x
+            }
+        }
+
+        impl From<Box<[__lane_t; __lanes]>> for __secret_t {
+            /// Build from lanes
+            #[inline]
+            fn from(lanes: Box<[__lane_t; __lanes]>) -> Self {
+                // into iter here to avoid cloning
+                let mut lanes = Vec::from(lanes as Box<[__lane_t]>).into_iter();
+                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().0));
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap())
+                }
+                x
+            }
+        }
+
+        impl TryFrom<Box<[__lane_t]>> for __secret_t {
+            type Error = Box<[__lane_t]>;
+
+            /// Build from lanes
+            #[inline]
+            fn try_from(lanes: Box<[__lane_t]>) -> Result<Self, Self::Error> {
+                Ok(Self::from(Box::<[__lane_t; __lanes]>::try_from(lanes)?))
+            }
+        }
+
+        impl TryFrom<Vec<__lane_t>> for __secret_t {
+            type Error = Vec<__lane_t>;
+
+            /// Build from lanes
+            #[inline]
+            fn try_from(lanes: Vec<__lane_t>) -> Result<Self, Self::Error> {
+                Ok(Self::try_from(Box::<[__lane_t]>::from(lanes)).map_err(Vec::<__lane_t>::from)?)
+            }
+        }
+
+        impl From<&[__lane_t; __lanes]> for __secret_t {
+            /// Build from lanes
+            #[inline]
+            fn from(lanes: &[__lane_t; __lanes]) -> Self {
+                let mut lanes = lanes.iter();
+                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().clone().0));
+                for i in 1..__lanes {
+                    x = x.replace(i, lanes.next().unwrap().clone())
+                }
+                x
+            }
+        }
+
+        impl<'a> TryFrom<&'a [__lane_t]> for __secret_t {
+            type Error = &'a [__lane_t];
+
+            /// Build from lanes
+            #[inline]
+            fn try_from(lanes: &'a [__lane_t]) -> Result<Self, Self::Error> {
+                Ok(Self::from(<&[__lane_t; __lanes]>::try_from(lanes).map_err(|_| lanes)?))
+            }
+        }
+
+        impl From<__secret_t> for [__lane_t; __lanes] {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                let mut lanes: [MaybeUninit<__lane_t>; __lanes]
+                    = unsafe { MaybeUninit::uninit().assume_init() };
+                for i in 0..__lanes {
+                    lanes[i] = MaybeUninit::new(self_.clone().extract(i))
+                }
+                unsafe { transmute(lanes) }
+            }
+        }
+
+        impl From<__secret_t> for Box<[__lane_t; __lanes]> {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                let mut lanes = Vec::<__lane_t>::with_capacity(__lanes);
+                for i in 0..__lanes {
+                    lanes.push(self_.clone().extract(i));
+                }
+                Box::<[__lane_t; __lanes]>::try_from(Box::<[__lane_t]>::from(lanes)).ok().unwrap()
+            }
+        }
+
+        impl From<__secret_t> for Box<[__lane_t]> {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                Box::<[__lane_t; __lanes]>::from(self_) as Box<[__lane_t]>
+            }
+        }
+
+        impl From<__secret_t> for Vec<__lane_t> {
+            /// Extract all lanes
+            #[inline]
+            fn from(self_: __secret_t) -> Self {
+                Vec::<__lane_t>::from(Box::<[__lane_t]>::from(self_))
+            }
+        }
+
+        /// Lane iteration
+        #[derive(Clone)]
+        pub struct __iter_t {
+            lanes: __secret_t,
+            range: Range<u16>,
+        }
+
+        impl IntoIterator for __secret_t {
+            type Item = __lane_t;
+            type IntoIter = __iter_t;
+
+            fn into_iter(self) -> __iter_t {
+                __iter_t {
+                    lanes: self,
+                    range: 0..__lanes,
+                }
+            }
+        }
+
+        impl Iterator for __iter_t {
+            type Item = __lane_t;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.range.next().map(|i| self.lanes.clone().extract(usize::from(i)))
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (__lanes, Some(__lanes))
+            }
+        }
+
+        impl DoubleEndedIterator for __iter_t {
+            fn next_back(&mut self) -> Option<Self::Item> {
+                self.range.next_back().map(|i| self.lanes.clone().extract(usize::from(i)))
+            }
+        }
+
+        impl ExactSizeIterator for __iter_t {}
+        impl FusedIterator for __iter_t {}
+
         impl __secret_t {
             pub const SIZE: usize = __size;
             pub const LANES: usize = __lanes;
 
-            /// Wraps a non-secret value as a secret value
+            /// Alias for classify_le_bytes
             #[inline]
-            pub fn classify_le_bytes(v: [u8; __size]) -> Self {
-                Self(OpTree::imm(v))
-            }
-
-            /// Extracts the secret value into a non-secret value, this
-            /// effectively "leaks" the secret value, but is necessary
-            /// to actually do anything
-            #[inline]
-            pub fn declassify_le_bytes(&self) -> [u8; __size] {
-                self.try_declassify_le_bytes().unwrap()
-            }
-
-            /// Same as declassify but propagating internal VM errors
-            #[inline]
-            pub fn try_declassify_le_bytes(&self) -> Result<[u8; __size], Error> {
-                Ok(self.try_eval()?.0.result())
-            }
-
-            /// Wraps a non-secret value as a secret value
-            #[inline]
-            pub fn from_le_bytes(v: [u8; __size]) -> Self {
+            pub fn from_le_bytes<T>(v: T) -> Self
+            where
+                Self: ClassifyLeBytes<T>
+            {
                 Self::classify_le_bytes(v)
             }
 
-            /// Create a non-secret constant value, these are available
-            /// for more optimizations than secret values
+            /// Alias for try_classify_le_bytes
             #[inline]
-            pub fn const_le_bytes(v: [u8; __size]) -> Self {
-                Self(OpTree::const_(v))
+            pub fn try_from_le_bytes<T>(v: T) -> Result<Self, <Self as TryClassifyLeBytes<T>>::Error>
+            where
+                Self: TryClassifyLeBytes<T>
+            {
+                Self::try_classify_le_bytes(v)
+            }
+
+            /// Alias for classify_be_bytes
+            #[inline]
+            pub fn from_be_bytes<T>(v: T) -> Self
+            where
+                Self: ClassifyBeBytes<T>
+            {
+                Self::classify_be_bytes(v)
+            }
+
+            /// Alias for try_classify_be_bytes
+            #[inline]
+            pub fn try_from_be_bytes<T>(v: T) -> Result<Self, <Self as TryClassifyBeBytes<T>>::Error>
+            where
+                Self: TryClassifyBeBytes<T>
+            {
+                Self::try_classify_be_bytes(v)
+            }
+
+            /// Alias for classify_ne_bytes
+            #[inline]
+            pub fn from_ne_bytes<T>(v: T) -> Self
+            where
+                Self: ClassifyNeBytes<T>
+            {
+                Self::classify_ne_bytes(v)
+            }
+
+            /// Alias for try_classify_ne_bytes
+            #[inline]
+            pub fn try_from_ne_bytes<T>(v: T) -> Result<Self, <Self as TryClassifyNeBytes<T>>::Error>
+            where
+                Self: TryClassifyNeBytes<T>
+            {
+                Self::try_classify_ne_bytes(v)
             }
 
             __if(__has_prim) {
-                /// Wraps a non-secret value as a secret value
-                #[inline]
-                pub fn classify_lanes(lanes: [__prim_t; __lanes]) -> Self {
-                    let mut bytes = [0; __size];
-                    for (i, lane) in lanes.iter().enumerate() {
-                        bytes[i*__lane_size .. (i+1)*__lane_size]
-                            .copy_from_slice(&<__lane_U>::from(*lane).to_le_bytes())
-                    }
-                    Self(OpTree::imm(bytes))
-                }
-
-                /// Extracts the secret value into a non-secret value, this
-                /// effectively "leaks" the secret value, but is necessary
-                /// to actually do anything
-                #[inline]
-                pub fn declassify_lanes(&self) -> [__prim_t; __lanes] {
-                    self.try_declassify_lanes().unwrap()
-                }
-
-                /// Same as declassify but propagating internal VM errors
-                #[inline]
-                pub fn try_declassify_lanes(&self) -> Result<[__prim_t; __lanes], Error> {
-                    let bytes: [u8; __size] = self.try_eval()?.0.result();
-                    let mut lanes = [0; __lanes];
-                    for i in 0..__lanes {
-                        lanes[i] = <__prim_t>::from_le_bytes(
-                            <_>::try_from(
-                                &bytes[i*__lane_size .. (i+1)*__lane_size]
-                            ).unwrap()
-                        );
-                    }
-                    Ok(lanes)
-                }
-
-                /// Wraps a non-secret value as a secret value
-                #[inline]
-                pub fn new_lanes(lanes: [__prim_t; __lanes]) -> Self {
-                    Self::classify_lanes(lanes)
-                }
-
-                /// Wraps a non-secret value as a secret value
-                #[inline]
-                pub fn const_lanes(lanes: [__prim_t; __lanes]) -> Self {
-                    let mut bytes = [0; __size];
-                    for (i, lane) in lanes.iter().enumerate() {
-                        bytes[i*__lane_size .. (i+1)*__lane_size]
-                            .copy_from_slice(&<__lane_U>::from(*lane).to_le_bytes())
-                    }
-                    Self(OpTree::imm(bytes))
-                }
-
                 /// Wraps a non-secret value as a secret value
                 #[inline]
                 pub fn new_splat(v: __prim_t) -> Self {
@@ -1407,27 +2670,102 @@ for_secret_t! {
                 }
             }
 
-            /// Build from lanes
+            /// A constant, non-secret 0, in all lanes
             #[inline]
-            pub fn from_lanes(lanes: [__lane_t; __lanes]) -> Self {
-                // into iter here to avoid cloning
-                let mut lanes = IntoIterator::into_iter(lanes);
-                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().0));
-                for i in 1..__lanes {
-                    x = x.replace(i, lanes.next().unwrap())
-                }
-                x
+            pub fn zero() -> Self {
+                Self(OpTree::zero())
             }
 
-            /// Extract all lanes
+            /// A constant, non-secret 1, in all lanes
             #[inline]
-            pub fn to_lanes(self) -> [__lane_t; __lanes] {
-                let mut lanes: [MaybeUninit<__lane_t>; __lanes]
-                    = unsafe { MaybeUninit::uninit().assume_init() };
-                for i in 0..__lanes {
-                    lanes[i] = MaybeUninit::new(self.clone().extract(i))
-                }
-                unsafe { transmute(lanes) }
+            pub fn one() -> Self {
+                Self(OpTree::const_(<__U>::splat(<__lane_U>::one())))
+            }
+
+            /// A constant with all bits set to 1, non-secret, in all lanes
+            #[inline]
+            pub fn ones() -> Self {
+                Self(OpTree::ones())
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify<T>(self) -> T
+            where
+                T: FromDeclassify<Self>
+            {
+                T::from_declassify(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassify<Self>
+            {
+                T::try_from_declassify(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_le_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyLeBytes<Self>
+            {
+                T::from_declassify_le_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_le_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyLeBytes<Self>
+            {
+                T::try_from_declassify_le_bytes(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_be_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyBeBytes<Self>
+            {
+                T::from_declassify_be_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_be_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyBeBytes<Self>
+            {
+                T::try_from_declassify_be_bytes(self)
+            }
+
+            /// Extracts the secret value into a non-secret value, this
+            /// effectively "leaks" the secret value, but is necessary
+            /// to actually do anything with it.
+            #[inline]
+            pub fn declassify_ne_bytes<T>(self) -> T
+            where
+                T: FromDeclassifyNeBytes<Self>
+            {
+                T::from_declassify_ne_bytes(self)
+            }
+
+            /// Same as declassify but propagating internal VM errors
+            #[inline] 
+            pub fn try_declassify_ne_bytes<T>(self) -> Result<T, T::Error>
+            where
+                T: FromDeclassifyNeBytes<Self>
+            {
+                T::try_from_declassify_ne_bytes(self)
             }
 
             /// Splat a given value to all lanes
@@ -1532,24 +2870,6 @@ for_secret_t! {
                         )
                     ))
                 }
-            }
-
-            /// A constant, non-secret 0, in all lanes
-            #[inline]
-            pub fn zero() -> Self {
-                Self(OpTree::zero())
-            }
-
-            /// A constant, non-secret 1, in all lanes
-            #[inline]
-            pub fn one() -> Self {
-                Self(OpTree::const_(<__U>::splat(<__lane_U>::one())))
-            }
-
-            /// A constant with all bits set to 1, non-secret, in all lanes
-            #[inline]
-            pub fn ones() -> Self {
-                Self(OpTree::ones())
             }
 
             // abs only available on signed types
@@ -1789,8 +3109,8 @@ for_secret_t! {
 
         impl Eval for __secret_t {
             #[inline]
-            fn try_eval(&self) -> Result<Self, Error> {
-                Ok(Self::from_tree(self.tree().try_eval()?))
+            fn try_eval(self) -> Result<Self, Error> {
+                Ok(Self::from_tree(self.0.try_eval()?))
             }
         }
 
@@ -1803,8 +3123,8 @@ for_secret_t! {
             }
 
             #[inline]
-            fn tree<'a>(&'a self) -> Cow<'a, OpTree<__U>> {
-                Cow::Borrowed(&self.0)
+            fn into_tree(self) -> OpTree<__U> {
+                self.0
             }
         }
 
@@ -2101,7 +3421,7 @@ for_secret_t! {
         impl From<SecretBool> for __secret_t {
             #[inline]
             fn from(v: SecretBool) -> __secret_t {
-                Self(OpTree::and(v.resolve().into_owned(), <__secret_t>::one().0))
+                Self(OpTree::and(v.resolve(), <__secret_t>::one().0))
             }
         }
     }

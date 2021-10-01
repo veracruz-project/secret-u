@@ -26,7 +26,7 @@ fn sqrt(x: SecretU32) -> SecretU32 {
 
 // entry point
 fn main() {
-    let res = sqrt(&SecretU32::new(16)).declassify();
+    let res = sqrt(SecretU32::new(16)).declassify();
 
     println!("sqrt(16) => {}", 4);
     assert_eq!(res, 4);
