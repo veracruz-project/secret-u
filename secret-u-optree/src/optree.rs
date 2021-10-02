@@ -248,27 +248,27 @@ for_secret_t! {
         }
 
         __if(__has_prim) {
-            impl From<__prim_u> for __U {
-                fn from(v: __prim_u) -> Self {
+            impl From<__primu_t> for __U {
+                fn from(v: __primu_t) -> Self {
                     Self::from(v.to_le_bytes())
                 }
             }
 
-            impl From<__U> for __prim_u {
-                fn from(v: __U) -> __prim_u {
-                    <__prim_u>::from_le_bytes(<_>::from(v))
+            impl From<__U> for __primu_t {
+                fn from(v: __U) -> __primu_t {
+                    <__primu_t>::from_le_bytes(<_>::from(v))
                 }
             }
 
-            impl From<__prim_i> for __U {
-                fn from(v: __prim_i) -> Self {
+            impl From<__primi_t> for __U {
+                fn from(v: __primi_t) -> Self {
                     Self::from(v.to_le_bytes())
                 }
             }
 
-            impl From<__U> for __prim_i {
-                fn from(v: __U) -> __prim_i {
-                    <__prim_i>::from_le_bytes(<_>::from(v))
+            impl From<__U> for __primi_t {
+                fn from(v: __U) -> __primi_t {
+                    <__primi_t>::from_le_bytes(<_>::from(v))
                 }
             }
         }
@@ -370,7 +370,7 @@ for_secret_t! {
 
             fn zero() -> Self {
                 __if(__has_prim) {
-                    Self::from(0 as __prim_u)
+                    Self::from(0 as __primu_t)
                 }
                 __if(!__has_prim) {
                     Self::try_from(vec![0; __size]).unwrap()
@@ -379,7 +379,7 @@ for_secret_t! {
 
             fn one() -> Self {
                 __if(__has_prim) {
-                    Self::from(1 as __prim_u)
+                    Self::from(1 as __primu_t)
                 }
                 __if(!__has_prim) {
                     Self::try_from(
@@ -393,7 +393,7 @@ for_secret_t! {
 
             fn ones() -> Self {
                 __if(__has_prim) {
-                    Self::from(<__prim_u>::MAX)
+                    Self::from(<__primu_t>::MAX)
                 }
                 __if(!__has_prim) {
                     Self::try_from(vec![0xff; __size]).unwrap()

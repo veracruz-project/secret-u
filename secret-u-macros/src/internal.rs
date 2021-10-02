@@ -17,6 +17,7 @@ use quote::ToTokens;
 use syn::parse_macro_input;
 use std::cmp::min;
 use std::env;
+use std::array::IntoIter;
 
 use evalexpr;
 
@@ -178,8 +179,8 @@ fn secret_t_map<'a>(
         std::array::IntoIter::new(["u", "i", "ux", "ix", "mx"]).map(move |t| {
             let has_lanes = t == "ux" || t == "ix" || t == "mx";
             (0 ..= if has_lanes { min(MAX_LNPW2, npw2) } else { 0 }).map(move |lnpw2| {
-                (npw2, lnpw2, HashMap::from_iter([
-                    (format!("__secret_t{}", suffix),
+                (npw2, lnpw2, HashMap::from_iter(IntoIter::new([
+                    ("__secret_t",
                         if has_lanes {
                             ident!("Secret{}{}x{}",
                                 t.chars().next().unwrap().to_uppercase(),
@@ -190,42 +191,42 @@ fn secret_t_map<'a>(
                                 t.to_uppercase(),
                                 8 << npw2)
                         }),
-                    (format!("__iter_t{}", suffix),
+                    ("__iter_t",
                         ident!("Secret{}{}x{}Iter",
                             t.chars().next().unwrap().to_uppercase(),
                             8 << npw2-lnpw2,
                             1 << lnpw2)),
-                    (format!("__secret_u{}", suffix),   ident!("SecretU{}", 8 << npw2)),
-                    (format!("__secret_i{}", suffix),   ident!("SecretI{}", 8 << npw2)),
-                    (format!("__secret_ux{}", suffix),  ident!("SecretU{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
-                    (format!("__secret_ix{}", suffix),  ident!("SecretI{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
-                    (format!("__secret_mx{}", suffix),  ident!("SecretM{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
-                    (format!("__U{}", suffix),          ident!("U{}", 8 << npw2)),
-                    (format!("__half_U{}", suffix),     ident!("U{}", 8 << (npw2.saturating_sub(1)))),
-                    (format!("__lane_U{}", suffix),     ident!("U{}", 8 << (npw2-lnpw2))),
-                    (format!("__t{}", suffix),          lit!(Literal::string(t))),
-                    (format!("__npw2{}", suffix),       lit!(Literal::u8_unsuffixed(npw2))),
-                    (format!("__lnpw2{}", suffix),      lit!(Literal::u8_unsuffixed(lnpw2))),
-                    (format!("__lane_npw2{}", suffix),  lit!(Literal::u8_unsuffixed(npw2-lnpw2))),
-                    (format!("__small_npw2{}", suffix), lit!(Literal::u8_unsuffixed(SMALL_NPW2))),
-                    (format!("__size{}", suffix),       lit!(Literal::usize_unsuffixed(1 << npw2))),
-                    (format!("__lane_size{}", suffix),  lit!(Literal::usize_unsuffixed(1 << (npw2-lnpw2)))),
-                    (format!("__lanes{}", suffix),      lit!(Literal::usize_unsuffixed(1 << lnpw2))),
-                    (format!("__has_lanes{}", suffix),  ident!("{}", has_lanes)),
-                    (format!("__lane_t{}", suffix),
+                    ("__secretu_t",  ident!("SecretU{}", 8 << npw2)),
+                    ("__secreti_t",  ident!("SecretI{}", 8 << npw2)),
+                    ("__secretux_t", ident!("SecretU{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
+                    ("__secretix_t", ident!("SecretI{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
+                    ("__secretmx_t", ident!("SecretM{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
+                    ("__U",          ident!("U{}", 8 << npw2)),
+                    ("__half_U",     ident!("U{}", 8 << (npw2.saturating_sub(1)))),
+                    ("__lane_U",     ident!("U{}", 8 << (npw2-lnpw2))),
+                    ("__t",          lit!(Literal::string(t))),
+                    ("__npw2",       lit!(Literal::u8_unsuffixed(npw2))),
+                    ("__lnpw2",      lit!(Literal::u8_unsuffixed(lnpw2))),
+                    ("__lane_npw2",  lit!(Literal::u8_unsuffixed(npw2-lnpw2))),
+                    ("__small_npw2", lit!(Literal::u8_unsuffixed(SMALL_NPW2))),
+                    ("__size",       lit!(Literal::usize_unsuffixed(1 << npw2))),
+                    ("__lane_size",  lit!(Literal::usize_unsuffixed(1 << (npw2-lnpw2)))),
+                    ("__lanes",      lit!(Literal::usize_unsuffixed(1 << lnpw2))),
+                    ("__has_lanes",  ident!("{}", has_lanes)),
+                    ("__lane_t",
                         ident!("Secret{}{}",
                             t.chars().next().unwrap().to_uppercase(),
                             8 << (npw2-lnpw2))),
-                    (format!("__lane_u{}", suffix),     ident!("SecretU{}", 8 << (npw2-lnpw2))),
-                    (format!("__lane_i{}", suffix),     ident!("SecretI{}", 8 << (npw2-lnpw2))),
-                    (format!("__has_prim{}", suffix),   ident!("{}", (8 << (npw2-lnpw2)) <= 128)),
-                    (format!("__prim_t{}", suffix),
+                    ("__laneu_t",    ident!("SecretU{}", 8 << (npw2-lnpw2))),
+                    ("__lanei_t",    ident!("SecretI{}", 8 << (npw2-lnpw2))),
+                    ("__has_prim",   ident!("{}", (8 << (npw2-lnpw2)) <= 128)),
+                    ("__prim_t",
                         ident!("{}{}",
                             t.chars().next().unwrap(),
                             8 << (npw2-lnpw2))),
-                    (format!("__prim_u{}", suffix),     ident!("u{}", 8 << (npw2-lnpw2))),
-                    (format!("__prim_i{}", suffix),     ident!("i{}", 8 << (npw2-lnpw2))),
-                ]))
+                    ("__primu_t",    ident!("u{}", 8 << (npw2-lnpw2))),
+                    ("__primi_t",    ident!("i{}", 8 << (npw2-lnpw2))),
+                ]).map(|(k, v)| (format!("{}{}", k, suffix), v))))
             })
         })
     })
@@ -366,21 +367,21 @@ fn engine_map<'a>() -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> 
                 rd_0 = TokenStream::from(quote!{ (unsafe {&mut *s.get()}.long_reg_mut(d << lnpw2, npw2-lnpw2)?) });
             }
 
-            (npw2, lane_npw2, HashMap::from_iter([
-                (format!("__t"),         engine_t(npw2)),
-                (format!("__lane_t"),    engine_t(lane_npw2)),
-                (format!("__has_limbs"), ident!("{}", npw2 > LIMB_NPW2)),
-                (format!("__lane_has_limbs"), ident!("{}", lane_npw2 > LIMB_NPW2)),
+            (npw2, lane_npw2, HashMap::from_iter(IntoIter::new([
+                ("__t",         engine_t(npw2)),
+                ("__lane_t",    engine_t(lane_npw2)),
+                ("__has_limbs", ident!("{}", npw2 > LIMB_NPW2)),
+                ("__lane_has_limbs", ident!("{}", lane_npw2 > LIMB_NPW2)),
 
                 // these macros map to state access
-                (format!("__rd"),   rd.into_iter().next().unwrap()),
-                (format!("__ra"),   ra.into_iter().next().unwrap()),
-                (format!("__rb"),   rb.into_iter().next().unwrap()),
-                (format!("__ld"),   ld.into_iter().next().unwrap()),
-                (format!("__la"),   la.into_iter().next().unwrap()),
-                (format!("__lb"),   lb.into_iter().next().unwrap()),
-                (format!("__rd_0"), rd_0.into_iter().next().unwrap()),
-            ]))
+                ("__rd",   rd.into_iter().next().unwrap()),
+                ("__ra",   ra.into_iter().next().unwrap()),
+                ("__rb",   rb.into_iter().next().unwrap()),
+                ("__ld",   ld.into_iter().next().unwrap()),
+                ("__la",   la.into_iter().next().unwrap()),
+                ("__lb",   lb.into_iter().next().unwrap()),
+                ("__rd_0", rd_0.into_iter().next().unwrap()),
+            ]).map(|(k, v)| (k.to_owned(), v))))
         })
     })
         .flatten()

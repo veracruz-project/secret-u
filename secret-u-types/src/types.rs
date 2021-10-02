@@ -1922,14 +1922,14 @@ for_secret_t! {
             }
         }
 
-        impl Select<__secret_t> for __secret_mx {
+        impl Select<__secret_t> for __secretmx_t {
             #[inline]
             fn select(self, a: __secret_t, b: __secret_t) -> __secret_t {
                 __secret_t(OpTree::select(__lnpw2, self.0, a.0, b.0))
             }
         }
 
-        impl Shuffle<__secret_t> for __secret_ux {
+        impl Shuffle<__secret_t> for __secretux_t {
             #[inline]
             fn shuffle(self, a: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
@@ -1940,7 +1940,7 @@ for_secret_t! {
             }
         }
 
-        impl Shuffle<__secret_t> for __secret_ix {
+        impl Shuffle<__secret_t> for __secretix_t {
             #[inline]
             fn shuffle(self, a: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
@@ -1951,7 +1951,7 @@ for_secret_t! {
             }
         }
 
-        impl Shuffle2<__secret_t> for __secret_ux {
+        impl Shuffle2<__secret_t> for __secretux_t {
             #[inline]
             fn shuffle2(self, a: __secret_t, b: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
@@ -1962,7 +1962,7 @@ for_secret_t! {
             }
         }
 
-        impl Shuffle2<__secret_t> for __secret_ix {
+        impl Shuffle2<__secret_t> for __secretix_t {
             #[inline]
             fn shuffle2(self, a: __secret_t, b: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
@@ -2914,7 +2914,7 @@ for_secret_t! {
             // ipw2/npw2 only available on unsigned types
             __if(__t == "ux") {
                 #[inline]
-                pub fn is_power_of_two(self) -> __secret_mx {
+                pub fn is_power_of_two(self) -> __secretmx_t {
                     self.count_ones().eq(Self::one())
                 }
 
@@ -3273,41 +3273,41 @@ for_secret_t! {
         }
 
         impl Eq for __secret_t {
-            type Output = __secret_mx;
+            type Output = __secretmx_t;
 
             #[inline]
-            fn eq(self, other: Self) -> __secret_mx {
-                __secret_mx(OpTree::eq(__lnpw2, self.0, other.0))
+            fn eq(self, other: Self) -> __secretmx_t {
+                __secretmx_t(OpTree::eq(__lnpw2, self.0, other.0))
             }
 
             #[inline]
-            fn ne(self, other: Self) -> __secret_mx {
-                __secret_mx(OpTree::ne(__lnpw2, self.0, other.0))
+            fn ne(self, other: Self) -> __secretmx_t {
+                __secretmx_t(OpTree::ne(__lnpw2, self.0, other.0))
             }
         }
 
         impl Ord for __secret_t {
-            type Output = __secret_mx;
+            type Output = __secretmx_t;
 
             __if(__t == "ux") {
                 #[inline]
-                fn lt(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::lt_u(__lnpw2, self.0, other.0))
+                fn lt(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::lt_u(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
-                fn le(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::le_u(__lnpw2, self.0, other.0))
+                fn le(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::le_u(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
-                fn gt(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::gt_u(__lnpw2, self.0, other.0))
+                fn gt(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::gt_u(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
-                fn ge(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::ge_u(__lnpw2, self.0, other.0))
+                fn ge(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::ge_u(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
@@ -3322,23 +3322,23 @@ for_secret_t! {
             }
             __if(__t == "ix") {
                 #[inline]
-                fn lt(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::lt_s(__lnpw2, self.0, other.0))
+                fn lt(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::lt_s(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
-                fn le(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::le_s(__lnpw2, self.0, other.0))
+                fn le(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::le_s(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
-                fn gt(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::gt_s(__lnpw2, self.0, other.0))
+                fn gt(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::gt_s(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
-                fn ge(self, other: Self) -> __secret_mx {
-                    __secret_mx(OpTree::ge_s(__lnpw2, self.0, other.0))
+                fn ge(self, other: Self) -> __secretmx_t {
+                    __secretmx_t(OpTree::ge_s(__lnpw2, self.0, other.0))
                 }
 
                 #[inline]
@@ -3353,7 +3353,7 @@ for_secret_t! {
             }
         }
 
-        impl Select<__secret_t> for __secret_mx {
+        impl Select<__secret_t> for __secretmx_t {
             #[inline]
             fn select(self, a: __secret_t, b: __secret_t) -> __secret_t {
                 __secret_t(OpTree::select(__lnpw2,
@@ -3364,7 +3364,7 @@ for_secret_t! {
             }
         }
 
-        impl Shuffle<__secret_t> for __secret_ux {
+        impl Shuffle<__secret_t> for __secretux_t {
             #[inline]
             fn shuffle(self, a: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
@@ -3375,7 +3375,7 @@ for_secret_t! {
             }
         }
 
-        impl Shuffle<__secret_t> for __secret_ix {
+        impl Shuffle<__secret_t> for __secretix_t {
             #[inline]
             fn shuffle(self, a: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
@@ -3386,7 +3386,7 @@ for_secret_t! {
             }
         }
 
-        impl Shuffle2<__secret_t> for __secret_ux {
+        impl Shuffle2<__secret_t> for __secretux_t {
             #[inline]
             fn shuffle2(self, a: __secret_t, b: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
@@ -3397,7 +3397,7 @@ for_secret_t! {
             }
         }
 
-        impl Shuffle2<__secret_t> for __secret_ix {
+        impl Shuffle2<__secret_t> for __secretix_t {
             #[inline]
             fn shuffle2(self, a: __secret_t, b: __secret_t) -> __secret_t {
                 __secret_t(OpTree::shuffle(__lnpw2,
