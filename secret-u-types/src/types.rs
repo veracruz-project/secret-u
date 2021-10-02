@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 use std::convert::TryFrom;
+use std::mem::take;
 use std::mem::transmute;
 use std::mem::MaybeUninit;
 use std::ops::Range;
@@ -189,7 +190,7 @@ impl BitAnd for SecretBool {
 impl BitAndAssign for SecretBool {
     #[inline]
     fn bitand_assign(&mut self, other: SecretBool) {
-        *self = self.clone().bitand(other)
+        *self = take(self).bitand(other)
     }
 }
 
@@ -204,7 +205,7 @@ impl BitOr for SecretBool {
 impl BitOrAssign for SecretBool {
     #[inline]
     fn bitor_assign(&mut self, other: SecretBool) {
-        *self = self.clone().bitor(other)
+        *self = take(self).bitor(other)
     }
 }
 
@@ -219,7 +220,7 @@ impl BitXor for SecretBool {
 impl BitXorAssign for SecretBool {
     #[inline]
     fn bitxor_assign(&mut self, other: SecretBool) {
-        *self = self.clone().bitxor(other)
+        *self = take(self).bitxor(other)
     }
 }
 
@@ -938,7 +939,7 @@ for_secret_t! {
         impl BitAndAssign for __secret_t {
             #[inline]
             fn bitand_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitand(other)
+                *self = take(self).bitand(other)
             }
         }
 
@@ -953,7 +954,7 @@ for_secret_t! {
         impl BitOrAssign for __secret_t {
             #[inline]
             fn bitor_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitor(other)
+                *self = take(self).bitor(other)
             }
         }
 
@@ -968,7 +969,7 @@ for_secret_t! {
         impl BitXorAssign for __secret_t {
             #[inline]
             fn bitxor_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitxor(other)
+                *self = take(self).bitxor(other)
             }
         }
 
@@ -995,7 +996,7 @@ for_secret_t! {
             impl AddAssign for __secret_t {
                 #[inline]
                 fn add_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().add(other)
+                    *self = take(self).add(other)
                 }
             }
 
@@ -1010,7 +1011,7 @@ for_secret_t! {
             impl SubAssign for __secret_t {
                 #[inline]
                 fn sub_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().sub(other)
+                    *self = take(self).sub(other)
                 }
             }
 
@@ -1025,7 +1026,7 @@ for_secret_t! {
             impl MulAssign for __secret_t {
                 #[inline]
                 fn mul_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().mul(other)
+                    *self = take(self).mul(other)
                 }
             }
         }
@@ -1042,7 +1043,7 @@ for_secret_t! {
             impl AddAssign for __secret_t {
                 #[inline]
                 fn add_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().add(other)
+                    *self = take(self).add(other)
                 }
             }
 
@@ -1057,7 +1058,7 @@ for_secret_t! {
             impl SubAssign for __secret_t {
                 #[inline]
                 fn sub_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().sub(other)
+                    *self = take(self).sub(other)
                 }
             }
 
@@ -1072,7 +1073,7 @@ for_secret_t! {
             impl MulAssign for __secret_t {
                 #[inline]
                 fn mul_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().mul(other)
+                    *self = take(self).mul(other)
                 }
             }
         }
@@ -1088,7 +1089,7 @@ for_secret_t! {
         impl ShlAssign for __secret_t {
             #[inline]
             fn shl_assign(&mut self, other: __secret_t) {
-                *self = self.clone().shl(other)
+                *self = take(self).shl(other)
             }
         }
 
@@ -1108,7 +1109,7 @@ for_secret_t! {
         impl ShrAssign for __secret_t {
             #[inline]
             fn shr_assign(&mut self, other: __secret_t) {
-                *self = self.clone().shr(other)
+                *self = take(self).shr(other)
             }
         }
 
@@ -1636,66 +1637,6 @@ for_secret_t! {
                 T::try_from_declassify(self)
             }
 
-            /// Extracts the secret value into a non-secret value, this
-            /// effectively "leaks" the secret value, but is necessary
-            /// to actually do anything with it.
-            #[inline]
-            pub fn declassify_le_bytes<T>(self) -> T
-            where
-                T: FromDeclassifyLeBytes<Self>
-            {
-                T::from_declassify_le_bytes(self)
-            }
-
-            /// Same as declassify but propagating internal VM errors
-            #[inline] 
-            pub fn try_declassify_le_bytes<T>(self) -> Result<T, T::Error>
-            where
-                T: FromDeclassifyLeBytes<Self>
-            {
-                T::try_from_declassify_le_bytes(self)
-            }
-
-            /// Extracts the secret value into a non-secret value, this
-            /// effectively "leaks" the secret value, but is necessary
-            /// to actually do anything with it.
-            #[inline]
-            pub fn declassify_be_bytes<T>(self) -> T
-            where
-                T: FromDeclassifyBeBytes<Self>
-            {
-                T::from_declassify_be_bytes(self)
-            }
-
-            /// Same as declassify but propagating internal VM errors
-            #[inline] 
-            pub fn try_declassify_be_bytes<T>(self) -> Result<T, T::Error>
-            where
-                T: FromDeclassifyBeBytes<Self>
-            {
-                T::try_from_declassify_be_bytes(self)
-            }
-
-            /// Extracts the secret value into a non-secret value, this
-            /// effectively "leaks" the secret value, but is necessary
-            /// to actually do anything with it.
-            #[inline]
-            pub fn declassify_ne_bytes<T>(self) -> T
-            where
-                T: FromDeclassifyNeBytes<Self>
-            {
-                T::from_declassify_ne_bytes(self)
-            }
-
-            /// Same as declassify but propagating internal VM errors
-            #[inline] 
-            pub fn try_declassify_ne_bytes<T>(self) -> Result<T, T::Error>
-            where
-                T: FromDeclassifyNeBytes<Self>
-            {
-                T::try_from_declassify_ne_bytes(self)
-            }
-
             /// Splat a given value to all lanes
             #[inline]
             pub fn splat(value: SecretBool) -> Self {
@@ -1894,7 +1835,7 @@ for_secret_t! {
         impl BitAndAssign for __secret_t {
             #[inline]
             fn bitand_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitand(other)
+                *self = take(self).bitand(other)
             }
         }
 
@@ -1909,7 +1850,7 @@ for_secret_t! {
         impl BitOrAssign for __secret_t {
             #[inline]
             fn bitor_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitor(other)
+                *self = take(self).bitor(other)
             }
         }
 
@@ -1924,7 +1865,7 @@ for_secret_t! {
         impl BitXorAssign for __secret_t {
             #[inline]
             fn bitxor_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitxor(other)
+                *self = take(self).bitxor(other)
             }
         }
 
@@ -3203,7 +3144,7 @@ for_secret_t! {
         impl BitAndAssign for __secret_t {
             #[inline]
             fn bitand_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitand(other)
+                *self = take(self).bitand(other)
             }
         }
 
@@ -3218,7 +3159,7 @@ for_secret_t! {
         impl BitOrAssign for __secret_t {
             #[inline]
             fn bitor_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitor(other)
+                *self = take(self).bitor(other)
             }
         }
 
@@ -3233,7 +3174,7 @@ for_secret_t! {
         impl BitXorAssign for __secret_t {
             #[inline]
             fn bitxor_assign(&mut self, other: __secret_t) {
-                *self = self.clone().bitxor(other)
+                *self = take(self).bitxor(other)
             }
         }
 
@@ -3260,7 +3201,7 @@ for_secret_t! {
             impl AddAssign for __secret_t {
                 #[inline]
                 fn add_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().add(other)
+                    *self = take(self).add(other)
                 }
             }
 
@@ -3275,7 +3216,7 @@ for_secret_t! {
             impl SubAssign for __secret_t {
                 #[inline]
                 fn sub_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().sub(other)
+                    *self = take(self).sub(other)
                 }
             }
 
@@ -3290,7 +3231,7 @@ for_secret_t! {
             impl MulAssign for __secret_t {
                 #[inline]
                 fn mul_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().mul(other)
+                    *self = take(self).mul(other)
                 }
             }
         }
@@ -3307,7 +3248,7 @@ for_secret_t! {
             impl AddAssign for __secret_t {
                 #[inline]
                 fn add_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().add(other)
+                    *self = take(self).add(other)
                 }
             }
 
@@ -3322,7 +3263,7 @@ for_secret_t! {
             impl SubAssign for __secret_t {
                 #[inline]
                 fn sub_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().sub(other)
+                    *self = take(self).sub(other)
                 }
             }
 
@@ -3337,7 +3278,7 @@ for_secret_t! {
             impl MulAssign for __secret_t {
                 #[inline]
                 fn mul_assign(&mut self, other: __secret_t) {
-                    *self = self.clone().mul(other)
+                    *self = take(self).mul(other)
                 }
             }
         }
@@ -3353,7 +3294,7 @@ for_secret_t! {
         impl ShlAssign for __secret_t {
             #[inline]
             fn shl_assign(&mut self, other: __secret_t) {
-                *self = self.clone().shl(other)
+                *self = take(self).shl(other)
             }
         }
 
@@ -3373,7 +3314,7 @@ for_secret_t! {
         impl ShrAssign for __secret_t {
             #[inline]
             fn shr_assign(&mut self, other: __secret_t) {
-                *self = self.clone().shr(other)
+                *self = take(self).shr(other)
             }
         }
 
