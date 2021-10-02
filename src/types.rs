@@ -94,6 +94,19 @@ mod tests {
     }
 
     #[test]
+    fn int_p32() {
+        println!();
+        let a = SecretP32::new(3);
+        let b = SecretP32::new(4);
+        let c = SecretP32::new(7);
+        let x = (a.clone()*a + b.clone()*b) - (c.clone()*c);
+        x.clone().into_tree().disas(io::stdout()).unwrap();
+        let v = x.declassify();
+        println!("{}", v);
+        assert_eq!(v, 0);
+    }
+
+    #[test]
     fn int_ord() {
         println!();
 

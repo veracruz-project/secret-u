@@ -103,16 +103,18 @@ pub enum OpCode {
     OrC         = 0x3a,
     Xor         = 0x3b,
     XorC        = 0x3c,
-    Shl         = 0x3d,
-    ShlC        = 0x3e,
-    ShrU        = 0x3f,
-    ShrUC       = 0x40,
-    ShrS        = 0x41,
-    ShrSC       = 0x42,
-    Rotl        = 0x43,
-    RotlC       = 0x44,
-    Rotr        = 0x45,
-    RotrC       = 0x46,
+    Xmul        = 0x3d,
+    XmulC       = 0x3e,
+    Shl         = 0x3f,
+    ShlC        = 0x40,
+    ShrU        = 0x41,
+    ShrUC       = 0x42,
+    ShrS        = 0x43,
+    ShrSC       = 0x44,
+    Rotl        = 0x45,
+    RotlC       = 0x46,
+    Rotr        = 0x47,
+    RotrC       = 0x48,
 }
 
 impl fmt::Display for OpCode {
@@ -182,6 +184,8 @@ impl fmt::Display for OpCode {
             OpCode::OrC         => "or",
             OpCode::Xor         => "xor",
             OpCode::XorC        => "xor",
+            OpCode::Xmul        => "xmul",
+            OpCode::XmulC       => "xmul",
             OpCode::Shl         => "shl",
             OpCode::ShlC        => "shl",
             OpCode::ShrU        => "shr_u",
@@ -364,16 +368,18 @@ impl TryFrom<u64> for OpIns {
             0x3a => OpCode::OrC,
             0x3b => OpCode::Xor,
             0x3c => OpCode::XorC,
-            0x3d => OpCode::Shl,
-            0x3e => OpCode::ShlC,
-            0x3f => OpCode::ShrU,
-            0x40 => OpCode::ShrUC,
-            0x41 => OpCode::ShrS,
-            0x42 => OpCode::ShrSC,
-            0x43 => OpCode::Rotl,
-            0x44 => OpCode::RotlC,
-            0x45 => OpCode::Rotr,
-            0x46 => OpCode::RotrC,
+            0x3d => OpCode::Xmul,
+            0x3e => OpCode::XmulC,
+            0x3f => OpCode::Shl,
+            0x40 => OpCode::ShlC,
+            0x41 => OpCode::ShrU,
+            0x42 => OpCode::ShrUC,
+            0x43 => OpCode::ShrS,
+            0x44 => OpCode::ShrSC,
+            0x45 => OpCode::Rotl,
+            0x46 => OpCode::RotlC,
+            0x47 => OpCode::Rotr,
+            0x48 => OpCode::RotrC,
 
             _ => Err(Error::InvalidOpcode(ins))?,
         };
@@ -525,6 +531,7 @@ impl fmt::Display for OpIns {
                 | OpCode::Andnot
                 | OpCode::Or
                 | OpCode::Xor
+                | OpCode::Xmul
                 | OpCode::Shl
                 | OpCode::ShrU
                 | OpCode::ShrS
@@ -562,6 +569,7 @@ impl fmt::Display for OpIns {
                 | OpCode::AndnotC
                 | OpCode::OrC
                 | OpCode::XorC
+                | OpCode::XmulC
                 | OpCode::ShlC
                 | OpCode::ShrUC
                 | OpCode::ShrSC

@@ -176,8 +176,8 @@ fn secret_t_map<'a>(
     suffix: &'a str
 ) -> impl Iterator<Item=(u8, u8, HashMap<String, TokenTree>)> + 'a {
     (0..=MAX_NPW2).map(move |npw2| {
-        std::array::IntoIter::new(["u", "i", "ux", "ix", "mx"]).map(move |t| {
-            let has_lanes = t == "ux" || t == "ix" || t == "mx";
+        std::array::IntoIter::new(["u", "i", "p", "ux", "ix", "px", "mx"]).map(move |t| {
+            let has_lanes = t.ends_with('x');
             (0 ..= if has_lanes { min(MAX_LNPW2, npw2) } else { 0 }).map(move |lnpw2| {
                 (npw2, lnpw2, HashMap::from_iter(IntoIter::new([
                     ("__secret_t",
@@ -198,8 +198,10 @@ fn secret_t_map<'a>(
                             1 << lnpw2)),
                     ("__secretu_t",  ident!("SecretU{}", 8 << npw2)),
                     ("__secreti_t",  ident!("SecretI{}", 8 << npw2)),
+                    ("__secretp_t",  ident!("SecretI{}", 8 << npw2)),
                     ("__secretux_t", ident!("SecretU{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
                     ("__secretix_t", ident!("SecretI{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
+                    ("__secretpx_t", ident!("SecretI{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
                     ("__secretmx_t", ident!("SecretM{}x{}", 8 << npw2-lnpw2, 1 << lnpw2)),
                     ("__U",          ident!("U{}", 8 << npw2)),
                     ("__half_U",     ident!("U{}", 8 << (npw2.saturating_sub(1)))),
@@ -222,7 +224,11 @@ fn secret_t_map<'a>(
                     ("__has_prim",   ident!("{}", (8 << (npw2-lnpw2)) <= 128)),
                     ("__prim_t",
                         ident!("{}{}",
-                            t.chars().next().unwrap(),
+                            if t.starts_with('p') {
+                                'u'
+                            } else {
+                                t.chars().next().unwrap()
+                            },
                             8 << (npw2-lnpw2))),
                     ("__primu_t",    ident!("u{}", 8 << (npw2-lnpw2))),
                     ("__primi_t",    ident!("i{}", 8 << (npw2-lnpw2))),

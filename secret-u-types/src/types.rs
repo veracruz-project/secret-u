@@ -286,7 +286,7 @@ impl Select<SecretBool> for SecretBool {
 //// SecretU**/SecretI** ////
 
 for_secret_t! {
-    __if(__t == "u" || __t == "i") {
+    __if(__t == "u" || __t == "i" || __t == "p") {
         /// A secret integer who's value is ensured to not be leaked by Rust's type-system
         ///
         /// Note, like the underlying Rc type, clone is relatively cheap, but
@@ -983,48 +983,97 @@ for_secret_t! {
             }
         }
 
-        impl Add for __secret_t {
-            type Output = __secret_t;
-            #[inline]
-            fn add(self, other: __secret_t) -> __secret_t {
-                Self(OpTree::add(0, self.0, other.0))
+        __if(__t == "u" || __t == "i") {
+            impl Add for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn add(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::add(0, self.0, other.0))
+                }
+            }
+
+            impl AddAssign for __secret_t {
+                #[inline]
+                fn add_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().add(other)
+                }
+            }
+
+            impl Sub for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn sub(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::sub(0, self.0, other.0))
+                }
+            }
+
+            impl SubAssign for __secret_t {
+                #[inline]
+                fn sub_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().sub(other)
+                }
+            }
+
+            impl Mul for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn mul(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::mul(0, self.0, other.0))
+                }
+            }
+
+            impl MulAssign for __secret_t {
+                #[inline]
+                fn mul_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().mul(other)
+                }
             }
         }
 
-        impl AddAssign for __secret_t {
-            #[inline]
-            fn add_assign(&mut self, other: __secret_t) {
-                *self = self.clone().add(other)
+        __if(__t == "p") {
+            impl Add for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn add(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::xor(self.0, other.0))
+                }
             }
-        }
 
-        impl Sub for __secret_t {
-            type Output = __secret_t;
-            #[inline]
-            fn sub(self, other: __secret_t) -> __secret_t {
-                Self(OpTree::sub(0, self.0, other.0))
+            impl AddAssign for __secret_t {
+                #[inline]
+                fn add_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().add(other)
+                }
             }
-        }
 
-        impl SubAssign for __secret_t {
-            #[inline]
-            fn sub_assign(&mut self, other: __secret_t) {
-                *self = self.clone().sub(other)
+            impl Sub for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn sub(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::xor(self.0, other.0))
+                }
             }
-        }
 
-        impl Mul for __secret_t {
-            type Output = __secret_t;
-            #[inline]
-            fn mul(self, other: __secret_t) -> __secret_t {
-                Self(OpTree::mul(0, self.0, other.0))
+            impl SubAssign for __secret_t {
+                #[inline]
+                fn sub_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().sub(other)
+                }
             }
-        }
 
-        impl MulAssign for __secret_t {
-            #[inline]
-            fn mul_assign(&mut self, other: __secret_t) {
-                *self = self.clone().mul(other)
+            impl Mul for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn mul(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::xmul(0, self.0, other.0))
+                }
+            }
+
+            impl MulAssign for __secret_t {
+                #[inline]
+                fn mul_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().mul(other)
+                }
             }
         }
 
@@ -1047,7 +1096,7 @@ for_secret_t! {
             type Output = __secret_t;
             #[inline]
             fn shr(self, other: __secret_t) -> __secret_t {
-                __if(__t == "u") {
+                __if(__t == "u" || __t == "p") {
                     Self(OpTree::shr_u(0, self.0, other.0))
                 }
                 __if(__t == "i") {
@@ -1077,10 +1126,10 @@ for_secret_t! {
             }
         }
 
-        impl Ord for __secret_t {
-            type Output = SecretBool;
+        __if(__t == "u") {
+            impl Ord for __secret_t {
+                type Output = SecretBool;
 
-            __if(__t == "u") {
                 #[inline]
                 fn lt(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::lt_u(0, self.0, other.0)))
@@ -1111,7 +1160,12 @@ for_secret_t! {
                     Self(OpTree::max_u(0, self.0, other.0))
                 }
             }
-            __if(__t == "i") {
+        }
+
+        __if(__t == "i") {
+            impl Ord for __secret_t {
+                type Output = SecretBool;
+
                 #[inline]
                 fn lt(self, other: Self) -> SecretBool {
                     SecretBool::defer(Rc::new(OpTree::lt_s(0, self.0, other.0)))
@@ -1979,7 +2033,7 @@ for_secret_t! {
 //// SecretU**x**/SecretI**x** ////
 
 for_secret_t! {
-    __if(__t == "ux" || __t == "ix") {
+    __if(__t == "ux" || __t == "ix" || __t == "px") {
         /// A secret SIMD mask type who's value is ensured to not be leaked by
         /// Rust's type-system
         ///
@@ -3096,14 +3150,16 @@ for_secret_t! {
                 self.reduce(|a, b| a ^ b)
             }
 
-            #[inline]
-            pub fn horizontal_min(self) -> __lane_t {
-                self.reduce(|a, b| a.min(b))
-            }
+            __if(__t == "ux" || __t == "ix") {
+                #[inline]
+                pub fn horizontal_min(self) -> __lane_t {
+                    self.reduce(|a, b| a.min(b))
+                }
 
-            #[inline]
-            pub fn horizontal_max(self) -> __lane_t {
-                self.reduce(|a, b| a.max(b))
+                #[inline]
+                pub fn horizontal_max(self) -> __lane_t {
+                    self.reduce(|a, b| a.max(b))
+                }
             }
         }
 
@@ -3192,48 +3248,97 @@ for_secret_t! {
             }
         }
 
-        impl Add for __secret_t {
-            type Output = __secret_t;
-            #[inline]
-            fn add(self, other: __secret_t) -> __secret_t {
-                Self(OpTree::add(__lnpw2, self.0, other.0))
+        __if(__t == "ux" || __t == "ix") {
+            impl Add for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn add(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::add(__lnpw2, self.0, other.0))
+                }
+            }
+
+            impl AddAssign for __secret_t {
+                #[inline]
+                fn add_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().add(other)
+                }
+            }
+
+            impl Sub for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn sub(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::sub(__lnpw2, self.0, other.0))
+                }
+            }
+
+            impl SubAssign for __secret_t {
+                #[inline]
+                fn sub_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().sub(other)
+                }
+            }
+
+            impl Mul for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn mul(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::mul(__lnpw2, self.0, other.0))
+                }
+            }
+
+            impl MulAssign for __secret_t {
+                #[inline]
+                fn mul_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().mul(other)
+                }
             }
         }
 
-        impl AddAssign for __secret_t {
-            #[inline]
-            fn add_assign(&mut self, other: __secret_t) {
-                *self = self.clone().add(other)
+        __if(__t == "px") {
+            impl Add for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn add(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::xor(self.0, other.0))
+                }
             }
-        }
 
-        impl Sub for __secret_t {
-            type Output = __secret_t;
-            #[inline]
-            fn sub(self, other: __secret_t) -> __secret_t {
-                Self(OpTree::sub(__lnpw2, self.0, other.0))
+            impl AddAssign for __secret_t {
+                #[inline]
+                fn add_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().add(other)
+                }
             }
-        }
 
-        impl SubAssign for __secret_t {
-            #[inline]
-            fn sub_assign(&mut self, other: __secret_t) {
-                *self = self.clone().sub(other)
+            impl Sub for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn sub(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::xor(self.0, other.0))
+                }
             }
-        }
 
-        impl Mul for __secret_t {
-            type Output = __secret_t;
-            #[inline]
-            fn mul(self, other: __secret_t) -> __secret_t {
-                Self(OpTree::mul(__lnpw2, self.0, other.0))
+            impl SubAssign for __secret_t {
+                #[inline]
+                fn sub_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().sub(other)
+                }
             }
-        }
 
-        impl MulAssign for __secret_t {
-            #[inline]
-            fn mul_assign(&mut self, other: __secret_t) {
-                *self = self.clone().mul(other)
+            impl Mul for __secret_t {
+                type Output = __secret_t;
+                #[inline]
+                fn mul(self, other: __secret_t) -> __secret_t {
+                    Self(OpTree::xmul(__lnpw2, self.0, other.0))
+                }
+            }
+
+            impl MulAssign for __secret_t {
+                #[inline]
+                fn mul_assign(&mut self, other: __secret_t) {
+                    *self = self.clone().mul(other)
+                }
             }
         }
 
@@ -3256,7 +3361,7 @@ for_secret_t! {
             type Output = __secret_t;
             #[inline]
             fn shr(self, other: __secret_t) -> __secret_t {
-                __if(__t == "ux") {
+                __if(__t == "ux" || __t == "px") {
                     Self(OpTree::shr_u(__lnpw2, self.0, other.0))
                 }
                 __if(__t == "ix") {
@@ -3286,10 +3391,10 @@ for_secret_t! {
             }
         }
 
-        impl Ord for __secret_t {
-            type Output = __secretmx_t;
+        __if(__t == "ux") {
+            impl Ord for __secret_t {
+                type Output = __secretmx_t;
 
-            __if(__t == "ux") {
                 #[inline]
                 fn lt(self, other: Self) -> __secretmx_t {
                     __secretmx_t(OpTree::lt_u(__lnpw2, self.0, other.0))
@@ -3320,7 +3425,11 @@ for_secret_t! {
                     Self(OpTree::max_u(__lnpw2, self.0, other.0))
                 }
             }
-            __if(__t == "ix") {
+        }
+
+        __if(__t == "ix") {
+            impl Ord for __secret_t {
+                type Output = __secretmx_t;
                 #[inline]
                 fn lt(self, other: Self) -> __secretmx_t {
                     __secretmx_t(OpTree::lt_s(__lnpw2, self.0, other.0))

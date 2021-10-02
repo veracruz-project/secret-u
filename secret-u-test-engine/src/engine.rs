@@ -280,6 +280,7 @@ trait VType {
     fn vandnot(&mut self, a: &Self, b: &Self);
     fn vor(&mut self, a: &Self, b: &Self);
     fn vxor(&mut self, a: &Self, b: &Self);
+    fn vxmul(&mut self, a: &Self, b: &Self);
     fn vshl(&mut self, a: &Self, b: &Self);
     fn vshr_u(&mut self, a: &Self, b: &Self);
     fn vshr_s(&mut self, a: &Self, b: &Self);
@@ -293,6 +294,7 @@ trait VType {
     fn vandnot_i16(&mut self, a: &Self, b: i16);
     fn vor_i16(&mut self, a: &Self, b: i16);
     fn vxor_i16(&mut self, a: &Self, b: i16);
+    fn vxmul_i16(&mut self, a: &Self, b: i16);
     fn vshl_i16(&mut self, a: &Self, b: i16);
     fn vshr_u_i16(&mut self, a: &Self, b: i16);
     fn vshr_s_i16(&mut self, a: &Self, b: i16);
@@ -629,6 +631,14 @@ engine_for_short_t! {
             *self = *a ^ *b;
         }
 
+        fn vxmul(&mut self, a: &Self, b: &Self) {
+            let mut x = 0;
+            for i in 0..8*__size {
+                x ^= if *a & (1 << i) != 0 { *b << i } else { 0 };
+            }
+            *self = x;
+        }
+
         fn vshl(&mut self, a: &Self, b: &Self) {
             *self = a.wrapping_shl(*b as u32);
         }
@@ -675,6 +685,14 @@ engine_for_short_t! {
 
         fn vxor_i16(&mut self, a: &Self, b: i16) {
             *self = *a ^ (b as Self);
+        }
+
+        fn vxmul_i16(&mut self, a: &Self, b: i16) {
+            let mut x = 0;
+            for i in 0..8*__size {
+                x ^= if *a & (1 << i) != 0 { (b as Self) << i } else { 0 };
+            }
+            *self = x;
         }
 
         fn vshl_i16(&mut self, a: &Self, b: i16) {
@@ -1253,6 +1271,52 @@ impl VType for [__limb_t] {
         }
     }
 
+    fn vxmul(&mut self, a: &Self, b: &Self) {
+        fn xmul(a: __limb2_t, b: __limb2_t) -> __limb2_t {
+            let mut x = 0;
+            for i in 0..8*2*__limb_size {
+                x ^= if a & (1 << i) != 0 { b << i } else { 0 };
+            }
+            x
+        }
+
+        // The same in-place, inwards algorithm as mul, but for xmul.
+        //
+        // Fortunately with xmul we don't have to worry about carry propogation.
+        //
+        for i in (0..self.len()).rev() {
+            let mut sum: __limb2_t = 0;
+
+            for j in 0 .. (i+2)/2 {
+                // multiply inward 2 digits at a time to avoid overlap with
+                // either argument
+                let (u, v);
+                if i-j != j {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(b[j]);
+                    let z = <__limb2_t>::from(b[i-j]);
+                    let w = <__limb2_t>::from(a[j]);
+                    u = xmul(x, y);
+                    v = xmul(z, w);
+                } else {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(b[j]);
+                    u = xmul(x, y);
+                    v = 0;
+                }
+
+                // carryless sum (xor)
+                sum ^= u ^ v;
+            }
+
+            // store result, we may need to propagate one word
+            self[i] = sum as __limb_t;
+            if i+1 < self.len() {
+                self[i+1] ^= (sum >> 8*__limb_size) as __limb_t;
+            }
+        }
+    }
+
     fn vshl(&mut self, a: &Self, b: &Self) {
         let b = b.vto_u32() % (8*a.vsize() as u32);
         let width = 8*__limb_size as u32;
@@ -1515,6 +1579,76 @@ impl VType for [__limb_t] {
                 __limb_t::MAX
             } else {
                 0
+            }
+        }
+    }
+
+    fn vxmul_i16(&mut self, a: &Self, b: i16) {
+        fn xmul(a: __limb2_t, b: __limb2_t) -> __limb2_t {
+            let mut x = 0;
+            for i in 0..8*2*__limb_size {
+                x ^= if a & (1 << i) != 0 { b << i } else { 0 };
+            }
+            x
+        }
+
+        // The same in-place, inwards algorithm as mul, but for xmul.
+        //
+        // Fortunately with xmul we don't have to worry about carry propogation.
+        //
+        for i in (0..self.len()).rev() {
+            let mut sum: __limb2_t = 0;
+
+            for j in 0 .. (i+2)/2 {
+                // multiply inward 2 digits at a time to avoid overlap with
+                // either argument
+                let (u, v);
+                if i-j != j {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(
+                        if j == 0 {
+                            b as __limb_t
+                        } else if b < 0 {
+                            __limb_t::MAX
+                        } else {
+                            0
+                        }
+                    );
+                    let z = <__limb2_t>::from(
+                        if i-j == 0 {
+                            b as __limb_t
+                        } else if b < 0 {
+                            __limb_t::MAX
+                        } else {
+                            0
+                        }
+                    );
+                    let w = <__limb2_t>::from(a[j]);
+                    u = xmul(x, y);
+                    v = xmul(z, w);
+                } else {
+                    let x = <__limb2_t>::from(a[i-j]);
+                    let y = <__limb2_t>::from(
+                        if j == 0 {
+                            b as __limb_t
+                        } else if b < 0 {
+                            __limb_t::MAX
+                        } else {
+                            0
+                        }
+                    );
+                    u = xmul(x, y);
+                    v = 0;
+                }
+
+                // carryless sum (xor)
+                sum ^= u ^ v;
+            }
+
+            // store result, we may need to propagate one word
+            self[i] = sum as __limb_t;
+            if i+1 < self.len() {
+                self[i+1] ^= (sum >> 8*__limb_size) as __limb_t;
             }
         }
     }
@@ -2144,53 +2278,63 @@ pub extern "Rust" fn exec<'a>(
                 __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vxor_i16(la, c));
             }
 
-            // shl
+            // xmul
             0x3d => {
+                __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vxmul(la, lb));
+            }
+
+            // xmul_c
+            0x3e => {
+                __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vxmul_i16(la, c));
+            }
+
+            // shl
+            0x3f => {
                 __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshl(la, lb));
             }
 
             // shl_c
-            0x3e => {
+            0x40 => {
                 __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshl_i16(la, c));
             }
 
             // shr_u
-            0x3f => {
+            0x41 => {
                 __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_u(la, lb));
             }
 
             // shr_u_c
-            0x40 => {
+            0x42 => {
                 __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_u_i16(la, c));
             }
 
             // shr_s
-            0x41 => {
+            0x43 => {
                 __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vshr_s(la, lb));
             }
 
             // shr_s_c
-            0x42 => {
+            0x44 => {
                 __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vshr_s_i16(la, c));
             }
 
             // rotl
-            0x43 => {
+            0x45 => {
                 __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotl(la, lb));
             }
 
             // rotl_c
-            0x44 => {
+            0x46 => {
                 __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotl_i16(la, c));
             }
 
             // rotr
-            0x45 => {
+            0x47 => {
                 __rd.xmap2::<__lane_t, _>(__ra, __rb, lnpw2, |lx, la, lb| lx.vrotr(la, lb));
             }
 
             // rotr_c
-            0x46 => {
+            0x48 => {
                 __rd.xmap::<__lane_t, _>(__ra, lnpw2, |lx, la| lx.vrotr_i16(la, c));
             }
         }

@@ -881,6 +881,7 @@ pub enum OpKind<T: OpU> {
     Andnot(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     Or(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     Xor(RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
+    Xmul(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     Shl(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     ShrU(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
     ShrS(u8, RefCell<Rc<OpNode<T>>>, RefCell<Rc<OpNode<T>>>),
@@ -1492,6 +1493,14 @@ impl<T: OpU> OpTree<T> {
         let flags = a.flags() | b.flags();
         let depth = max(a.depth(), b.depth()).saturating_add(1);
         Self::from_kind(OpKind::Xor(RefCell::new(a), RefCell::new(b)), flags, depth)
+    }
+
+    pub fn xmul(lnpw2: u8, a: Self, b: Self) -> Self {
+        let a = a.node();
+        let b = b.node();
+        let flags = a.flags() | b.flags();
+        let depth = max(a.depth(), b.depth()).saturating_add(1);
+        Self::from_kind(OpKind::Xmul(lnpw2, RefCell::new(a), RefCell::new(b)), flags, depth)
     }
 
     pub fn shl(lnpw2: u8, a: Self, b: Self) -> Self {
@@ -2198,6 +2207,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.borrow().disas_pass1();
                 b.borrow().disas_pass1();
             }
+            OpKind::Xmul(_, a, b) => {
+                a.borrow().disas_pass1();
+                b.borrow().disas_pass1();
+            }
             OpKind::Shl(_, a, b) => {
                 a.borrow().disas_pass1();
                 b.borrow().disas_pass1();
@@ -2433,6 +2446,11 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
                 b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
             ),
+            OpKind::Xmul(lnpw2, a, b) => format!("({}.xmul {} {})",
+                prefix(T::NPW2, *lnpw2),
+                a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+                b.borrow().disas_pass2(names, arbitrary_names, stmts)?,
+            ),
             OpKind::Shl(lnpw2, a, b) => format!("({}.shl {} {})",
                 prefix(T::NPW2, *lnpw2),
                 a.borrow().disas_pass2(names, arbitrary_names, stmts)?,
@@ -2612,6 +2630,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.borrow().check_refs();
             }
             OpKind::Xor(a, b) => {
+                a.borrow().check_refs();
+                b.borrow().check_refs();
+            }
+            OpKind::Xmul(_, a, b) => {
                 a.borrow().check_refs();
                 b.borrow().check_refs();
             }
@@ -3302,6 +3324,28 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                     )));
                 }
             }
+            OpKind::Xmul(x, a, b) => {
+                let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
+                let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
+                a.fold_consts(&a_dyn, const_pool.reborrow()).map(|x| *a = Self::dyn_downcast(x));
+                b.fold_consts(&b_dyn, const_pool.reborrow()).map(|x| *b = Self::dyn_downcast(x));
+                #[cfg(feature="opt-fold-nops")]
+                if *x == 0 && a.is_const_one() {
+                    return Some(b.clone());
+                } else if *x == 0 && b.is_const_one() {
+                    return Some(a.clone());
+                }
+                #[cfg(feature="opt-compress-consts")]
+                if a.is_const_u16(Some(*x)) {
+                    return Some(Rc::new(OpNode::new(
+                        OpKind::Xmul(*x,
+                            RefCell::new(b.clone()),
+                            RefCell::new(a.clone())
+                        ),
+                        self.flags, self.depth
+                    )));
+                }
+            }
             OpKind::Shl(x, a, b) => {
                 let mut a = a.borrow_mut(); let a_dyn: Rc<dyn DynOpNode> = a.clone();
                 let mut b = b.borrow_mut(); let b_dyn: Rc<dyn DynOpNode> = b.clone();
@@ -3599,6 +3643,10 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 b.borrow().compile_pass1(state);
             }
             OpKind::Xor(a, b) => {
+                a.borrow().compile_pass1(state);
+                b.borrow().compile_pass1(state);
+            }
+            OpKind::Xmul(_, a, b) => {
                 a.borrow().compile_pass1(state);
                 b.borrow().compile_pass1(state);
             }
@@ -4717,6 +4765,42 @@ impl<T: OpU> DynOpNode for OpNode<T> {
                 let slot = state.slot_pool.alloc(T::NPW2).unwrap();
                 state.bytecode.push(u64::from(OpIns::new(
                     T::NPW2, 0, OpCode::Xor, slot, a_slot, b_slot
+                )));
+                self.slot.set(Some(slot));
+                (T::NPW2, slot)
+            }
+            #[cfg(feature="opt-compress-consts")]
+            OpKind::Xmul(lnpw2, a, b) if b.borrow().is_const_u16(Some(*lnpw2)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                let (a_npw2, a_slot) = a.compile_pass2(state);
+                let (_, b_const) = b.get_const_u16(None).unwrap();
+                let a_refs = a.dec_refs();
+                b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::XmulC, slot, a_slot, b_const
+                )));
+                self.slot.set(Some(slot));
+                (T::NPW2, slot)
+            }
+            OpKind::Xmul(lnpw2, a, b) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                schedule! {
+                    let (a_npw2, a_slot) = a.compile_pass2(state);
+                    let (b_npw2, b_slot) = b.compile_pass2(state);
+                }
+                let a_refs = a.dec_refs();
+                let b_refs = b.dec_refs();
+                if a_refs == 0 { state.slot_pool.dealloc(a_npw2, a_slot); }
+                if b_refs == 0 { state.slot_pool.dealloc(b_npw2, b_slot); }
+
+                let slot = state.slot_pool.alloc(T::NPW2).unwrap();
+                state.bytecode.push(u64::from(OpIns::new(
+                    T::NPW2, *lnpw2, OpCode::Xmul, slot, a_slot, b_slot
                 )));
                 self.slot.set(Some(slot));
                 (T::NPW2, slot)
