@@ -744,6 +744,20 @@ is used.
   Secrecy-preserving containers/tuples could elide this cost without
   sacrificing secrecy.
 
+- Avoid recursion during compilation
+
+  You may notice that secret-u currently uses a significant amount
+  of stack. This is mainly from traversing the tree, since, thanks to
+  loop unrolling, it can get quite deep. To make things worse, our
+  register scheduling actually selects for the deepest tree where
+  possible, since this results in lower register usage (and in theory
+  better cache utilization).
+
+  It is possible to avoid recursion during tree traversal, by using
+  bidirectional pointers via weak Rcs or some sort of threaded tree.
+  But this would be quite a bit of work, so I am going to not implement
+  this for now.
+
 - Satisfy [num_traits]
 
   Currently, programming with generic integer types is a bit cumbersome,
