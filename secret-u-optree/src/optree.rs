@@ -118,6 +118,12 @@ pub trait OpU
     /// Splat a smaller type
     fn splat<U: OpU>(other: U) -> Self;
 
+    /// Extract a smaller type
+    fn extract<U: OpU>(&self, idx: usize) -> U;
+
+    /// Replace part with a smaller type
+    fn replace<U: OpU>(&mut self, idx: usize, other: &U);
+
     /// Test if self is zero
     fn is_zero(&self) -> bool {
         self.as_ref().iter().all(|b| *b == 0)
@@ -422,6 +428,15 @@ for_secret_t! {
                     self_.as_mut()[i..i+U::SIZE].copy_from_slice(other.as_ref());
                 }
                 self_
+            }
+
+            fn extract<U: OpU>(&self, idx: usize) -> U {
+                U::try_from(&self.as_ref()[idx*U::SIZE .. (idx+1)*U::SIZE]).unwrap()
+            }
+
+            fn replace<U: OpU>(&mut self, idx: usize, other: &U) {
+                self.as_mut()[idx*U::SIZE .. (idx+1)*U::SIZE]
+                    .copy_from_slice(other.as_ref());
             }
         }
 
@@ -1026,6 +1041,15 @@ pub trait DynOpTree {
     /// get SIZE of the underlying tree
     fn size(&self) -> usize;
 
+    // shared conditions
+    fn is_imm(&self) -> bool;
+    fn is_sym(&self) -> bool;
+    fn is_const(&self) -> bool;
+    fn is_const_imm(&self) -> bool;
+    fn is_const_zero(&self) -> bool;
+    fn is_const_one(&self) -> bool;
+    fn is_const_ones(&self) -> bool;
+
     /// get the underlying DynOpNode
     fn dyn_node(&self) -> Rc<dyn DynOpNode>;
 
@@ -1045,6 +1069,90 @@ impl<T: OpU> DynOpTree for OpTree<T> {
 
     fn size(&self) -> usize {
         T::SIZE
+    }
+
+    /// is expression an immediate?
+    fn is_imm(&self) -> bool {
+        match self.0.borrow().deref() {
+            OpRoot::ConstZero   => true,
+            OpRoot::ConstOne    => true,
+            OpRoot::ConstOnes   => true,
+            OpRoot::Const(_)    => true,
+            OpRoot::Imm(_)      => true,
+            OpRoot::Tree(tree)  => tree.is_imm(),
+        }
+    }
+
+    /// is expression a symbol?
+    fn is_sym(&self) -> bool {
+        match self.0.borrow().deref() {
+            OpRoot::ConstZero   => false,
+            OpRoot::ConstOne    => false,
+            OpRoot::ConstOnes   => false,
+            OpRoot::Const(_)    => false,
+            OpRoot::Imm(_)      => false,
+            OpRoot::Tree(tree)  => tree.is_sym(),
+        }
+    }
+
+    /// is expression const?
+    fn is_const(&self) -> bool {
+        match self.0.borrow().deref() {
+            OpRoot::ConstZero   => true,
+            OpRoot::ConstOne    => true,
+            OpRoot::ConstOnes   => true,
+            OpRoot::Const(_)    => true,
+            OpRoot::Imm(_)      => false,
+            OpRoot::Tree(tree)  => tree.is_const(),
+        }
+    }
+
+    /// is expression const and immediate?
+    fn is_const_imm(&self) -> bool {
+        match self.0.borrow().deref() {
+            OpRoot::ConstZero   => true,
+            OpRoot::ConstOne    => true,
+            OpRoot::ConstOnes   => true,
+            OpRoot::Const(_)    => true,
+            OpRoot::Imm(_)      => false,
+            OpRoot::Tree(tree)  => tree.is_const_imm(),
+        }
+    }
+
+    /// checks if expression is const and is zero
+    fn is_const_zero(&self) -> bool {
+        match self.0.borrow().deref() {
+            OpRoot::ConstZero   => true,
+            OpRoot::ConstOne    => false,
+            OpRoot::ConstOnes   => false,
+            OpRoot::Const(v)    => v.is_zero(),
+            OpRoot::Imm(_)      => false,
+            OpRoot::Tree(tree)  => tree.is_const_zero(),
+        }
+    }
+
+    /// checks if expression is const and is one
+    fn is_const_one(&self) -> bool {
+        match self.0.borrow().deref() {
+            OpRoot::ConstZero   => false,
+            OpRoot::ConstOne    => true,
+            OpRoot::ConstOnes   => false,
+            OpRoot::Const(v)    => v.is_one(),
+            OpRoot::Imm(_)      => false,
+            OpRoot::Tree(tree)  => tree.is_const_one(),
+        }
+    }
+
+    /// checks if expression is const and is ones
+    fn is_const_ones(&self) -> bool {
+        match self.0.borrow().deref() {
+            OpRoot::ConstZero   => false,
+            OpRoot::ConstOne    => false,
+            OpRoot::ConstOnes   => true,
+            OpRoot::Const(v)    => v.is_ones(),
+            OpRoot::Imm(_)      => false,
+            OpRoot::Tree(tree)  => tree.is_const_ones(),
+        }
     }
 
     fn dyn_node(&self) -> Rc<dyn DynOpNode> {
@@ -1182,39 +1290,46 @@ impl<T: OpU> OpTree<T> {
         }
     }
 
-    /// is expression an immediate?
-    pub fn is_imm(&self) -> bool {
-        match self.0.borrow().deref() {
-            OpRoot::ConstZero => true,
-            OpRoot::ConstOne => true,
-            OpRoot::ConstOnes => true,
-            OpRoot::Const(_) => true,
-            OpRoot::Imm(_) => true,
-            OpRoot::Tree(tree) => tree.is_imm(),
+    /// Attempt to get reference to allocated immediate value
+    ///
+    /// Note! This will allocate if underlying tree is a compressed
+    /// zero/one/ones representation! If there is a way to avoid this
+    /// allocation, check is_const_zero/one/ones before calling this.
+    ///
+    pub fn get_imm<'a>(&'a self) -> Option<Cow<'a, T>> {
+        // this is a hack, we end up invalidating RefCell's invariants,
+        // but there's not really another option unless we define a whole
+        // other Cow type based on RefCell's Ref.
+        //
+        match unsafe { &*self.0.as_ptr() } {
+            OpRoot::ConstZero   => Some(Cow::Owned(T::zero())),
+            OpRoot::ConstOne    => Some(Cow::Owned(T::one())),
+            OpRoot::ConstOnes   => Some(Cow::Owned(T::ones())),
+            OpRoot::Const(v)    => Some(Cow::Borrowed(&v)),
+            OpRoot::Imm(v)      => Some(Cow::Borrowed(&v)),
+            OpRoot::Tree(tree)  => tree.get_imm(),
         }
     }
 
-    /// is expression a symbol?
-    pub fn is_sym(&self) -> bool {
-        match self.0.borrow().deref() {
-            OpRoot::ConstZero => false,
-            OpRoot::ConstOne => false,
-            OpRoot::ConstOnes => false,
-            OpRoot::Const(_) => false,
-            OpRoot::Imm(_) => false,
-            OpRoot::Tree(tree) => tree.is_sym(),
-        }
-    }
-
-    /// is expression const?
-    pub fn is_const(&self) -> bool {
-        match self.0.borrow().deref() {
-            OpRoot::ConstZero => true,
-            OpRoot::ConstOne => true,
-            OpRoot::ConstOnes => true,
-            OpRoot::Const(_) => true,
-            OpRoot::Imm(_) => false,
-            OpRoot::Tree(tree) => tree.is_const(),
+    /// Attempt to get immediate value, see is_imm
+    ///
+    /// Note! This will allocate if underlying tree is a compressed
+    /// zero/one/ones representation! If there is a way to avoid this
+    /// allocation, check is_const_zero/one/ones before calling this.
+    ///
+    pub fn into_imm(self) -> Option<T> {
+        match self.0.into_inner() {
+            OpRoot::ConstZero   => Some(T::zero()),
+            OpRoot::ConstOne    => Some(T::one()),
+            OpRoot::ConstOnes   => Some(T::ones()),
+            OpRoot::Const(v)    => Some(v),
+            OpRoot::Imm(v)      => Some(v),
+            OpRoot::Tree(tree)  => {
+                match Rc::try_unwrap(tree) {
+                    Ok(tree)  => tree.into_imm(),
+                    Err(tree) => tree.get_imm().map(|v| v.into_owned()),
+                }
+            }
         }
     }
 
@@ -1682,6 +1797,40 @@ impl<T: OpU> OpNode<T> {
         unsafe { Rc::from_raw(Rc::into_raw(a) as _) }
     }
 
+    /// Attempt to get reference to allocated immediate value
+    ///
+    /// Note! This will allocate if underlying tree is a compressed
+    /// zero/one/ones representation! If there is a way to avoid this
+    /// allocation, check is_const_zero/one/ones before calling this.
+    ///
+    pub fn get_imm<'a>(&'a self) -> Option<Cow<'a, T>> {
+        match &self.kind {
+            OpKind::ConstZero   => Some(Cow::Owned(T::zero())),
+            OpKind::ConstOne    => Some(Cow::Owned(T::one())),
+            OpKind::ConstOnes   => Some(Cow::Owned(T::ones())),
+            OpKind::Const(v)    => Some(Cow::Borrowed(&v)),
+            OpKind::Imm(v)      => Some(Cow::Borrowed(&v)),
+            _                   => None,
+        }
+    }
+
+    /// Attempt to get immediate value, see is_imm
+    ///
+    /// Note! This will allocate if underlying tree is a compressed
+    /// zero/one/ones representation! If there is a way to avoid this
+    /// allocation, check is_const_zero/one/ones before calling this.
+    ///
+    pub fn into_imm(self) -> Option<T> {
+        match self.kind {
+            OpKind::ConstZero   => Some(T::zero()),
+            OpKind::ConstOne    => Some(T::one()),
+            OpKind::ConstOnes   => Some(T::ones()),
+            OpKind::Const(v)    => Some(v),
+            OpKind::Imm(v)      => Some(v),
+            _                   => None,
+        }
+    }
+
     /// display tree for debugging
     pub fn disas<W: io::Write>(&self, mut out: W) -> Result<(), io::Error> {
         // get a source of variable names, these represent
@@ -1819,6 +1968,9 @@ pub trait DynOpNode: Debug + ConstPoolRef {
 
     /// is expression const?
     fn is_const(&self) -> bool;
+
+    /// is expression const and immediate?
+    fn is_const_imm(&self) -> bool;
 
     /// checks if expression is const and is zero
     fn is_const_zero(&self) -> bool;
@@ -1967,12 +2119,12 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
     fn is_imm(&self) -> bool {
         match self.kind {
-            OpKind::ConstZero => true,
-            OpKind::ConstOne => true,
-            OpKind::ConstOnes => true,
-            OpKind::Const(_) => true,
-            OpKind::Imm(_) => true,
-            _ => false,
+            OpKind::ConstZero   => true,
+            OpKind::ConstOne    => true,
+            OpKind::ConstOnes   => true,
+            OpKind::Const(_)    => true,
+            OpKind::Imm(_)      => true,
+            _                   => false,
         }
     }
 
@@ -1982,6 +2134,16 @@ impl<T: OpU> DynOpNode for OpNode<T> {
 
     fn is_const(&self) -> bool {
         self.flags & Self::SECRET != Self::SECRET
+    }
+
+    fn is_const_imm(&self) -> bool {
+        match self.kind {
+            OpKind::ConstZero   => true,
+            OpKind::ConstOne    => true,
+            OpKind::ConstOnes   => true,
+            OpKind::Const(_)    => true,
+            _                   => false,
+        }
     }
 
     fn is_const_zero(&self) -> bool {

@@ -7,6 +7,7 @@ use std::mem::transmute;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::iter::FusedIterator;
+use std::borrow::Borrow;
 
 use std::ops::Not;
 use std::ops::BitAnd;
@@ -836,65 +837,77 @@ for_secret_t! {
 
             #[inline]
             pub fn reverse_bytes(self) -> __secret_t {
-                __if(__lane_size == 1) {
-                    // nop
+                __if(__size == 1) {
+                    // special case, because otherwise the code below breaks
                     self
                 }
-                __if(__lane_size > 1 && __size <= 256) {
-                    // types with <256 bytes can always use a single shuffle
-                    let mut bytes = [0; __size];
-                    for i in 0..__size {
-                        bytes[i] = u8::try_from(__size-1 - i).unwrap();
-                    }
+                __if(__size > 1) {
+                    if self.0.is_const_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        v.reverse();
+                        Self(OpTree::const_(v))
+                    } else if self.0.is_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        v.reverse();
+                        Self(OpTree::imm(v))
+                    } else {
+                        __if(__size <= 256) {
+                            // types with <256 bytes can always use a single shuffle
+                            let mut bytes = [0; __size];
+                            for i in 0..__size {
+                                bytes[i] = u8::try_from(__size-1 - i).unwrap();
+                            }
 
-                    Self(OpTree::shuffle(
-                        __npw2,
-                        OpTree::const_(bytes),
-                        self.0.clone(),
-                        self.0
-                    ))
-                }
-                __if(__lane_size > 1 && __size > 256) {
-                    // types with >256 bytes need to use multiple u16 shuffles in
-                    // order to address all bytes 
-                    let mut bytes = [0; __size];
-                    for i in 0..__size/2 {
-                        bytes[i*2..i*2+2].copy_from_slice(
-                            &u16::try_from(__size/2-1 - i).unwrap().to_le_bytes()
-                        );
-                    }
+                            Self(OpTree::shuffle(
+                                __npw2,
+                                OpTree::const_(bytes),
+                                self.0.clone(),
+                                self.0
+                            ))
+                        }
+                        __if(__size > 256) {
+                            // types with >256 bytes need to use multiple u16 shuffles in
+                            // order to address all bytes 
+                            let mut bytes = [0; __size];
+                            for i in 0..__size/2 {
+                                bytes[i*2..i*2+2].copy_from_slice(
+                                    &u16::try_from(__size/2-1 - i).unwrap().to_le_bytes()
+                                );
+                            }
 
-                    // note we reverse lo/hi when we piece the type back together
-                    let bytes = OpTree::<__U>::const_(bytes);
-                    let lo = OpTree::and(
-                        self.0.clone(),
-                        OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
-                    );
-                    let hi = OpTree::shr_u(
-                        __npw2-1,
-                        self.0,
-                        OpTree::splat(OpTree::<U16>::const_(8u16)),
-                    );
-                    let lo = OpTree::shuffle(
-                        __npw2-1,
-                        bytes.clone(),
-                        lo.clone(),
-                        lo
-                    );
-                    let hi = OpTree::shuffle(
-                        __npw2-1,
-                        bytes,
-                        hi.clone(),
-                        hi
-                    );
-                    Self(OpTree::or(
-                        hi,
-                        OpTree::shl(
-                            __npw2-1,
-                            lo,
-                            OpTree::splat(OpTree::<U16>::const_(8u16))
-                        )
-                    ))
+                            // note we reverse lo/hi when we piece the type back together
+                            let bytes = OpTree::<__U>::const_(bytes);
+                            let lo = OpTree::and(
+                                self.0.clone(),
+                                OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
+                            );
+                            let hi = OpTree::shr_u(
+                                __npw2-1,
+                                self.0,
+                                OpTree::splat(OpTree::<U16>::const_(8u16)),
+                            );
+                            let lo = OpTree::shuffle(
+                                __npw2-1,
+                                bytes.clone(),
+                                lo.clone(),
+                                lo
+                            );
+                            let hi = OpTree::shuffle(
+                                __npw2-1,
+                                bytes,
+                                hi.clone(),
+                                hi
+                            );
+                            Self(OpTree::or(
+                                hi,
+                                OpTree::shl(
+                                    __npw2-1,
+                                    lo,
+                                    OpTree::splat(OpTree::<U16>::const_(8u16))
+                                )
+                            ))
+                        }
+                    }
                 }
             }
         }
@@ -1647,97 +1660,157 @@ for_secret_t! {
             #[inline]
             pub fn extract(self, lane: usize) -> SecretBool {
                 assert!(lane < __lanes);
-                SecretBool::defer(Rc::new(OpTree::<__lane_U>::extract(
-                    u16::try_from(lane).unwrap(), self.0
-                )))
+                if self.0.is_const_zero() {
+                    SecretBool::false_()
+                } else if self.0.is_const_ones() {
+                    SecretBool::true_()
+                } else if self.0.is_const_imm() {
+                    SecretBool::defer(Rc::new(OpTree::<__lane_U>::const_(
+                        self.0.get_imm().unwrap().extract::<__lane_U>(lane)
+                    )))
+                } else if self.0.is_imm() {
+                    SecretBool::defer(Rc::new(OpTree::<__lane_U>::imm(
+                        self.0.get_imm().unwrap().extract::<__lane_U>(lane)
+                    )))
+                } else {
+                    SecretBool::defer(Rc::new(OpTree::<__lane_U>::extract(
+                        u16::try_from(lane).unwrap(), self.0
+                    )))
+                }
             }
 
             /// Replace a specific lane
             #[inline]
             pub fn replace(self, lane: usize, value: SecretBool) -> Self {
                 assert!(lane < __lanes);
-                Self(OpTree::replace::<__lane_U>(
-                    u16::try_from(lane).unwrap(), self.0, value.resolve()
-                ))
+                if self.0.is_const_imm() && value.deferred().is_const_imm() {
+                    let mut v = self.0.into_imm().unwrap();
+                    v.replace(lane,
+                        &if !value.deferred().is_const_zero() { 
+                            __lane_U::ones()
+                        } else {
+                            __lane_U::zero()
+                        }
+                    );
+                    Self(OpTree::const_(v))
+                } else if self.0.is_imm() && value.deferred().is_imm() {
+                    let mut v = self.0.into_imm().unwrap();
+                    v.replace(lane,
+                        &if !value.deferred().is_const_zero() { 
+                            __lane_U::ones()
+                        } else {
+                            __lane_U::zero()
+                        }
+                    );
+                    Self(OpTree::imm(v))
+                } else {
+                    Self(OpTree::replace::<__lane_U>(
+                        u16::try_from(lane).unwrap(), self.0, value.resolve()
+                    ))
+                }
             }
 
             /// Reverse lanes
             #[inline]
             pub fn reverse_lanes(self) -> Self {
-                __if(__lanes <= 256) {
-                    // types with <256 lanes can always use a single shuffle
-                    let mut lanes = [0; __size];
-                    for i in 0..__lanes {
-                        let off = i*__lane_size;
-                        lanes[off] = u8::try_from(__lanes-1 - i).unwrap();
-                    }
-
-                    Self(OpTree::shuffle(
-                        __lnpw2,
-                        OpTree::const_(lanes),
-                        self.0.clone(),
-                        self.0
-                    ))
+                __if(__lanes == 1) {
+                    // special case, because otherwise the code below breaks
+                    self
                 }
-                __if(__lanes > 256 && __lane_size > 1) {
-                    // types >u8 can always use a single shuffle
-                    let mut lanes = [0; __size];
-                    for i in 0..__lanes {
-                        let off = i*__lane_size;
-                        lanes[off..off+2].copy_from_slice(
-                            &u16::try_from(__lanes-1 - i).unwrap().to_le_bytes()
-                        );
-                    }
+                __if(__lanes > 1) {
+                    if self.0.is_const_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        let (v1, v2) = v.split_at_mut(__size/2);
+                        for i in 0..__lanes/2 {
+                            v1[i*__lane_size..(i+1)*__lane_size]
+                                .swap_with_slice(&mut v2[(__lanes/2-1-i)*__lane_size..(__lanes/2-1-i+1)*__lane_size])
+                        }
+                        Self(OpTree::const_(v))
+                    } else if self.0.is_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        let (v1, v2) = v.split_at_mut(__size/2);
+                        for i in 0..__lanes/2 {
+                            v1[i*__lane_size..(i+1)*__lane_size]
+                                .swap_with_slice(&mut v2[(__lanes/2-1-i)*__lane_size..(__lanes/2-1-i+1)*__lane_size])
+                        }
+                        Self(OpTree::imm(v))
+                    } else {
+                        __if(__lanes <= 256) {
+                            // types with <256 lanes can always use a single shuffle
+                            let mut lanes = [0; __size];
+                            for i in 0..__lanes {
+                                let off = i*__lane_size;
+                                lanes[off] = u8::try_from(__lanes-1 - i).unwrap();
+                            }
 
-                    Self(OpTree::shuffle(
-                        __lnpw2,
-                        OpTree::const_(lanes),
-                        self.0.clone(),
-                        self.0
-                    ))
-                }
-                __if(__lanes > 256 && __lane_size == 1) {
-                    // types with >256 u8s need to use multiple u16 shuffles in
-                    // order to address all lanes
-                    let mut lanes = [0; __size];
-                    for i in 0..__lanes/2 {
-                        let off = i*2*__lane_size;
-                        lanes[off..off+2].copy_from_slice(
-                            &u16::try_from(__lanes/2-1 - i).unwrap().to_le_bytes()
-                        );
-                    }
+                            Self(OpTree::shuffle(
+                                __lnpw2,
+                                OpTree::const_(lanes),
+                                self.0.clone(),
+                                self.0
+                            ))
+                        }
+                        __if(__lanes > 256 && __lane_size > 1) {
+                            // types >u8 can always use a single shuffle
+                            let mut lanes = [0; __size];
+                            for i in 0..__lanes {
+                                let off = i*__lane_size;
+                                lanes[off..off+2].copy_from_slice(
+                                    &u16::try_from(__lanes-1 - i).unwrap().to_le_bytes()
+                                );
+                            }
 
-                    // note we reverse lo/hi when we piece the type back together
-                    let lanes = OpTree::<__U>::const_(lanes);
-                    let lo = OpTree::and(
-                        self.0.clone(),
-                        OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
-                    );
-                    let hi = OpTree::shr_u(
-                        __lnpw2-1,
-                        self.0,
-                        OpTree::splat(OpTree::<U16>::const_(8u16)),
-                    );
-                    let lo = OpTree::shuffle(
-                        __lnpw2-1,
-                        lanes.clone(),
-                        lo.clone(),
-                        lo
-                    );
-                    let hi = OpTree::shuffle(
-                        __lnpw2-1,
-                        lanes,
-                        hi.clone(),
-                        hi
-                    );
-                    Self(OpTree::or(
-                        hi,
-                        OpTree::shl(
-                            __lnpw2-1,
-                            lo,
-                            OpTree::splat(OpTree::<U16>::const_(8u16))
-                        )
-                    ))
+                            Self(OpTree::shuffle(
+                                __lnpw2,
+                                OpTree::const_(lanes),
+                                self.0.clone(),
+                                self.0
+                            ))
+                        }
+                        __if(__lanes > 256 && __lane_size == 1) {
+                            // types with >256 u8s need to use multiple u16 shuffles in
+                            // order to address all lanes
+                            let mut lanes = [0; __size];
+                            for i in 0..__lanes/2 {
+                                let off = i*2*__lane_size;
+                                lanes[off..off+2].copy_from_slice(
+                                    &u16::try_from(__lanes/2-1 - i).unwrap().to_le_bytes()
+                                );
+                            }
+
+                            // note we reverse lo/hi when we piece the type back together
+                            let lanes = OpTree::<__U>::const_(lanes);
+                            let lo = OpTree::and(
+                                self.0.clone(),
+                                OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
+                            );
+                            let hi = OpTree::shr_u(
+                                __lnpw2-1,
+                                self.0,
+                                OpTree::splat(OpTree::<U16>::const_(8u16)),
+                            );
+                            let lo = OpTree::shuffle(
+                                __lnpw2-1,
+                                lanes.clone(),
+                                lo.clone(),
+                                lo
+                            );
+                            let hi = OpTree::shuffle(
+                                __lnpw2-1,
+                                lanes,
+                                hi.clone(),
+                                hi
+                            );
+                            Self(OpTree::or(
+                                hi,
+                                OpTree::shl(
+                                    __lnpw2-1,
+                                    lo,
+                                    OpTree::splat(OpTree::<U16>::const_(8u16))
+                                )
+                            ))
+                        }
+                    }
                 }
             }
 
@@ -2773,97 +2846,145 @@ for_secret_t! {
             #[inline]
             pub fn extract(self, lane: usize) -> __lane_t {
                 assert!(lane < __lanes);
-                <__lane_t>::from_tree(OpTree::<__lane_U>::extract(
-                    u16::try_from(lane).unwrap(), self.0
-                ))
+                if self.0.is_const_zero() {
+                    <__lane_t>::zero()
+                } else if self.0.is_const_ones() {
+                    <__lane_t>::ones()
+                } else if self.0.is_const_imm() {
+                    <__lane_t>::from_tree(OpTree::const_(
+                        self.0.get_imm().unwrap().extract::<__lane_U>(lane)
+                    ))
+                } else if self.0.is_imm() {
+                    <__lane_t>::from_tree(OpTree::imm(
+                        self.0.get_imm().unwrap().extract::<__lane_U>(lane)
+                    ))
+                } else {
+                    <__lane_t>::from_tree(OpTree::<__lane_U>::extract(
+                        u16::try_from(lane).unwrap(), self.0
+                    ))
+                }
             }
 
             /// Replace a specific lane
             #[inline]
             pub fn replace(self, lane: usize, value: __lane_t) -> Self {
                 assert!(lane < __lanes);
-                Self(OpTree::replace::<__lane_U>(
-                    u16::try_from(lane).unwrap(), self.0, value.0
-                ))
+                if self.0.is_const_imm() && value.0.is_const_imm() {
+                    let mut v = self.0.into_imm().unwrap();
+                    v.replace::<__lane_U>(lane, value.0.get_imm().unwrap().borrow());
+                    Self(OpTree::const_(v))
+                } else if self.0.is_imm() && value.0.is_imm() {
+                    let mut v = self.0.into_imm().unwrap();
+                    v.replace::<__lane_U>(lane, value.0.get_imm().unwrap().borrow());
+                    Self(OpTree::imm(v))
+                } else {
+                    Self(OpTree::replace::<__lane_U>(
+                        u16::try_from(lane).unwrap(), self.0, value.0
+                    ))
+                }
             }
 
             /// Reverse lanes
             #[inline]
             pub fn reverse_lanes(self) -> Self {
-                __if(__lanes <= 256) {
-                    // types with <256 lanes can always use a single shuffle
-                    let mut lanes = [0; __size];
-                    for i in 0..__lanes {
-                        let off = i*__lane_size;
-                        lanes[off] = u8::try_from(__lanes-1 - i).unwrap();
-                    }
-
-                    Self(OpTree::shuffle(
-                        __lnpw2,
-                        OpTree::const_(lanes),
-                        self.0.clone(),
-                        self.0
-                    ))
+                __if(__lanes == 1) {
+                    // special case, because otherwise the code below breaks
+                    self
                 }
-                __if(__lanes > 256 && __lane_size > 1) {
-                    // types >u8 can always use a single shuffle
-                    let mut lanes = [0; __size];
-                    for i in 0..__lanes {
-                        let off = i*__lane_size;
-                        lanes[off..off+2].copy_from_slice(
-                            &u16::try_from(__lanes-1 - i).unwrap().to_le_bytes()
-                        );
-                    }
+                __if(__lanes > 1) {
+                    if self.0.is_const_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        let (v1, v2) = v.split_at_mut(__size/2);
+                        for i in 0..__lanes/2 {
+                            v1[i*__lane_size..(i+1)*__lane_size]
+                                .swap_with_slice(&mut v2[(__lanes/2-1-i)*__lane_size..(__lanes/2-1-i+1)*__lane_size])
+                        }
+                        Self(OpTree::const_(v))
+                    } else if self.0.is_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        let (v1, v2) = v.split_at_mut(__size/2);
+                        for i in 0..__lanes/2 {
+                            v1[i*__lane_size..(i+1)*__lane_size]
+                                .swap_with_slice(&mut v2[(__lanes/2-1-i)*__lane_size..(__lanes/2-1-i+1)*__lane_size])
+                        }
+                        Self(OpTree::imm(v))
+                    } else {
+                        __if(__lanes <= 256) {
+                            // types with <256 lanes can always use a single shuffle
+                            let mut lanes = [0; __size];
+                            for i in 0..__lanes {
+                                let off = i*__lane_size;
+                                lanes[off] = u8::try_from(__lanes-1 - i).unwrap();
+                            }
 
-                    Self(OpTree::shuffle(
-                        __lnpw2,
-                        OpTree::const_(lanes),
-                        self.0.clone(),
-                        self.0
-                    ))
-                }
-                __if(__lanes > 256 && __lane_size == 1) {
-                    // types with >256 u8s need to use multiple u16 shuffles in
-                    // order to address all lanes
-                    let mut lanes = [0; __size];
-                    for i in 0..__lanes/2 {
-                        let off = i*2*__lane_size;
-                        lanes[off..off+2].copy_from_slice(
-                            &u16::try_from(__lanes/2-1 - i).unwrap().to_le_bytes()
-                        );
-                    }
+                            Self(OpTree::shuffle(
+                                __lnpw2,
+                                OpTree::const_(lanes),
+                                self.0.clone(),
+                                self.0
+                            ))
+                        }
+                        __if(__lanes > 256 && __lane_size > 1) {
+                            // types >u8 can always use a single shuffle
+                            let mut lanes = [0; __size];
+                            for i in 0..__lanes {
+                                let off = i*__lane_size;
+                                lanes[off..off+2].copy_from_slice(
+                                    &u16::try_from(__lanes-1 - i).unwrap().to_le_bytes()
+                                );
+                            }
 
-                    // note we reverse lo/hi when we piece the type back together
-                    let lanes = OpTree::<__U>::const_(lanes);
-                    let lo = OpTree::and(
-                        self.0.clone(),
-                        OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
-                    );
-                    let hi = OpTree::shr_u(
-                        __lnpw2-1,
-                        self.0,
-                        OpTree::splat(OpTree::<U16>::const_(8u16)),
-                    );
-                    let lo = OpTree::shuffle(
-                        __lnpw2-1,
-                        lanes.clone(),
-                        lo.clone(),
-                        lo
-                    );
-                    let hi = OpTree::shuffle(
-                        __lnpw2-1,
-                        lanes,
-                        hi.clone(),
-                        hi
-                    );
-                    Self(OpTree::or(
-                        hi,
-                        OpTree::shl(
-                            __lnpw2-1,
-                            lo,
-                            OpTree::splat(OpTree::<U16>::const_(8u16))
-                        )
-                    ))
+                            Self(OpTree::shuffle(
+                                __lnpw2,
+                                OpTree::const_(lanes),
+                                self.0.clone(),
+                                self.0
+                            ))
+                        }
+                        __if(__lanes > 256 && __lane_size == 1) {
+                            // types with >256 u8s need to use multiple u16 shuffles in
+                            // order to address all lanes
+                            let mut lanes = [0; __size];
+                            for i in 0..__lanes/2 {
+                                let off = i*2*__lane_size;
+                                lanes[off..off+2].copy_from_slice(
+                                    &u16::try_from(__lanes/2-1 - i).unwrap().to_le_bytes()
+                                );
+                            }
+
+                            // note we reverse lo/hi when we piece the type back together
+                            let lanes = OpTree::<__U>::const_(lanes);
+                            let lo = OpTree::and(
+                                self.0.clone(),
+                                OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
+                            );
+                            let hi = OpTree::shr_u(
+                                __lnpw2-1,
+                                self.0,
+                                OpTree::splat(OpTree::<U16>::const_(8u16)),
+                            );
+                            let lo = OpTree::shuffle(
+                                __lnpw2-1,
+                                lanes.clone(),
+                                lo.clone(),
+                                lo
+                            );
+                            let hi = OpTree::shuffle(
+                                __lnpw2-1,
+                                lanes,
+                                hi.clone(),
+                                hi
+                            );
+                            Self(OpTree::or(
+                                hi,
+                                OpTree::shl(
+                                    __lnpw2-1,
+                                    lo,
+                                    OpTree::splat(OpTree::<U16>::const_(8u16))
+                                )
+                            ))
+                        }
+                    }
                 }
             }
 
@@ -2967,68 +3088,84 @@ for_secret_t! {
             #[inline]
             pub fn reverse_bytes(self) -> __secret_t {
                 __if(__lane_size == 1) {
-                    // nop
+                    // special case, because otherwise the code below breaks
                     self
                 }
-                __if(__lane_size > 1 && __size <= 256) {
-                    // types with <256 bytes can always use a single shuffle
-                    let mut bytes = [0; __size];
-                    for j in (0..__size).step_by(__lane_size) {
-                        for i in 0..__lane_size {
-                            bytes[j+i] = u8::try_from(j + __lane_size-1 - i).unwrap();
+                __if(__lane_size > 1) {
+                    if self.0.is_const_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        for j in (0..__size).step_by(__lane_size) {
+                            v[j..j+__lane_size].reverse();
                         }
-                    }
+                        Self(OpTree::const_(v))
+                    } else if self.0.is_imm() {
+                        let mut v = self.0.into_imm().unwrap();
+                        for j in (0..__size).step_by(__lane_size) {
+                            v[j..j+__lane_size].reverse();
+                        }
+                        Self(OpTree::imm(v))
+                    } else {
+                        __if(__lane_size > 1 && __size <= 256) {
+                            // types with <256 bytes can always use a single shuffle
+                            let mut bytes = [0; __size];
+                            for j in (0..__size).step_by(__lane_size) {
+                                for i in 0..__lane_size {
+                                    bytes[j+i] = u8::try_from(j + __lane_size-1 - i).unwrap();
+                                }
+                            }
 
-                    Self(OpTree::shuffle(
-                        __npw2,
-                        OpTree::const_(bytes),
-                        self.0.clone(),
-                        self.0
-                    ))
-                }
-                __if(__lane_size > 1 && __size > 256) {
-                    // types with >256 bytes need to use multiple u16 shuffles in
-                    // order to address all bytes 
-                    let mut bytes = [0; __size];
-                    for j in (0..__size/2).step_by(__lane_size/2) {
-                        for i in 0..__lane_size/2 {
-                            bytes[j*2+i*2..j*2+i*2+2].copy_from_slice(
-                                &u16::try_from(j + __lane_size/2-1 - i).unwrap().to_le_bytes()
+                            Self(OpTree::shuffle(
+                                __npw2,
+                                OpTree::const_(bytes),
+                                self.0.clone(),
+                                self.0
+                            ))
+                        }
+                        __if(__lane_size > 1 && __size > 256) {
+                            // types with >256 bytes need to use multiple u16 shuffles in
+                            // order to address all bytes 
+                            let mut bytes = [0; __size];
+                            for j in (0..__size/2).step_by(__lane_size/2) {
+                                for i in 0..__lane_size/2 {
+                                    bytes[j*2+i*2..j*2+i*2+2].copy_from_slice(
+                                        &u16::try_from(j + __lane_size/2-1 - i).unwrap().to_le_bytes()
+                                    );
+                                }
+                            }
+
+                            // note we reverse lo/hi when we piece the type back together
+                            let bytes = OpTree::<__U>::const_(bytes);
+                            let lo = OpTree::and(
+                                self.0.clone(),
+                                OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
                             );
+                            let hi = OpTree::shr_u(
+                                __npw2-1,
+                                self.0,
+                                OpTree::splat(OpTree::<U16>::const_(8u16)),
+                            );
+                            let lo = OpTree::shuffle(
+                                __npw2-1,
+                                bytes.clone(),
+                                lo.clone(),
+                                lo
+                            );
+                            let hi = OpTree::shuffle(
+                                __npw2-1,
+                                bytes,
+                                hi.clone(),
+                                hi
+                            );
+                            Self(OpTree::or(
+                                hi,
+                                OpTree::shl(
+                                    __npw2-1,
+                                    lo,
+                                    OpTree::splat(OpTree::<U16>::const_(8u16))
+                                )
+                            ))
                         }
                     }
-
-                    // note we reverse lo/hi when we piece the type back together
-                    let bytes = OpTree::<__U>::const_(bytes);
-                    let lo = OpTree::and(
-                        self.0.clone(),
-                        OpTree::splat(OpTree::<U16>::const_(0x00ffu16)),
-                    );
-                    let hi = OpTree::shr_u(
-                        __npw2-1,
-                        self.0,
-                        OpTree::splat(OpTree::<U16>::const_(8u16)),
-                    );
-                    let lo = OpTree::shuffle(
-                        __npw2-1,
-                        bytes.clone(),
-                        lo.clone(),
-                        lo
-                    );
-                    let hi = OpTree::shuffle(
-                        __npw2-1,
-                        bytes,
-                        hi.clone(),
-                        hi
-                    );
-                    Self(OpTree::or(
-                        hi,
-                        OpTree::shl(
-                            __npw2-1,
-                            lo,
-                            OpTree::splat(OpTree::<U16>::const_(8u16))
-                        )
-                    ))
                 }
             }
 
