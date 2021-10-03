@@ -51,9 +51,9 @@ bench-aes:
 	$(ENV) cargo build --release --features u262144,x32768 --example aes --features example-bitslice-tables
 	cp target/release/examples/aes target/release/examples/aes_bitslice
 	$(ENV) cargo build --release --features u262144,x32768 --example aes_more_simd
-	cp target/release/examples/aes_more_simd target/release/examples/aes_more_simd_shuffle
+	cp target/release/examples/aes_more_simd target/release/examples/aes_shuffle_more_simd
 	$(ENV) cargo build --release --features u262144,x32768 --example aes_more_simd --features example-bitslice-tables
-	cp target/release/examples/aes_more_simd target/release/examples/aes_more_simd_bitslice
+	cp target/release/examples/aes_more_simd target/release/examples/aes_bitslice_more_simd
 	# run, measuring execution time
 	$(strip \
 		time ./target/release/examples/aes_reference \
@@ -74,13 +74,13 @@ bench-aes:
 		<(cat $$(find -name '*.rs')) \
 		target/test_bitslice.encrypted)
 	$(strip \
-		time ./target/release/examples/aes_more_simd_shuffle \
+		time ./target/release/examples/aes_shuffle_more_simd \
 		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
 		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
 		<(cat $$(find -name '*.rs')) \
 		target/test_shuffle.encrypted)
 	$(strip \
-		time ./target/release/examples/aes_more_simd_bitslice \
+		time ./target/release/examples/aes_bitslice_more_simd \
 		<(echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" | xxd -r -p) \
 		<(echo "000102030405060708090a0b0c0d0e0f" | xxd -r -p) \
 		<(cat $$(find -name '*.rs')) \
@@ -118,16 +118,20 @@ bench-sss:
 	$(ENV) cargo build --release --features u262144,x32768 --example sss
 	$(ENV) cargo build --release --features u262144,x32768 --example sss_simd
 	cp target/release/examples/sss 	    target/release/examples/sss_shuffle
-	cp target/release/examples/sss_simd target/release/examples/sss_simd_shuffle
+	cp target/release/examples/sss_simd target/release/examples/sss_shuffle_simd
 	$(ENV) cargo build --release --features u262144,x32768 --example sss      --features example-bitslice-tables
 	$(ENV) cargo build --release --features u262144,x32768 --example sss_simd --features example-bitslice-tables
 	cp target/release/examples/sss 	    target/release/examples/sss_bitslice
-	cp target/release/examples/sss_simd target/release/examples/sss_simd_bitslice
+	cp target/release/examples/sss_simd target/release/examples/sss_bitslice_simd
+	$(ENV) cargo build --release --features u262144,x32768 --example sss_xmul
+	$(ENV) cargo build --release --features u262144,x32768 --example sss_xmul_simd
 	# run, measuring execution time
 	time ./target/release/examples/sss_shuffle
-	time ./target/release/examples/sss_simd_shuffle
+	time ./target/release/examples/sss_shuffle_simd
 	time ./target/release/examples/sss_bitslice
-	time ./target/release/examples/sss_simd_bitslice
+	time ./target/release/examples/sss_bitslice_simd
+	time ./target/release/examples/sss_xmul
+	time ./target/release/examples/sss_xmul_simd
 
 .PHONY: bench-rsa
 bench-rsa:

@@ -622,9 +622,9 @@ $ make bench-sha256
 
 On my machine:
 ```
-sha256_reference  0m0.018s
-sha256            0m24.361s
-sha256_fast       0m0.143s
+sha256_reference  0m0.019s
+sha256            0m24.695s
+sha256_fast       0m0.132s
 ```
 
 `sha256_reference` provides a native, non-constant-time sha256 implementation,
@@ -639,9 +639,9 @@ $ make bench-aes
 On my machine:
 ```
 aes_reference           0m0.039s
-aes_shuffle             0m6.964s
-aes_bitslice            0m17.986s
-aes_more_simd_shuffle   0m2.339s
+aes_shuffle             0m6.867s
+aes_bitslice            0m17.262s
+aes_more_simd_shuffle   0m2.678s
 aes_more_simd_bitslice  0m6.653s
 ```
 
@@ -657,8 +657,8 @@ $ make bench-chacha20
 On my machine:
 ```
 chacha20_reference  0m0.026s
-chacha20            0m0.117s
-chacha20_simd       0m0.105s
+chacha20            0m0.096s
+chacha20_simd       0m0.084s
 ```
 
 Chacha20 is both constant-time friendly and remarkably parallelizable,
@@ -670,10 +670,12 @@ $ make bench-sss
 
 On my machine:
 ```
-sss_shuffle        0m0.011s
-sss_simd_shuffle   0m0.002s
-sss_bitslice       0m0.039s
-sss_simd_bitslice  0m0.021s
+sss_shuffle        0m0.007s
+sss_shuffle_simd   0m0.001s
+sss_bitslice       0m0.029s
+sss_bitslice_simd  0m0.014s
+sss_xmul           0m0.001s
+sss_xmul_simd      0m0.001s
 ```
 
 This byte-wise implementation of Shamir's secret sharing is immensely
@@ -681,9 +683,20 @@ parallelizable, unfortunately with a test size of dozens of bytes this
 benchmark is mostly catching setup+compilation costs. Still interesting
 to note that the SIMD version has increased performance.
 
-This example is less interesting for benchmarking, more interesting for
-the issues it causes the Rust compiler (oom, stack overflow, etc) due to the
-large expressions the 510-byte bitsliced-table creates.
+This also provides a decent comparison of different gf(256) approaches:
+
+- sss_shuffle - log-table based multiply/divide using shuffle instructions to
+  provide constant-time lookups
+
+- sss_bitslice - log-table based multiply/divide using a bitsliced
+  representation of the tables for constant-time lookups
+
+- sss_xmul - multiply/divide using Barret reduction with the xmul instruction
+  providing carry-less multiplication
+
+This example also caused quite a number of issues for the Rust compiler
+(oom, stack overflow, etc), due to the large expressions created by the
+bitsliced-tables.
 
 ``` bash
 $ make bench-rsa
@@ -692,7 +705,7 @@ $ make bench-rsa
 On my machine:
 
 ```
-rsa  0m5.717s
+rsa  0m6.062s
 ```
 
 RSA leverages large integer operations, especially multiplication. This RSA

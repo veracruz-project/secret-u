@@ -1091,25 +1091,25 @@ for_secret_t! {
             }
         }
 
-        impl Shl for __secret_t {
+        impl Shl<__secretu_t> for __secret_t {
             type Output = __secret_t;
             #[inline]
-            fn shl(self, other: __secret_t) -> __secret_t {
+            fn shl(self, other: __secretu_t) -> __secret_t {
                 Self(OpTree::shl(0, self.0, other.0))
             }
         }
 
-        impl ShlAssign for __secret_t {
+        impl ShlAssign<__secretu_t> for __secret_t {
             #[inline]
-            fn shl_assign(&mut self, other: __secret_t) {
+            fn shl_assign(&mut self, other: __secretu_t) {
                 *self = take(self).shl(other)
             }
         }
 
-        impl Shr for __secret_t {
+        impl Shr<__secretu_t> for __secret_t {
             type Output = __secret_t;
             #[inline]
-            fn shr(self, other: __secret_t) -> __secret_t {
+            fn shr(self, other: __secretu_t) -> __secret_t {
                 __if(__t == "u" || __t == "p") {
                     Self(OpTree::shr_u(0, self.0, other.0))
                 }
@@ -1119,9 +1119,9 @@ for_secret_t! {
             }
         }
 
-        impl ShrAssign for __secret_t {
+        impl ShrAssign<__secretu_t> for __secret_t {
             #[inline]
-            fn shr_assign(&mut self, other: __secret_t) {
+            fn shr_assign(&mut self, other: __secretu_t) {
                 *self = take(self).shr(other)
             }
         }
@@ -1455,8 +1455,8 @@ for_secret_t! {
             fn from(lanes: [SecretBool; __lanes]) -> Self {
                 // into iter here to avoid cloning
                 let mut lanes = IntoIterator::into_iter(lanes);
-                let mut x = Self(lanes.next().unwrap().resolve());
-                for i in 1..__lanes {
+                let mut x = Self::false_();
+                for i in 0..__lanes {
                     x = x.replace(i, lanes.next().unwrap())
                 }
                 x
@@ -1469,8 +1469,8 @@ for_secret_t! {
             fn from(lanes: Box<[SecretBool; __lanes]>) -> Self {
                 // into iter here to avoid cloning
                 let mut lanes = Vec::from(lanes as Box<[SecretBool]>).into_iter();
-                let mut x = Self(lanes.next().unwrap().resolve());
-                for i in 1..__lanes {
+                let mut x = Self::false_();
+                for i in 0..__lanes {
                     x = x.replace(i, lanes.next().unwrap())
                 }
                 x
@@ -1502,8 +1502,8 @@ for_secret_t! {
             #[inline]
             fn from(lanes: &[SecretBool; __lanes]) -> Self {
                 let mut lanes = lanes.iter();
-                let mut x = Self(lanes.next().unwrap().clone().resolve());
-                for i in 1..__lanes {
+                let mut x = Self::false_();
+                for i in 0..__lanes {
                     x = x.replace(i, lanes.next().unwrap().clone())
                 }
                 x
@@ -2519,8 +2519,8 @@ for_secret_t! {
             fn from(lanes: [__lane_t; __lanes]) -> Self {
                 // into iter here to avoid cloning
                 let mut lanes = IntoIterator::into_iter(lanes);
-                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().0));
-                for i in 1..__lanes {
+                let mut x = Self::zero();
+                for i in 0..__lanes {
                     x = x.replace(i, lanes.next().unwrap())
                 }
                 x
@@ -2533,8 +2533,8 @@ for_secret_t! {
             fn from(lanes: Box<[__lane_t; __lanes]>) -> Self {
                 // into iter here to avoid cloning
                 let mut lanes = Vec::from(lanes as Box<[__lane_t]>).into_iter();
-                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().0));
-                for i in 1..__lanes {
+                let mut x = Self::zero();
+                for i in 0..__lanes {
                     x = x.replace(i, lanes.next().unwrap())
                 }
                 x
@@ -2566,8 +2566,8 @@ for_secret_t! {
             #[inline]
             fn from(lanes: &[__lane_t; __lanes]) -> Self {
                 let mut lanes = lanes.iter();
-                let mut x = Self(OpTree::extend_u(0, lanes.next().unwrap().clone().0));
-                for i in 1..__lanes {
+                let mut x = Self::zero();
+                for i in 0..__lanes {
                     x = x.replace(i, lanes.next().unwrap().clone())
                 }
                 x
@@ -3420,25 +3420,25 @@ for_secret_t! {
             }
         }
 
-        impl Shl for __secret_t {
+        impl Shl<__secretux_t> for __secret_t {
             type Output = __secret_t;
             #[inline]
-            fn shl(self, other: __secret_t) -> __secret_t {
+            fn shl(self, other: __secretux_t) -> __secret_t {
                 Self(OpTree::shl(__lnpw2, self.0, other.0))
             }
         }
 
-        impl ShlAssign for __secret_t {
+        impl ShlAssign<__secretux_t> for __secret_t {
             #[inline]
-            fn shl_assign(&mut self, other: __secret_t) {
+            fn shl_assign(&mut self, other: __secretux_t) {
                 *self = take(self).shl(other)
             }
         }
 
-        impl Shr for __secret_t {
+        impl Shr<__secretux_t> for __secret_t {
             type Output = __secret_t;
             #[inline]
-            fn shr(self, other: __secret_t) -> __secret_t {
+            fn shr(self, other: __secretux_t) -> __secret_t {
                 __if(__t == "ux" || __t == "px") {
                     Self(OpTree::shr_u(__lnpw2, self.0, other.0))
                 }
@@ -3448,9 +3448,9 @@ for_secret_t! {
             }
         }
 
-        impl ShrAssign for __secret_t {
+        impl ShrAssign<__secretux_t> for __secret_t {
             #[inline]
-            fn shr_assign(&mut self, other: __secret_t) {
+            fn shr_assign(&mut self, other: __secretux_t) {
                 *self = take(self).shr(other)
             }
         }
@@ -3603,7 +3603,7 @@ for_secret_t! {
 // these are really tedious, so we use a really heavy-weight macro here
 
 for_secret_t! {
-    __if(__t == "u" || __t == "i") {
+    __if(__t == "u" || __t == "i" || __t == "p") {
         // bool extending (bool -> u32)
         impl From<SecretBool> for __secret_t {
             #[inline]
@@ -3616,7 +3616,7 @@ for_secret_t! {
 
 for_secret_t_2! {
     // unsigned extending (u8 -> u32)
-    __if(__t_2 == "u" && __npw2 > __npw2_2) {
+    __if((__t_2 == "u" || __t_2 == "p") && __npw2 > __npw2_2) {
         impl From<__secret_t_2> for __secret_t {
             #[inline]
             fn from(v: __secret_t_2) -> __secret_t {
@@ -3636,7 +3636,7 @@ for_secret_t_2! {
     }
 
     // truncating (i32 -> i8)
-    __if((__t == "u" || __t == "i") && __t == __t_2 && __npw2 < __npw2_2) {
+    __if((__t == "u" || __t == "i" || __t == "p") && __t == __t_2 && __npw2 < __npw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
             #[inline]
             fn from_cast(v: __secret_t_2) -> __secret_t {
@@ -3656,7 +3656,7 @@ for_secret_t_2! {
     }
 
     // lane extending (u8x1 -> u8x4)
-    __if((__t == "ux" || __t == "ix" || __t == "mx")
+    __if((__t == "ux" || __t == "ix" || __t == "px" || __t == "mx")
             && __t == __t_2 && __lane_npw2 == __lane_npw2_2 && __lnpw2 > __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
             #[inline]
@@ -3667,7 +3667,7 @@ for_secret_t_2! {
     }
 
     // lane truncating (i8x4 -> i8x1)
-    __if((__t == "ux" || __t == "ix" || __t == "mx")
+    __if((__t == "ux" || __t == "ix" || __t == "px" || __t == "mx")
             && __t == __t_2 && __lane_npw2 == __lane_npw2_2 && __lnpw2 < __lnpw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
             #[inline]
@@ -3678,7 +3678,7 @@ for_secret_t_2! {
     }
 
     // unsigned extending lanes (u8x4 -> u32x4)
-    __if((((__t == "ux" || __t == "ix") && __t_2 == "ux") || (__t == "mx" && __t_2 == "mx"))
+    __if((((__t == "ux" || __t == "ix" || __t == "px") && (__t_2 == "ux" || __t_2 == "px")) || (__t == "mx" && __t_2 == "mx"))
             && __lane_npw2 > __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl From<__secret_t_2> for __secret_t {
             #[inline]
@@ -3700,7 +3700,7 @@ for_secret_t_2! {
     }
 
     // truncating lanes (u32x4 -> u8x4)
-    __if((__t == "ux" || __t == "ix" || __t == "mx") && __t == __t_2
+    __if((__t == "ux" || __t == "ix" || __t == "px" || __t == "mx") && __t == __t_2
             && __lane_npw2 < __lane_npw2_2 && __lnpw2 == __lnpw2_2) {
         impl FromCast<__secret_t_2> for __secret_t {
             #[inline]

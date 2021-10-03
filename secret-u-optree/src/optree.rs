@@ -1731,16 +1731,18 @@ impl<T: OpU> OpTree<T> {
     /// compile and execute if OpTree is not already an immediate
     pub fn try_eval(self) -> Result<Self, Error> {
         match self.0.into_inner() {
-            OpRoot::ConstZero => Ok(Self::zero()),
-            OpRoot::ConstOne  => Ok(Self::one()),
-            OpRoot::ConstOnes => Ok(Self::ones()),
-            OpRoot::Const(v)  => Ok(Self::const_(v)),
-            OpRoot::Imm(v)    => Ok(Self::imm(v)),
+            OpRoot::ConstZero => Ok(OpTree(RefCell::new(OpRoot::ConstZero))),
+            OpRoot::ConstOne  => Ok(OpTree(RefCell::new(OpRoot::ConstOne))),
+            OpRoot::ConstOnes => Ok(OpTree(RefCell::new(OpRoot::ConstOnes))),
+            OpRoot::Const(v)  => Ok(OpTree(RefCell::new(OpRoot::Const(v)))),
+            OpRoot::Imm(v)    => Ok(OpTree(RefCell::new(OpRoot::Imm(v)))),
+            OpRoot::Tree(tree) if tree.is_sym() => {
+                Err(Error::DeclassifyInCompile)
+            }
+            OpRoot::Tree(tree) if tree.is_imm() => {
+                Ok(OpTree(RefCell::new(OpRoot::Tree(tree))))
+            }
             OpRoot::Tree(tree) => {
-                if tree.is_sym() {
-                    Err(Error::DeclassifyInCompile)?;
-                }
-
                 let (bytecode, mut stack) = tree.compile(false);
                 Self::try_exec(&bytecode, &mut stack)
             }
@@ -1761,14 +1763,7 @@ impl<T: OpU> OpTree<T> {
     where
         U: From<T>
     {
-        match self.0.into_inner() {
-            OpRoot::ConstZero => Some(U::from(T::zero())),
-            OpRoot::ConstOne  => Some(U::from(T::one())),
-            OpRoot::ConstOnes => Some(U::from(T::ones())),
-            OpRoot::Const(v)  => Some(U::from(v)),
-            OpRoot::Imm(v)    => Some(U::from(v)),
-            OpRoot::Tree(_)   => None,
-        }
+        self.into_imm().map(|t| U::from(t))
     }
 }
 
