@@ -597,6 +597,20 @@ See the examples in the examples folder for some examples:
   sharing scheme in GF(256) which extends the sss example with SIMD operations
   to perform the computation in parallel.
 
+- [sss_xmul](examples/sss_xmul.rs) - An implementation of Shamir's secret
+  sharing scheme in GF(256) using the carry-less multiplication instruction
+  (xmul) with Barret-reduction to provide GF(256) types without lookup-tables.
+
+- [sss_xmul_simd](examples/sss_xmul_simd.rs) - An implementation of Shamir's
+  secret sharing scheme in GF(256) using carry-less multiplication and SIMD
+  operations to perform the computation in parallel
+
+- [rsa](examples/rsa.rs) - An implementation of RSA using the larger integer
+  types (u4096-u8192) to perform Montgomery multiplication/exponentiation.
+  This avoids the requirement for division. Since we must be constant-time,
+  each multiply-step of exponentiation is fully execution, using a constant-
+  time select to decide the result is used.
+
 ## Testing
 
 Tests and examples can be tested with the Makefile
@@ -705,13 +719,9 @@ On my machine:
 rsa  0m6.062s
 ```
 
-RSA leverages large integer operations, especially multiplication. This RSA
-examples uses Montgomery multiplication/exponentiation with u4096-u8192s, which
-is especially useful as secret-u does not provide a built-in division operation.
-Since we must be constant-time, the multiply step of exponentiation is always
-performed and a constant-time ternary select is used to decide if the result
-is used.
-
+This example uses large integer operations with u4096-u8192s, especially
+multiplication. I don't have a reference implementation at the moment since
+this would require big-ints, so there's nothing to compare it to.
 
 ## Prior art
 
