@@ -2,6 +2,9 @@
 //!
 //! Based on implementation from here:
 //! https://github.com/B-Con/crypto-algorithms
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use secret_u::*;
 use std::convert::TryFrom;

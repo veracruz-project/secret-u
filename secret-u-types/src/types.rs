@@ -1,4 +1,7 @@
 //! Definitions of secret integers
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use std::rc::Rc;
 use std::convert::TryFrom;

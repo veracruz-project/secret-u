@@ -2,6 +2,9 @@
 //!
 //! Based on implementation from here:
 //! https://cr.yp.to/chacha.html
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use std::convert::TryFrom;
 

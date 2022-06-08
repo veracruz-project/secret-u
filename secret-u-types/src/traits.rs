@@ -1,4 +1,7 @@
 //! Traits implemented by secret types
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use secret_u_opcode::Error;
 use std::fmt::Debug;

@@ -1,4 +1,7 @@
 //! local vm for executing bytecode
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use std::mem::size_of;
 use std::slice;

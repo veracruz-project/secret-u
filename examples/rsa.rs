@@ -4,6 +4,9 @@
 //! https://en.wikipedia.org/wiki/Montgomery_modular_multiplication
 //! https://cp-algorithms.com/algebra/montgomery_multiplication.html
 //! http://koclab.cs.ucsb.edu/teaching/cs154/docx/Notes7-Montgomery.pdf
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use secret_u::*;
 use std::sync::atomic::AtomicU32;

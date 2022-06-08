@@ -1,3 +1,6 @@
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 // this needs to be in separate crate for proc_macros to work,
 // this file is mostly just for testing

@@ -1,6 +1,9 @@
 //! internal.rs depends on some environment variables to decide the limits
 //! of type sizes, this build.rs just ensures the dependent crates will
 //! recompile if these limits are changed
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use std::env;
 use std::cmp::min;

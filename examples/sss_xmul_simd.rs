@@ -5,6 +5,9 @@
 //!
 //! Based on the explanation here:
 //! https://blog.quarkslab.com/reversing-a-finite-field-multiplication-optimization.html
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 use secret_u::*;
 use std::iter;

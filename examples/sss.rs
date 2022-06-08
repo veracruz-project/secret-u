@@ -1,4 +1,7 @@
 //! Shamir's secret sharing example
+//!
+//! Copyright (c) 2021 Veracruz, a series of LF Projects, LLC.
+//! SPDX-License-Identifier: MIT
 
 #[cfg(feature="example-bitslice-tables")]
 use secret_u::table::bitslice_table;
